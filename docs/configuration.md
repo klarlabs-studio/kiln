@@ -3,7 +3,7 @@
 Kiln reads two files, and they have different owners.
 
 `.warden.yaml` says what "passing" means. Kiln does not read it — it shells out
-to `warden run pre-push` and reports what Warden said. If you want to change
+to `warden run pre-push --attest-only` and reports what Warden said. If you want to change
 which checks run, change that file.
 
 `.kiln.yaml` says what to publish and which events route where. That is all it

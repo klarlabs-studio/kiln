@@ -67,7 +67,9 @@ A repository with no `.kiln.yaml` still works: Kiln proves every event and publi
 
 ### `.warden.yaml` — the checks
 
-Owned by Warden. Kiln shells out to `warden run pre-push` and does not read this file. It has no opinion about what your checks are.
+Owned by Warden. Kiln shells out to `warden run pre-push --attest-only` and does not read this file. It has no opinion about what your checks are.
+
+`--attest-only` is warden's CI mode: run the gate, write the provenance note, move no refs. The bare form is a git hook — it also pushes — and kiln never moves a branch.
 
 ### `.kiln.yaml` — publish and routing
 

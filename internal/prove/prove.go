@@ -46,8 +46,8 @@ type Prover interface {
 	Prove(ctx context.Context, req Request) error
 }
 
-// Warden is the real prover: a disposable worktree plus `warden run pre-push`
-// plus an optional `nox scan`.
+// Warden is the real prover: a disposable worktree plus
+// `warden run pre-push --attest-only` plus an optional `nox scan`.
 type Warden struct {
 	Runner execx.Runner
 	// WardenBin and NoxBin are the executables (KILN_WARDEN, KILN_NOX).
@@ -109,8 +109,23 @@ func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
 	env := w.env(req.Policy)
 
 	if _, err := w.Runner.Run(ctx, execx.Cmd{
-		Name:   w.WardenBin,
-		Args:   []string{"run", "pre-push"},
+		Name: w.WardenBin,
+		// --attest-only is not optional, and it is not a tuning knob.
+		//
+		// `warden run pre-push` is a git hook implementation: it gates AND then
+		// performs the push, fast-forwarding the branch to the checked tree.
+		// Invoked bare from here it does two unacceptable things — it aborts
+		// with "branch changed mid-run" because a detached worktree has no
+		// branch to advance, and, worse, on a checkout that did have one it
+		// would push from a build box.
+		//
+		// --attest-only is warden's CI mode, and its own documentation
+		// describes this exact situation: run the full gate, write the
+		// provenance note, move nothing. "A gate that pushed from CI would race
+		// the next human push and fail on a stale ref."
+		//
+		// Kiln proves commits. It does not move refs.
+		Args:   []string{"run", "pre-push", "--attest-only"},
 		Dir:    dir,
 		Env:    env,
 		Stdout: req.Output,

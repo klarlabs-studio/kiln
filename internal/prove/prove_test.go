@@ -260,3 +260,37 @@ func TestFuncAdapter(t *testing.T) {
 		t.Errorf("Func adapter did not delegate (err=%v)", err)
 	}
 }
+
+// The gate must never be invoked in its pushing form. `warden run pre-push`
+// without --attest-only fast-forwards and pushes the branch; from a build box
+// that is a write nobody asked for, and in a detached worktree it aborts with
+// "branch changed mid-run". Warden's CI mode is the only correct invocation.
+func TestGateIsInvokedInAttestOnlyMode(t *testing.T) {
+	fake := fakeRepo()
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
+	})
+
+	cmd := fake.Find("warden run pre-push")
+	if cmd == nil {
+		t.Fatalf("gate not run: %s", fake.Transcript())
+	}
+	if !slices.Contains(cmd.Args, "--attest-only") {
+		t.Errorf("kiln invoked the pushing form of the gate: %s", cmd.String())
+	}
+}
+
+func TestGateRunsWithNoStdin(t *testing.T) {
+	// warden's pre-push path reads a push payload from stdin and decides
+	// whether there is anything to gate. Kiln gives it none; warden treats
+	// "no refs at all" as gatable, so this must stay a real run rather than a
+	// silent pass. Asserting kiln sends nothing keeps that contract visible.
+	fake := fakeRepo()
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
+	})
+
+	if cmd := fake.Find("warden run pre-push"); cmd.Stdin != nil {
+		t.Error("kiln fed the gate a push payload it did not construct")
+	}
+}

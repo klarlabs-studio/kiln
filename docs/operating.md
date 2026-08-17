@@ -177,6 +177,11 @@ refused unless `KILN_MCP_ALLOW_RUN=1`.
 **"required tool missing: warden ..."** — the gate is not installed. This is a
 failure, not a skip: a commit whose checks did not run has not passed them.
 
+**"branch changed mid-run; re-push"** — you are on a kiln old enough to invoke
+`warden run pre-push` without `--attest-only`. That form is the git hook: it
+gates and then pushes, which a detached worktree cannot do and a build box
+should not. Upgrade.
+
 **"publish: tag plan for ref ... produces no moving tag"** — `tags: [sha,
 semver]` on a branch push. Add `latest`, or route `semver` only to tag events.
 
