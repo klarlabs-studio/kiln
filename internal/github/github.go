@@ -1,0 +1,374 @@
+// Package github talks to the forge.
+//
+// GitHub stays the forge: it owns pull requests, Checks and (usually) the
+// registry. Kiln takes the compute. This package is therefore small and
+// one-directional — it reports what Kiln did and asks two questions it cannot
+// answer locally (is this pull request from a fork, and what commit is at its
+// head). It implements no runner protocol and receives no work from Actions.
+package github
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+	"time"
+	"unicode/utf8"
+
+	"go.klarlabs.de/fortify/retry"
+
+	"go.klarlabs.de/kiln/internal/execx"
+	"go.klarlabs.de/kiln/internal/obs"
+)
+
+// DefaultBaseURL is the public API. GitHub Enterprise installations override
+// it through the client's BaseURL field.
+const DefaultBaseURL = "https://api.github.com"
+
+// Repo identifies a repository.
+type Repo struct {
+	Owner string
+	Name  string
+}
+
+// String renders owner/name.
+func (r Repo) String() string { return r.Owner + "/" + r.Name }
+
+// Valid reports whether both halves are present.
+func (r Repo) Valid() bool { return r.Owner != "" && r.Name != "" }
+
+// ParseRepo parses "owner/name", tolerating a full URL or a .git suffix so an
+// operator can paste whatever they have to hand.
+func ParseRepo(s string) (Repo, error) {
+	s = strings.TrimSpace(s)
+	s = strings.TrimSuffix(s, ".git")
+	if i := strings.Index(s, "github.com"); i >= 0 {
+		s = s[i+len("github.com"):]
+		s = strings.TrimLeft(s, ":/")
+	}
+	owner, name, ok := strings.Cut(strings.Trim(s, "/"), "/")
+	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
+		return Repo{}, fmt.Errorf("cannot read owner/name from %q", s)
+	}
+	return Repo{Owner: owner, Name: name}, nil
+}
+
+// DiscoverRepo resolves the repository from the git remote, falling back to
+// GITHUB_REPOSITORY. The remote is preferred because it is what the operator
+// actually configured; the variable exists for checkouts with no remote and
+// for containers that were handed a bare tree.
+func DiscoverRepo(ctx context.Context, r execx.Runner, dir, remote, envRepo string) (Repo, error) {
+	if remote == "" {
+		remote = "origin"
+	}
+	res, err := r.Run(ctx, execx.Cmd{
+		Name: "git", Args: []string{"remote", "get-url", remote}, Dir: dir,
+	})
+	if err == nil {
+		if repo, perr := ParseRepo(res.Output()); perr == nil {
+			return repo, nil
+		}
+	}
+	if envRepo != "" {
+		return ParseRepo(envRepo)
+	}
+	return Repo{}, fmt.Errorf("no github repository: %q has no usable url and GITHUB_REPOSITORY is unset", remote)
+}
+
+// Client is a minimal GitHub REST client.
+//
+// Not go-github: Kiln uses four endpoints, and a dependency that large would
+// pull in more surface than the whole rest of this package.
+type Client struct {
+	Token   string
+	Repo    Repo
+	BaseURL string
+	HTTP    *http.Client
+	Log     obs.Logger
+	// Attempts bounds the retry of transient API failures.
+	Attempts int
+}
+
+// NewClient builds a client. A nil HTTP client gets a sane timeout: an
+// unbounded default would let a hung API call stall a watch tick forever.
+func NewClient(token string, repo Repo, log obs.Logger) *Client {
+	if log == nil {
+		log = obs.Discard()
+	}
+	return &Client{
+		Token:    token,
+		Repo:     repo,
+		BaseURL:  DefaultBaseURL,
+		HTTP:     &http.Client{Timeout: 30 * time.Second},
+		Log:      log,
+		Attempts: 3,
+	}
+}
+
+// Enabled reports whether the client can talk to GitHub at all. Without a
+// token, Kiln posts no Checks and treats every pull request as a fork.
+func (c *Client) Enabled() bool { return c != nil && c.Token != "" && c.Repo.Valid() }
+
+// APIError is a non-2xx response.
+type APIError struct {
+	Status int
+	Method string
+	Path   string
+	Body   string
+}
+
+func (e *APIError) Error() string {
+	body := strings.TrimSpace(e.Body)
+	if len(body) > 300 {
+		body = body[:300] + "…"
+	}
+	return fmt.Sprintf("github %s %s: %d %s", e.Method, e.Path, e.Status, body)
+}
+
+// Retryable reports whether trying again could plausibly work. A 5xx is the
+// API having a bad moment; a 429 is a rate limit that clears. A 401 or 404
+// will say the same thing forever, and retrying a 422 on a check-run would
+// just post the same invalid payload again.
+func (e *APIError) Retryable() bool {
+	return e.Status >= 500 || e.Status == http.StatusTooManyRequests
+}
+
+// CheckRun is the subset of a check run Kiln reads back.
+type CheckRun struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+}
+
+// CreateCheckRun opens an in-progress check run for a commit.
+func (c *Client) CreateCheckRun(ctx context.Context, name, sha string) (CheckRun, error) {
+	payload := map[string]any{
+		"name":       name,
+		"head_sha":   sha,
+		"status":     "in_progress",
+		"started_at": time.Now().UTC().Format(time.RFC3339),
+	}
+	var out CheckRun
+	err := c.do(ctx, http.MethodPost, c.path("check-runs"), payload, &out)
+	return out, err
+}
+
+// CompleteCheckRun closes a check run with a conclusion and a summary.
+//
+// GitHub truncates output.summary at 65535 characters and rejects a longer
+// one outright, so a verbose build log would fail the *reporting* of a build
+// that otherwise succeeded. Truncating here keeps the Check honest.
+func (c *Client) CompleteCheckRun(ctx context.Context, id int64, conclusion, title, summary string) error {
+	payload := map[string]any{
+		"status":       "completed",
+		"conclusion":   conclusion,
+		"completed_at": time.Now().UTC().Format(time.RFC3339),
+		"output": map[string]any{
+			"title":   truncate(title, 255),
+			"summary": truncate(summary, 65000),
+		},
+	}
+	return c.do(ctx, http.MethodPatch, c.path(fmt.Sprintf("check-runs/%d", id)), payload, nil)
+}
+
+// Pull is what Kiln needs to know about a pull request.
+type Pull struct {
+	Number int
+	// HeadSHA is the commit to build.
+	HeadSHA string
+	// HeadRef is the source branch name.
+	HeadRef string
+	// Fork reports that the head lives in a different repository. This is the
+	// input to the isolation policy, and getting it wrong in the permissive
+	// direction hands a stranger the operator's credentials — so callers that
+	// cannot reach the API must assume true, not false.
+	Fork bool
+	// Draft pull requests are still proven; the flag is reported so a caller
+	// can choose to skip them.
+	Draft bool
+}
+
+type pullPayload struct {
+	Number int  `json:"number"`
+	Draft  bool `json:"draft"`
+	Head   struct {
+		SHA  string `json:"sha"`
+		Ref  string `json:"ref"`
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
+	} `json:"head"`
+	Base struct {
+		Repo struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
+	} `json:"base"`
+}
+
+// LookupPull fetches one pull request.
+func (c *Client) LookupPull(ctx context.Context, number int) (Pull, error) {
+	var p pullPayload
+	if err := c.do(ctx, http.MethodGet, c.path(fmt.Sprintf("pulls/%d", number)), nil, &p); err != nil {
+		return Pull{}, err
+	}
+	return Pull{
+		Number:  p.Number,
+		HeadSHA: p.Head.SHA,
+		HeadRef: p.Head.Ref,
+		Fork:    isFork(p),
+		Draft:   p.Draft,
+	}, nil
+}
+
+// isFork compares the head and base repositories.
+//
+// A deleted fork leaves head.repo null. That is treated as a fork, not as
+// same-repo: the safe reading of "I cannot tell where this came from" is the
+// one that withholds credentials.
+func isFork(p pullPayload) bool {
+	if p.Head.Repo == nil {
+		return true
+	}
+	return !strings.EqualFold(p.Head.Repo.FullName, p.Base.Repo.FullName)
+}
+
+// ListOpenPulls returns the open pull requests, for watch discovery.
+func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
+	var payload []pullPayload
+	if err := c.do(ctx, http.MethodGet, c.path("pulls?state=open&per_page=100"), nil, &payload); err != nil {
+		return nil, err
+	}
+	out := make([]Pull, 0, len(payload))
+	for _, p := range payload {
+		out = append(out, Pull{
+			Number:  p.Number,
+			HeadSHA: p.Head.SHA,
+			HeadRef: p.Head.Ref,
+			Fork:    isFork(p),
+			Draft:   p.Draft,
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) path(suffix string) string {
+	return fmt.Sprintf("/repos/%s/%s/%s", c.Repo.Owner, c.Repo.Name, suffix)
+}
+
+// do performs a request with retries, decoding a JSON response into out.
+func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	if !c.Enabled() {
+		return errors.New("github: no token or repository configured")
+	}
+
+	var encoded []byte
+	if body != nil {
+		var err error
+		if encoded, err = json.Marshal(body); err != nil {
+			return fmt.Errorf("github: encode %s %s: %w", method, path, err)
+		}
+	}
+
+	attempts := c.Attempts
+	if attempts <= 0 {
+		attempts = 3
+	}
+	r := retry.New[[]byte](retry.Config{
+		MaxAttempts:   attempts,
+		InitialDelay:  time.Second,
+		MaxDelay:      15 * time.Second,
+		Multiplier:    2,
+		BackoffPolicy: retry.BackoffExponential,
+		Jitter:        true,
+		IsRetryable:   retryableAPIError,
+		OnRetry: func(attempt int, err error) {
+			c.Log.Warn("retrying github call", "method", method, "path", path, "attempt", attempt, "err", err)
+		},
+	})
+
+	data, err := r.Execute(ctx, func(ctx context.Context) ([]byte, error) {
+		return c.once(ctx, method, path, encoded)
+	})
+	if err != nil {
+		return err
+	}
+	if out == nil || len(data) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		return fmt.Errorf("github: decode %s %s: %w", method, path, err)
+	}
+	return nil
+}
+
+func (c *Client) once(ctx context.Context, method, path string, body []byte) ([]byte, error) {
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL()+path, reader)
+	if err != nil {
+		return nil, fmt.Errorf("github: build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "kiln")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("github: %s %s: %w", method, path, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+	if err != nil {
+		return nil, fmt.Errorf("github: read %s %s: %w", method, path, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, &APIError{Status: resp.StatusCode, Method: method, Path: path, Body: string(data)}
+	}
+	return data, nil
+}
+
+func (c *Client) baseURL() string {
+	if c.BaseURL == "" {
+		return DefaultBaseURL
+	}
+	return strings.TrimSuffix(c.BaseURL, "/")
+}
+
+func retryableAPIError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.Retryable()
+	}
+	// A transport error — DNS, TLS, a reset — is worth another try. A context
+	// cancellation is not, and retry stops on a done context anyway.
+	return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+}
+
+// truncate bounds a string to max BYTES, which is the unit GitHub's limits are
+// expressed in. It backs up to a rune boundary so the result is still valid
+// UTF-8 — a JSON body with a half-written rune is rejected outright, which
+// would turn a cosmetic overflow into a failed report.
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	const ellipsis = "…"
+	cut := max - len(ellipsis)
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + ellipsis
+}
