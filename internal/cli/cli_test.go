@@ -1,0 +1,580 @@
+package cli
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"go.klarlabs.de/kiln/internal/gittest"
+)
+
+// capture runs a command against buffers and returns its output and exit code.
+func capture(t *testing.T, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	var out, errb bytes.Buffer
+	code = Main(t.Context(), args, IO{Out: &out, Err: &errb})
+	return out.String(), errb.String(), code
+}
+
+// repoWith builds a repository with an optional pipeline and chdirs into it,
+// so commands run with no --dir behave the way an operator experiences them.
+func repoWith(t *testing.T, pipeline string) *gittest.Repo {
+	t.Helper()
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	if pipeline != "" {
+		repo.Write(".kiln.yaml", pipeline)
+		repo.Git("add", "-A")
+		repo.Git("commit", "-q", "-m", "add pipeline")
+	}
+	t.Chdir(repo.Dir)
+
+	// A hermetic environment: an operator's real token or trusted keys must
+	// not change what these tests observe.
+	for _, k := range []string{
+		"GITHUB_TOKEN", "GH_TOKEN", "KILN_TRUSTED_KEYS", "KILN_DRY",
+		"KILN_DB", "KILN_DIR", "GITHUB_REPOSITORY", "KILN_MCP_ALLOW_RUN",
+	} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	return repo
+}
+
+const publishingPipeline = `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+  push: [prove, publish]
+publish:
+  image: ghcr.io/felixgeelhaar/glossa-api
+  tags: [sha, latest]
+`
+
+func TestVersionPrintsTheStamp(t *testing.T) {
+	out, _, code := capture(t, "version")
+
+	if code != ExitOK {
+		t.Errorf("code = %d", code)
+	}
+	if !strings.HasPrefix(out, "kiln ") {
+		t.Errorf("out = %q", out)
+	}
+}
+
+func TestNoArgumentsIsAUsageError(t *testing.T) {
+	_, errOut, code := capture(t)
+
+	if code != ExitUsage {
+		t.Errorf("code = %d, want %d", code, ExitUsage)
+	}
+	if !strings.Contains(errOut, "kiln — signed-artifact factory") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestUnknownCommandNamesItself(t *testing.T) {
+	_, errOut, code := capture(t, "deploy")
+
+	if code != ExitUsage {
+		t.Errorf("code = %d", code)
+	}
+	// "deploy" is the command people will reach for. The usage text tells them
+	// where deployment actually lives.
+	if !strings.Contains(errOut, `unknown command "deploy"`) {
+		t.Errorf("stderr = %q", errOut)
+	}
+	if !strings.Contains(errOut, "RollOps") {
+		t.Error("usage should say where deployment belongs")
+	}
+}
+
+func TestHelpGoesToStdout(t *testing.T) {
+	out, _, code := capture(t, "help")
+
+	if code != ExitOK || !strings.Contains(out, "kiln doctor") {
+		t.Errorf("code = %d, out = %q", code, out)
+	}
+}
+
+func TestDoctorOnAPublishingRepo(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	out, _, _ := capture(t, "doctor")
+
+	for _, want := range []string{
+		"pipeline", ".kiln.yaml parsed",
+		"on.push → prove, publish",
+		"toolchain", "tag plan",
+		"ghcr.io/felixgeelhaar/glossa-api:latest",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("doctor output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDoctorWarnsAboutTheMissingToken(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "no usable GITHUB_TOKEN") {
+		t.Errorf("doctor should name the missing token:\n%s", out)
+	}
+	if !strings.Contains(out, "no KILN_TRUSTED_KEYS") {
+		t.Errorf("doctor should explain why every run re-proves:\n%s", out)
+	}
+}
+
+func TestDoctorWithoutAPipelineIsAWarningNotAFailure(t *testing.T) {
+	repoWith(t, "")
+
+	out, _, code := capture(t, "doctor")
+
+	// A library repository legitimately has nothing to publish.
+	if !strings.Contains(out, "no .kiln.yaml") {
+		t.Errorf("doctor output:\n%s", out)
+	}
+	if code == ExitConfig {
+		t.Error("a missing pipeline must not be a configuration failure")
+	}
+}
+
+func TestDoctorRejectsABrokenPipeline(t *testing.T) {
+	repoWith(t, "apiVersion: kiln.klarlabs.de/v1\nkind: Pipeline\ndeploy:\n  target: prod\n")
+
+	_, errOut, code := capture(t, "doctor")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d, want %d", code, ExitConfig)
+	}
+	if !strings.Contains(errOut, "RollOps") {
+		t.Errorf("stderr should point at RollOps: %q", errOut)
+	}
+}
+
+func TestDoctorFlagsASHAOnlyTagPlan(t *testing.T) {
+	// The loader catches this at parse time, so doctor reports a config error
+	// rather than a plan finding. Either way the operator learns before a
+	// build wastes their time.
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on: {push: [prove, publish]}
+publish:
+  image: ghcr.io/x/y
+  tags: [sha]
+`)
+
+	_, errOut, code := capture(t, "doctor")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d", code)
+	}
+	if !strings.Contains(errOut, "imagePolicy") {
+		t.Errorf("stderr should explain the RollOps consequence: %q", errOut)
+	}
+}
+
+func TestDoctorWarnsWhenPullRequestsAskToPublish(t *testing.T) {
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove, publish]
+  push: [prove, publish]
+publish:
+  image: ghcr.io/x/y
+  tags: [sha, latest]
+`)
+
+	out, _, _ := capture(t, "doctor")
+
+	// The engine suppresses it at run time; saying so here saves an afternoon.
+	if !strings.Contains(out, "isolation policy always suppresses it") {
+		t.Errorf("doctor should warn about the suppressed publish:\n%s", out)
+	}
+}
+
+func TestDoctorOutsideARepository(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("KILN_DIR", "")
+
+	_, errOut, code := capture(t, "doctor")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d", code)
+	}
+	if !strings.Contains(errOut, "not a git repository") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestRunRequiresSHAAndEvent(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	_, errOut, code := capture(t, "run", "--event", "push")
+	if code != ExitUsage || !strings.Contains(errOut, "--sha is required") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+
+	_, errOut, code = capture(t, "run", "--sha", "HEAD")
+	if code != ExitUsage || !strings.Contains(errOut, "--event must be") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+
+	_, errOut, code = capture(t, "run", "--sha", "HEAD", "--event", "release")
+	if code != ExitUsage || !strings.Contains(errOut, "--event must be") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestRunWithoutWardenIsAConfigFailure(t *testing.T) {
+	repoWith(t, "")
+	// A missing gate means the checks did not run, and a commit whose checks
+	// did not run has not passed them.
+	t.Setenv("KILN_WARDEN", "kiln-no-such-warden")
+
+	_, errOut, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d, want %d (a broken machine, not a rejected change)", code, ExitConfig)
+	}
+	if !strings.Contains(errOut, "kiln-no-such-warden") {
+		t.Errorf("stderr should name the missing binary: %q", errOut)
+	}
+}
+
+func TestRunGatePassing(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	for _, want := range []string{"phase   succeeded", "commit  "} {
+		if !strings.Contains(out, want) {
+			t.Errorf("run output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestRunGateFailingUsesADistinctExitCode(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-fail", "echo 'lint failed' >&2; exit 1"))
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	// A rejected change (2) and a broken machine (3) are different problems
+	// for different people, and cron should be able to tell them apart.
+	if code != ExitFailed {
+		t.Errorf("code = %d, want %d\n%s", code, ExitFailed, out)
+	}
+	if !strings.Contains(out, "phase   failed") {
+		t.Errorf("run output:\n%s", out)
+	}
+}
+
+func TestRunResolvesHEAD(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+
+	out, _, _ := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	// The ledger and the image tag must record the real commit, not a name
+	// that will mean something else tomorrow.
+	if !strings.Contains(out, repo.Head()[:7]) {
+		t.Errorf("run did not resolve HEAD to %s:\n%s", repo.Head()[:7], out)
+	}
+}
+
+func TestRunOnAPullRequestWithoutATokenIsTreatedAsAFork(t *testing.T) {
+	repo := repoWith(t, publishingPipeline)
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "pull_request", "--quiet")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "fork") {
+		t.Errorf("an unidentifiable pull request must be treated as a fork:\n%s", out)
+	}
+	// And a fork never publishes, whatever the pipeline says.
+	if strings.Contains(out, "digest") {
+		t.Errorf("a fork pull request published:\n%s", out)
+	}
+}
+
+func TestRunDryPlansWithoutDocker(t *testing.T) {
+	repo := repoWith(t, publishingPipeline)
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	t.Setenv("KILN_DRY", "1")
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "ghcr.io/felixgeelhaar/glossa-api:latest") {
+		t.Errorf("a dry run should still report the tag plan:\n%s", out)
+	}
+}
+
+func TestStatusOnAnEmptyLedger(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "status")
+
+	if code != ExitError {
+		t.Errorf("code = %d", code)
+	}
+	// A fresh checkout has simply not built anything yet.
+	if !strings.Contains(errOut, "no runs recorded") {
+		t.Errorf("stderr = %q", errOut)
+	}
+}
+
+func TestStatusAfterARun(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	if _, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet"); code != ExitOK {
+		t.Fatalf("run failed with %d", code)
+	}
+
+	out, _, code := capture(t, "status")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out, repo.Head()) || !strings.Contains(out, "succeeded") {
+		t.Errorf("status output:\n%s", out)
+	}
+}
+
+func TestStatusJSON(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	_, _, _ = capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	out, _, code := capture(t, "status", "--json")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out, `"phase": "succeeded"`) {
+		t.Errorf("json output:\n%s", out)
+	}
+}
+
+func TestStatusUnknownRunID(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "status", "run-does-not-exist")
+
+	if code != ExitError || !strings.Contains(errOut, "run-does-not-exist") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestLedgerLandsInsideTheRepository(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	// A cron entry whose working directory differs from the checkout must not
+	// keep a second, always-empty ledger.
+	t.Chdir(t.TempDir())
+
+	if _, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--dir", repo.Dir, "--quiet"); code != ExitOK {
+		t.Fatalf("run failed with %d", code)
+	}
+
+	if _, err := os.Stat(filepath.Join(repo.Dir, ".kiln", "state.json")); err != nil {
+		t.Errorf("ledger not written inside the repository: %v", err)
+	}
+}
+
+func TestWatchOnceOnAFreshClone(t *testing.T) {
+	upstream := gittest.New(t)
+	upstream.Commit("first", "app.txt", "one\n")
+	local := upstream.Clone(t)
+	t.Chdir(local.Dir)
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN", "KILN_DB", "KILN_DIR"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", fakeBin(t, local.Dir, "warden-pass", "exit 0"))
+
+	out, _, code := capture(t, "watch", "--once")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "built") {
+		t.Errorf("watch output:\n%s", out)
+	}
+
+	// The second tick must be a no-op, or every cron minute costs a build.
+	out, _, code = capture(t, "watch", "--once")
+	if code != ExitOK {
+		t.Fatalf("second tick: code = %d", code)
+	}
+	if !strings.Contains(out, "skip") {
+		t.Errorf("second tick rebuilt an unchanged head:\n%s", out)
+	}
+}
+
+func TestWatchDryRunRunsNothing(t *testing.T) {
+	upstream := gittest.New(t)
+	upstream.Commit("first", "app.txt", "one\n")
+	local := upstream.Clone(t)
+	t.Chdir(local.Dir)
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", "kiln-no-such-warden")
+
+	out, _, code := capture(t, "watch", "--once", "--dry-run")
+
+	// Even with no gate installed, a dry run must succeed: it runs nothing.
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "plan") {
+		t.Errorf("dry-run output:\n%s", out)
+	}
+}
+
+func TestWatchRejectsOnceWithEvery(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "watch", "--once", "--every", "1m")
+
+	if code != ExitUsage || !strings.Contains(errOut, "mutually exclusive") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestWatchRejectsABadInterval(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "watch", "--every", "soon")
+
+	if code != ExitUsage || !strings.Contains(errOut, "not a duration") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestMCPRequiresTheServeSubcommand(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "mcp")
+
+	if code != ExitUsage || !strings.Contains(errOut, "kiln mcp serve") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+// fakeBin writes an executable shell script and returns its name, adding its
+// directory to PATH. It stands in for warden so the CLI tests can exercise
+// both verdicts without installing anything.
+func fakeBin(t *testing.T, dir, name, body string) string {
+	t.Helper()
+	binDir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(binDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(binDir, name)
+	script := "#!/bin/sh\n" + body + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	_ = dir
+	return name
+}
+
+func TestDoctorConfigOnlySkipsTheToolchain(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	// A reviewer's laptop has no cosign. Checking a pipeline's schema there
+	// must not require installing the world.
+	t.Setenv("KILN_WARDEN", "kiln-no-such-warden")
+
+	out, _, code := capture(t, "doctor", "--config-only")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if strings.Contains(out, "toolchain") || strings.Contains(out, "credentials") {
+		t.Errorf("--config-only still checked the environment:\n%s", out)
+	}
+	// It must still validate the thing it is for.
+	if !strings.Contains(out, "tag plan") {
+		t.Errorf("--config-only dropped the tag plan:\n%s", out)
+	}
+}
+
+func TestDoctorConfigOnlyStillRejectsABadPipeline(t *testing.T) {
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on: {push: [prove, publish]}
+publish:
+  image: ghcr.io/x/y
+  tags: [sha]
+`)
+
+	_, errOut, code := capture(t, "doctor", "--config-only")
+
+	if code != ExitConfig || !strings.Contains(errOut, "imagePolicy") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestQuietDoesNotBreakACommandThatPrints(t *testing.T) {
+	repo := repoWith(t, "")
+	// A gate that writes to stderr is the common case, and it is what exposes
+	// a typed-nil writer: a nil *os.File inside an io.Writer reads as "output
+	// configured" and then fails on the first byte with "invalid argument".
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "phase   succeeded") {
+		t.Errorf("run output:\n%s", out)
+	}
+}
+
+func TestNonQuietRunAlsoWorksWithAChattyGate(t *testing.T) {
+	repo := repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
+
+	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+}
+
+func TestQuietWatchDoesNotBreakACommandThatPrints(t *testing.T) {
+	upstream := gittest.New(t)
+	upstream.Commit("first", "app.txt", "one\n")
+	local := upstream.Clone(t)
+	t.Chdir(local.Dir)
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN", "KILN_DB", "KILN_DIR"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", fakeBin(t, local.Dir, "warden-chatty", "echo running checks >&2; exit 0"))
+
+	out, _, code := capture(t, "watch", "--once", "--quiet")
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if !strings.Contains(out, "built") {
+		t.Errorf("watch output:\n%s", out)
+	}
+}
