@@ -1,0 +1,46 @@
+# Kiln pipeline — the Glossa API, which is the dogfood target.
+#
+# This file replaces ci.yml, release.yml and nox-scan.yml for
+# ghcr.io/felixgeelhaar/glossa-api. What it does NOT replace is .warden.yaml:
+# the checks still live there, because kiln does not invent a second check
+# language. This file only says what to publish and which events route where.
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+
+# Event routing. A pull request is a proposal, so it only proves; the isolation
+# policy would suppress a publish here anyway, and listing one would be a lie
+# about what happens.
+on:
+  pull_request: [prove]
+  push: [prove, publish]
+  # `tag` is omitted, so it inherits `push`. A release publishes.
+
+prove:
+  # The only accepted value. .warden.yaml decides what "passing" means.
+  from: warden
+  # Run the scanner after the gate. Leave this false if .warden.yaml already
+  # runs nox as a step — otherwise it runs twice.
+  nox: true
+
+publish:
+  image: ghcr.io/felixgeelhaar/glossa-api
+  # sha is the immutable tag RollOps pins to. At least one moving tag is
+  # required alongside it, or imagePolicy has nothing to follow.
+  #   sha    → ghcr.io/felixgeelhaar/glossa-api:sha-abc1234   (imagePolicy: pin)
+  #   latest → …:latest                                       (imagePolicy.mode: digest)
+  #   semver → …:v0.2.0, from a tag ref                        (imagePolicy.mode: minor)
+  tags: [sha, latest, semver]
+  sign: cosign
+  platforms: [linux/amd64]
+  dockerfile: Dockerfile
+  context: .
+
+# Unattended discovery for `kiln watch`.
+watch:
+  remote: origin
+  ref: main
+  pull_requests: true
+  tags: true
+
+# There is no `deploy:` key, and adding one is a load error. RollOps consumes
+# the signed digest this pipeline produces; kiln never applies.

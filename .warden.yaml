@@ -1,0 +1,14 @@
+# warden gate — https://github.com/klarlabs-studio/warden
+#
+# This is the only check language kiln speaks. `.kiln.yaml` says what to
+# publish; this file says what "passing" means, and `kiln run` executes exactly
+# these steps by shelling out to `warden run pre-push`.
+hooks: { pre_commit: true, pre_push: true }
+commands:
+  lint: "golangci-lint run ./..."
+  test: "go test -race ./..."
+  vet: "go vet ./..."
+steps:
+  pre_commit: [lint]
+  pre_push: [vet, test, lint]
+parallel: true

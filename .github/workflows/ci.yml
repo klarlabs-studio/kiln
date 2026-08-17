@@ -1,0 +1,57 @@
+# Thin caller for the shared klarlabs-studio Go CI bar.
+#
+# Yes, Kiln is a CI replacement and this is a GitHub Actions workflow. Kiln
+# cannot bootstrap itself: the compute that proves Kiln has to come from
+# somewhere, and until a Kiln box is watching this repository, that somewhere
+# is Actions. The Glossa API is the success test (see
+# examples/pipeline.example.yaml) — not this file.
+name: CI
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["**.md", "docs/**", "LICENSE"]
+  pull_request:
+    branches: [main]
+    # No paths-ignore on PRs: the required checks are branch-protection gates,
+    # so a docs-only PR that skipped them would never become mergeable.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ci:
+    uses: klarlabs-studio/.github/.github/workflows/go-ci.yml@main
+    permissions:
+      contents: read
+      security-events: write
+      pull-requests: write
+    secrets: inherit
+    with:
+      # No .coverctl.yaml threshold yet.
+      coverage: false
+
+  examples:
+    name: Examples
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # From go.mod, like the shared bar does — a hardcoded version here
+          # would silently drift the day the module's minimum moves.
+          go-version-file: go.mod
+          cache: true
+      # A pipeline in the docs that no longer parses is worse than no example.
+      # --config-only keeps this honest without installing docker, cosign and
+      # nox on a linter runner.
+      - name: Validate shipped pipelines
+        run: |
+          go build -o bin/kiln ./cmd/kiln
+          for f in examples/*.yaml .kiln.yaml; do
+            echo "== $f"
+            ./bin/kiln doctor --config-only --pipeline "$f"
+          done

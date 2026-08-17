@@ -1,0 +1,29 @@
+# Kiln's own pipeline.
+#
+# Kiln's image is not the success test — the Glossa API is (see
+# examples/pipeline.example.yaml). This exists so the repository dogfoods its
+# own schema, and so `kiln doctor` in this checkout reports something real.
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+
+on:
+  pull_request: [prove]
+  push: [prove, publish]
+
+prove:
+  from: warden
+  nox: false
+
+publish:
+  image: ghcr.io/klarlabs-studio/kiln
+  tags: [sha, latest, semver]
+  sign: cosign
+  platforms: [linux/amd64]
+  dockerfile: Dockerfile
+  context: .
+
+watch:
+  remote: origin
+  ref: main
+  pull_requests: true
+  tags: true
