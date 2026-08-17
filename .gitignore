@@ -1,0 +1,10 @@
+# Build output
+/bin/
+/dist/
+
+# Kiln's own runtime state — the ledger is bookkeeping, git is desired state.
+/.kiln/
+
+# Editor and OS noise
+.DS_Store
+*.swp

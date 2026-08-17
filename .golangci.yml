@@ -1,0 +1,41 @@
+# Reference .golangci.yml for klarlabs-studio Go repos (golangci-lint v2).
+# Copy to a repo's root as `.golangci.yml`. gocritic is part of the bar —
+# keep it enabled. Add repo-specific exclusions under `exclusions.rules`.
+#
+# SECURITY NOTE: nox is the sole code-level security tool. It owns secrets,
+# IaC, deps, AI, crypto/file-perm rules AND code-level taint SAST (SSRF,
+# path traversal, injection) via the cosign-verified `nox/taint-analysis`
+# plugin, which is now published at community trust and enforced org-wide
+# in go-ci.yml. gosec was therefore DROPPED here — its taint rules
+# (G703/G704/G706) are covered by nox/taint-analysis and its credential/
+# crypto/file-perm rules by nox's core ruleset. Do not re-add gosec; route
+# any code-security gap through nox instead.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  # Mandatory org bar. gocritic is non-negotiable. Code-level security is
+  # owned by nox (see SECURITY NOTE) — no gosec here.
+  # gocyclo/dupl are intentionally NOT here (noisy, repo-specific).
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - unconvert
+    - unparam
+    - gocritic     # org engineering bar — do not drop
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
