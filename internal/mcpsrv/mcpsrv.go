@@ -57,7 +57,12 @@ type DoctorOutput struct {
 	PipelineFound bool `json:"pipeline_found"`
 	// Routing maps each event to the phases it triggers.
 	Routing map[string][]string `json:"routing"`
-	// Image and Tags describe the publish plan, empty when nothing publishes.
+	// Artifacts describes every entry in the publish list, so an agent can see
+	// that a commit yields both an image and a binary release without having
+	// to read .kiln.yaml itself.
+	Artifacts []ArtifactSummary `json:"artifacts,omitempty"`
+	// Image and Tags describe the first image entry, kept for agents written
+	// against the single-artifact shape.
 	Image string   `json:"image,omitempty"`
 	Tags  []string `json:"tags,omitempty"`
 	// Toolchain reports which binaries were found.
@@ -72,6 +77,17 @@ type DoctorOutput struct {
 	Problems []string `json:"problems,omitempty"`
 	// Warnings are deliberate degradations worth naming.
 	Warnings []string `json:"warnings,omitempty"`
+}
+
+// ArtifactSummary is one configured artifact.
+type ArtifactSummary struct {
+	// Kind is image or binaries.
+	Kind string `json:"kind"`
+	// Target is the image reference, or the release tool and its config.
+	Target string `json:"target"`
+	// On lists the events this artifact is restricted to; empty means all of
+	// them.
+	On []string `json:"on,omitempty"`
 }
 
 // RunOutput is a delivery-neutral run record.

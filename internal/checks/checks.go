@@ -13,11 +13,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/obs"
+	"go.klarlabs.de/kiln/internal/run"
 )
 
 // The check-run names Kiln posts. Do not rename without a migration note.
@@ -225,21 +227,57 @@ func ProveSummary(skipped bool, reason string, err error) (Conclusion, string, s
 }
 
 // PublishSummary renders the body of the publish check.
-func PublishSummary(reference string, tags []string, signed bool, err error) (Conclusion, string, string) {
+//
+// It lists every artifact the run produced, because a release that shipped an
+// image and a set of binaries is one event, and splitting it across two checks
+// would make branch protection wait on a name that does not always exist.
+func PublishSummary(artifacts []run.Artifact, err error) (Conclusion, string, string) {
 	if err != nil {
 		return Failure, "publish failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
 	}
+	if len(artifacts) == 0 {
+		return Neutral, "nothing published", "No artifact was routed to this event."
+	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "digest `%s`\n\n", reference)
-	for _, tag := range tags {
-		fmt.Fprintf(&b, "- `%s`\n", tag)
+	allSigned := true
+	for _, a := range artifacts {
+		if !a.Signed {
+			allSigned = false
+		}
+		switch a.Kind {
+		case "binaries":
+			fmt.Fprintf(&b, "**release `%s`** — checksums `%s`\n\n", a.Reference, a.Digest)
+		default:
+			fmt.Fprintf(&b, "**image** `%s`\n\n", a.Reference)
+		}
+		for _, name := range a.Names {
+			fmt.Fprintf(&b, "- `%s`\n", name)
+		}
+		b.WriteString("\n")
 	}
-	if signed {
-		b.WriteString("\nSigned with cosign. RollOps can pin this digest.\n")
-		return Success, "published and signed", b.String()
+
+	if !allSigned {
+		// A rehearsal must never read as a real artifact on a pull request page.
+		b.WriteString("Dry run: nothing was pushed or signed.\n")
+		return Neutral, "dry run", b.String()
 	}
-	// A dry run must never read as a real artifact on a pull request page.
-	b.WriteString("\nDry run: nothing was pushed or signed.\n")
-	return Neutral, "dry run", b.String()
+	b.WriteString("Signed with cosign. RollOps can pin the image digest.\n")
+	return Success, summaryTitle(artifacts), b.String()
+}
+
+// summaryTitle names what was produced, so the check line is readable without
+// opening it.
+func summaryTitle(artifacts []run.Artifact) string {
+	kinds := make([]string, 0, 2)
+	for _, a := range artifacts {
+		label := "image"
+		if a.Kind == "binaries" {
+			label = "binaries"
+		}
+		if !slices.Contains(kinds, label) {
+			kinds = append(kinds, label)
+		}
+	}
+	return "published and signed: " + strings.Join(kinds, " + ")
 }

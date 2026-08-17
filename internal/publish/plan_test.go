@@ -13,8 +13,9 @@ const (
 	sha   = "abc1234def5678901234"
 )
 
-func cfg(tags ...config.Tag) config.Publish {
-	return config.Publish{
+func cfg(tags ...config.Tag) config.Artifact {
+	return config.Artifact{
+		Kind:  config.KindImage,
 		Image: image, Tags: tags, Sign: "cosign",
 		Platforms: []string{"linux/amd64"}, Dockerfile: "Dockerfile", Context: ".",
 	}
@@ -127,7 +128,7 @@ func TestPlanNonVersionTagIsNotASemverTag(t *testing.T) {
 }
 
 func TestPlanRejectsMissingImageOrSHA(t *testing.T) {
-	if _, err := BuildPlan(config.Publish{Tags: []config.Tag{config.TagSHA}}, sha, "r"); err == nil {
+	if _, err := BuildPlan(config.Artifact{Tags: []config.Tag{config.TagSHA}}, sha, "r"); err == nil {
 		t.Error("BuildPlan accepted an empty image")
 	}
 	if _, err := BuildPlan(cfg(config.TagSHA, config.TagLatest), " ", "r"); err == nil {
@@ -146,7 +147,7 @@ func TestPlanRejectsAMissingSHATag(t *testing.T) {
 }
 
 func TestPlanAppliesDefaults(t *testing.T) {
-	plan, err := BuildPlan(config.Publish{
+	plan, err := BuildPlan(config.Artifact{
 		Image: image, Tags: []config.Tag{config.TagSHA, config.TagLatest},
 	}, sha, "refs/heads/main")
 	if err != nil {

@@ -60,12 +60,16 @@ var ErrNotFound = errors.New("no .kiln.yaml")
 
 // Pipeline is the whole of `.kiln.yaml`.
 type Pipeline struct {
-	APIVersion string   `yaml:"apiVersion"`
-	Kind       string   `yaml:"kind"`
-	On         On       `yaml:"on"`
-	Prove      Prove    `yaml:"prove"`
-	Publish    *Publish `yaml:"publish"`
-	Watch      Watch    `yaml:"watch"`
+	APIVersion string `yaml:"apiVersion"`
+	Kind       string `yaml:"kind"`
+	On         On     `yaml:"on"`
+	Prove      Prove  `yaml:"prove"`
+	// Publish is a list because "signed artifact" is not a synonym for
+	// "container image". One proven commit routinely yields several: an image
+	// RollOps deploys, and the release binaries a human downloads. A third kind
+	// later is one more list entry rather than one more top-level key.
+	Publish []Artifact `yaml:"publish"`
+	Watch   Watch      `yaml:"watch"`
 }
 
 // On routes events to phases. An absent `tag` list inherits `push`, because a
@@ -84,15 +88,45 @@ type Prove struct {
 	Nox  bool   `yaml:"nox"`
 }
 
-// Publish describes the artifact. Tags must always include the immutable sha
-// tag plus at least one moving tag — see validate for why.
-type Publish struct {
+// ArtifactKind discriminates the entries in the publish list.
+type ArtifactKind string
+
+const (
+	// KindImage is an OCI image: docker build, push, cosign the digest.
+	KindImage ArtifactKind = "image"
+	// KindBinaries is a binary release: cross-compiled archives, checksums and
+	// a GitHub Release, produced by goreleaser.
+	KindBinaries ArtifactKind = "binaries"
+)
+
+// Artifact is one thing to publish.
+//
+// The fields of both kinds live on one struct rather than in a union. That
+// keeps yaml's KnownFields check working — it operates on the struct, and it
+// is what turns a typo into an error — at the cost of needing validate to
+// reject a field belonging to the other kind. The error that produces is far
+// better than the one a custom unmarshaller would give.
+type Artifact struct {
+	Kind ArtifactKind `yaml:"kind"`
+	// On restricts this artifact to certain events (pull_request, push, tag).
+	// Empty means every event that routes to publish at all.
+	On []string `yaml:"on"`
+
+	// Image fields.
 	Image      string   `yaml:"image"`
 	Tags       []Tag    `yaml:"tags"`
-	Sign       string   `yaml:"sign"`
 	Platforms  []string `yaml:"platforms"`
 	Dockerfile string   `yaml:"dockerfile"`
 	Context    string   `yaml:"context"`
+
+	// Binaries fields. From names the tool, for the same reason prove.from
+	// does: the coupling is explicit in the file, and there is one value.
+	From   string `yaml:"from"`
+	Config string `yaml:"config"`
+
+	// Sign applies to both kinds. Kiln signs the image digest, or the release
+	// checksum manifest.
+	Sign string `yaml:"sign"`
 }
 
 // Watch configures unattended discovery. PullRequests and Tags are pointers so
@@ -161,6 +195,9 @@ func Parse(r io.Reader) (Pipeline, error) {
 	if err := scanForCDKeys(raw); err != nil {
 		return Pipeline{}, err
 	}
+	if err := scanForLegacyPublish(raw); err != nil {
+		return Pipeline{}, err
+	}
 
 	var p Pipeline
 	dec := yaml.NewDecoder(strings.NewReader(string(raw)))
@@ -201,6 +238,35 @@ func scanForCDKeys(raw []byte) error {
 	return nil
 }
 
+// scanForLegacyPublish recognises the single-artifact `publish:` mapping that
+// preceded the list, and answers with the migration rather than yaml's
+// "cannot unmarshal !!map into []config.Artifact".
+//
+// The shape changed because "signed artifact" was never a synonym for
+// "container image": one commit yields an image and a set of release
+// binaries, and a mapping can only describe one of them.
+func scanForLegacyPublish(raw []byte) error {
+	var probe struct {
+		Publish yaml.Node `yaml:"publish"`
+	}
+	if err := yaml.Unmarshal(raw, &probe); err != nil {
+		return nil //nolint:nilerr // deliberate: defer the parse error to Decode
+	}
+	if probe.Publish.Kind != yaml.MappingNode {
+		return nil
+	}
+	return errors.New(`publish: is a list of artifacts, not a single image.
+
+Wrap the existing block in a list entry and give it a kind:
+
+  publish:
+    - kind: image
+      image: ghcr.io/owner/name
+      tags: [sha, latest]
+
+A binary release is a second entry — see docs/configuration.md`)
+}
+
 func (p *Pipeline) applyDefaults() {
 	if p.Prove.From == "" {
 		p.Prove.From = "warden"
@@ -212,27 +278,49 @@ func (p *Pipeline) applyDefaults() {
 	if p.On.Tag == nil {
 		p.On.Tag = p.On.Push
 	}
-	if p.Publish != nil {
-		p.Publish.applyDefaults()
+	for i := range p.Publish {
+		p.Publish[i].applyDefaults()
 	}
 	p.Watch.applyDefaults()
 }
 
-func (pb *Publish) applyDefaults() {
-	if len(pb.Tags) == 0 {
-		pb.Tags = []Tag{TagSHA, TagLatest}
+func (a *Artifact) applyDefaults() {
+	if a.Kind == "" {
+		// An entry that names no kind is an image. That is the common case and
+		// the one the schema started with, so the shorthand costs nothing.
+		a.Kind = KindImage
 	}
-	if pb.Sign == "" {
-		pb.Sign = "cosign"
+	if a.Sign == "" {
+		a.Sign = "cosign"
 	}
-	if pb.Dockerfile == "" {
-		pb.Dockerfile = "Dockerfile"
-	}
-	if pb.Context == "" {
-		pb.Context = "."
-	}
-	if len(pb.Platforms) == 0 {
-		pb.Platforms = []string{"linux/amd64"}
+
+	switch a.Kind {
+	case KindImage:
+		if len(a.Tags) == 0 {
+			a.Tags = []Tag{TagSHA, TagLatest}
+		}
+		if a.Dockerfile == "" {
+			a.Dockerfile = "Dockerfile"
+		}
+		if a.Context == "" {
+			a.Context = "."
+		}
+		if len(a.Platforms) == 0 {
+			a.Platforms = []string{"linux/amd64"}
+		}
+	case KindBinaries:
+		if a.From == "" {
+			a.From = "goreleaser"
+		}
+		if a.Config == "" {
+			a.Config = ".goreleaser.yaml"
+		}
+		if len(a.On) == 0 {
+			// Tags only, by default. goreleaser derives the version from the
+			// tag, so a binary release on a branch push would either fail or
+			// publish something with a version nobody can ask for.
+			a.On = []string{"tag"}
+		}
 	}
 }
 
@@ -272,13 +360,30 @@ func (p Pipeline) validate() error {
 			return err
 		}
 	}
-	if p.WantsPublish() && p.Publish == nil {
-		return errors.New("an event routes to publish but no publish: block is configured")
+	if p.WantsPublish() && len(p.Publish) == 0 {
+		return errors.New("an event routes to publish but the publish: list is empty")
 	}
-	if p.Publish != nil {
-		if err := p.Publish.validate(); err != nil {
+	for i, a := range p.Publish {
+		if err := a.validate(i); err != nil {
 			return err
 		}
+	}
+	return p.validateNoDuplicateImages()
+}
+
+// validateNoDuplicateImages catches two entries publishing the same image.
+// They would race each other onto the same moving tag, and which one won would
+// depend on ordering nobody wrote down.
+func (p Pipeline) validateNoDuplicateImages() error {
+	seen := make(map[string]int, len(p.Publish))
+	for i, a := range p.Publish {
+		if a.Kind != KindImage {
+			continue
+		}
+		if first, dup := seen[a.Image]; dup {
+			return fmt.Errorf("publish[%d]: image %q is already published by publish[%d]", i, a.Image, first)
+		}
+		seen[a.Image] = i
 	}
 	return nil
 }
@@ -305,42 +410,101 @@ func validateSteps(field string, steps []Step) error {
 	return nil
 }
 
-func (pb Publish) validate() error {
-	if strings.TrimSpace(pb.Image) == "" {
-		return errors.New("publish.image is required")
+func (a Artifact) validate(idx int) error {
+	where := fmt.Sprintf("publish[%d]", idx)
+
+	if a.Sign != "cosign" {
+		return fmt.Errorf("%s.sign must be \"cosign\", got %q", where, a.Sign)
 	}
-	if pb.Sign != "cosign" {
-		return fmt.Errorf("publish.sign must be \"cosign\", got %q", pb.Sign)
+	for _, event := range a.On {
+		switch event {
+		case "pull_request", "push", "tag":
+		default:
+			return fmt.Errorf("%s.on: unknown event %q (want pull_request, push or tag)", where, event)
+		}
 	}
 
-	seen := make(map[Tag]bool, len(pb.Tags))
-	for _, t := range pb.Tags {
+	switch a.Kind {
+	case KindImage:
+		return a.validateImage(where)
+	case KindBinaries:
+		return a.validateBinaries(where)
+	default:
+		return fmt.Errorf("%s.kind: unknown artifact kind %q (want image or binaries)", where, a.Kind)
+	}
+}
+
+// misplaced reports a field that belongs to the other kind. Silently ignoring
+// it would let an operator write a setting that never takes effect — the same
+// failure KnownFields exists to prevent, one level down.
+func misplaced(where, field string, kind ArtifactKind) error {
+	return fmt.Errorf("%s.%s does not apply to kind %q and would be ignored", where, field, kind)
+}
+
+func (a Artifact) validateImage(where string) error {
+	if a.From != "" {
+		return misplaced(where, "from", KindImage)
+	}
+	if a.Config != "" {
+		return misplaced(where, "config", KindImage)
+	}
+	if strings.TrimSpace(a.Image) == "" {
+		return fmt.Errorf("%s.image is required", where)
+	}
+
+	seen := make(map[Tag]bool, len(a.Tags))
+	for _, t := range a.Tags {
 		switch t {
 		case TagSHA, TagLatest, TagSemver:
 		default:
-			return fmt.Errorf("publish.tags: unknown tag %q (want sha, latest or semver)", t)
+			return fmt.Errorf("%s.tags: unknown tag %q (want sha, latest or semver)", where, t)
 		}
 		if seen[t] {
-			return fmt.Errorf("publish.tags: %q listed twice", t)
+			return fmt.Errorf("%s.tags: %q listed twice", where, t)
 		}
 		seen[t] = true
 	}
 	if !seen[TagSHA] {
-		return errors.New(`publish.tags must include "sha": the immutable tag is what RollOps pins to`)
+		return fmt.Errorf(`%s.tags must include "sha": the immutable tag is what RollOps pins to`, where)
 	}
 	// A SHA-only tag set is rejected, not defaulted. RollOps' imagePolicy
 	// watches a moving tag to discover new digests; with nothing but sha-<x>
 	// tags there is no tag to watch, and the pipeline would build artifacts no
 	// deploy could ever find.
 	if !seen[TagLatest] && !seen[TagSemver] {
-		return errors.New(
-			`publish.tags is sha-only: add "latest" or "semver" — RollOps' imagePolicy cannot follow a moving target that never moves`)
+		return fmt.Errorf(
+			`%s.tags is sha-only: add "latest" or "semver" — RollOps' imagePolicy cannot follow a moving target that never moves`, where)
 	}
-	if strings.TrimSpace(pb.Dockerfile) == "" {
-		return errors.New("publish.dockerfile must not be empty")
+	if strings.TrimSpace(a.Dockerfile) == "" {
+		return fmt.Errorf("%s.dockerfile must not be empty", where)
 	}
-	if strings.TrimSpace(pb.Context) == "" {
-		return errors.New("publish.context must not be empty")
+	if strings.TrimSpace(a.Context) == "" {
+		return fmt.Errorf("%s.context must not be empty", where)
+	}
+	return nil
+}
+
+func (a Artifact) validateBinaries(where string) error {
+	for field, set := range map[string]bool{
+		"image":      a.Image != "",
+		"tags":       len(a.Tags) > 0,
+		"platforms":  len(a.Platforms) > 0,
+		"dockerfile": a.Dockerfile != "",
+		"context":    a.Context != "",
+	} {
+		if set {
+			return misplaced(where, field, KindBinaries)
+		}
+	}
+	// goreleaser owns cross-compilation, archives, checksums and the GitHub
+	// Release. Kiln does not invent a second release language any more than it
+	// invents a second check language — .goreleaser.yaml is where that lives.
+	if a.From != "goreleaser" {
+		return fmt.Errorf(
+			"%s.from must be \"goreleaser\", got %q: .goreleaser.yaml is the only release language kiln speaks", where, a.From)
+	}
+	if strings.TrimSpace(a.Config) == "" {
+		return fmt.Errorf("%s.config must not be empty", where)
 	}
 	return nil
 }
@@ -364,6 +528,24 @@ func (p Pipeline) Wants(event string, step Step) bool {
 	return slices.Contains(p.Steps(event), step)
 }
 
+// ArtifactsFor returns the artifacts to produce for an event.
+//
+// Two gates, both of which must pass: the event must route to publish at all
+// (on.<event> lists publish), and the artifact must not exclude it. The second
+// is what keeps a binary release on tags while an image builds on every push.
+func (p Pipeline) ArtifactsFor(event string) []Artifact {
+	if !p.Wants(event, StepPublish) {
+		return nil
+	}
+	out := make([]Artifact, 0, len(p.Publish))
+	for _, a := range p.Publish {
+		if len(a.On) == 0 || slices.Contains(a.On, event) {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
 // WantsPublish reports whether any event routes to publish.
 func (p Pipeline) WantsPublish() bool {
 	for _, e := range []string{"pull_request", "push", "tag"} {
@@ -382,8 +564,8 @@ func (p Pipeline) WatchTags() bool { return p.Watch.Tags == nil || *p.Watch.Tags
 
 // TagKinds returns the configured tag kinds in a stable order, so `kiln doctor`
 // prints the same plan twice in a row.
-func (pb Publish) TagKinds() []Tag {
-	out := slices.Clone(pb.Tags)
+func (a Artifact) TagKinds() []Tag {
+	out := slices.Clone(a.Tags)
 	slices.Sort(out)
 	return out
 }

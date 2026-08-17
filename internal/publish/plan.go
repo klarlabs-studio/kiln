@@ -65,7 +65,7 @@ var semverRef = regexp.MustCompile(`^v?\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Z
 // tag. The config loader already rejects a sha-only tag list, but a list of
 // [sha, semver] on a branch push would produce the same dead end at runtime,
 // so it is checked again here where the ref is actually known.
-func BuildPlan(cfg config.Publish, sha, ref string) (Plan, error) {
+func BuildPlan(cfg config.Artifact, sha, ref string) (Plan, error) {
 	if strings.TrimSpace(cfg.Image) == "" {
 		return Plan{}, errors.New("publish: no image configured")
 	}

@@ -38,9 +38,11 @@ func newPublisher(f execx.Runner) *Docker {
 	return d
 }
 
-func planFor(t *testing.T, ref string, tags ...config.Tag) Plan {
+// mustPlan resolves the plan a test wants to assert against. The publisher
+// derives its own from the same inputs, so the two cannot drift.
+func mustPlan(t *testing.T, art config.Artifact, commit, ref string) Plan {
 	t.Helper()
-	p, err := BuildPlan(cfg(tags...), sha, ref)
+	p, err := BuildPlan(art, commit, ref)
 	if err != nil {
 		t.Fatalf("BuildPlan: %v", err)
 	}
@@ -52,9 +54,10 @@ func TestPublishBuildsPushesAndSigns(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t)
 
-	plan := planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest)
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+	plan := mustPlan(t, art, head, ref)
 	res, err := newPublisher(fake).Publish(t.Context(), Request{
-		RepoDir: repo.Dir, SHA: head, Plan: plan,
+		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
@@ -79,9 +82,10 @@ func TestPublishTagsEveryPlannedReference(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t)
 
-	plan := planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest)
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+	plan := mustPlan(t, art, head, ref)
 	if _, err := newPublisher(fake).Publish(t.Context(), Request{
-		RepoDir: repo.Dir, SHA: head, Plan: plan,
+		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +114,7 @@ func TestPublishBuildsFromAWorktreeNotTheCheckout(t *testing.T) {
 	fake := dockerFake(t)
 	if _, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +140,7 @@ func TestPublishSignsTheDigestNotATag(t *testing.T) {
 
 	if _, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +163,7 @@ func TestMissingDockerFailsBeforeAnythingHappens(t *testing.T) {
 	fake := dockerFake(t).Absent("docker")
 
 	_, err := newPublisher(fake).Publish(t.Context(), Request{
-		RepoDir: "/repo", SHA: sha, Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		RepoDir: "/repo", SHA: sha, Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
 	if !errors.Is(err, ErrToolMissing) {
@@ -174,7 +178,7 @@ func TestMissingCosignFailsBeforePushing(t *testing.T) {
 	fake := dockerFake(t).Absent("cosign")
 
 	_, err := newPublisher(fake).Publish(t.Context(), Request{
-		RepoDir: "/repo", SHA: sha, Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		RepoDir: "/repo", SHA: sha, Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
 	if !errors.Is(err, ErrToolMissing) {
@@ -194,7 +198,7 @@ func TestPushFailureFailsTheRun(t *testing.T) {
 
 	_, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
 	if err == nil {
@@ -214,7 +218,7 @@ func TestAuthFailuresAreNotRetried(t *testing.T) {
 	d.PushRetries = 4
 	_, _ = d.Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
 	// A credential problem fails the same way every time; retrying it only
@@ -242,7 +246,7 @@ func TestTransientFailuresAreRetried(t *testing.T) {
 	d.PushRetries = 3
 	if _, err := d.Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
 		t.Fatalf("a registry blip should not fail the run: %v", err)
 	}
@@ -265,7 +269,7 @@ func TestDigestComesFromTheRegistryNotTheDaemon(t *testing.T) {
 
 	res, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -282,7 +286,7 @@ func TestNoRegistryDigestIsAFailure(t *testing.T) {
 
 	_, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head,
-		Plan: planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest),
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
 	if err == nil || !strings.Contains(err.Error(), "did not take effect") {
@@ -304,11 +308,11 @@ func TestMultiPlatformUsesBuildx(t *testing.T) {
 
 	// A release is the realistic multi-arch case, so this one plans from a tag
 	// ref with a semver tag rather than repeating the branch shape.
-	plan := planFor(t, "refs/tags/v1.0.0", config.TagSHA, config.TagSemver)
-	plan.Platforms = []string{"linux/amd64", "linux/arm64"}
+	ref, art := "refs/tags/v1.0.0", cfg(config.TagSHA, config.TagSemver)
+	art.Platforms = []string{"linux/amd64", "linux/arm64"}
 
 	res, err := newPublisher(fake).Publish(t.Context(), Request{
-		RepoDir: repo.Dir, SHA: head, Plan: plan,
+		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	})
 	if err != nil {
 		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
@@ -337,19 +341,20 @@ func TestBuildxWithoutADigestIsAFailure(t *testing.T) {
 		return execx.Result{}, os.WriteFile(metadataPath(c.Args), []byte(`{}`), 0o600)
 	}})
 
-	plan := planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest)
-	plan.Platforms = []string{"linux/amd64", "linux/arm64"}
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+	art.Platforms = []string{"linux/amd64", "linux/arm64"}
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{RepoDir: repo.Dir, SHA: head, Plan: plan})
+	_, err := newPublisher(fake).Publish(t.Context(), Request{RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art})
 	if err == nil || !strings.Contains(err.Error(), "no image digest") {
 		t.Errorf("err = %v, want a missing-digest failure", err)
 	}
 }
 
 func TestDryRunTouchesNothing(t *testing.T) {
-	plan := planFor(t, "refs/heads/main", config.TagSHA, config.TagLatest)
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+	plan := mustPlan(t, art, sha, ref)
 
-	res, err := NewDry(obs.Discard()).Publish(t.Context(), Request{RepoDir: "/repo", SHA: sha, Plan: plan})
+	res, err := NewDry(obs.Discard()).Publish(t.Context(), Request{RepoDir: "/repo", SHA: sha, Ref: ref, Artifact: art})
 	if err != nil {
 		t.Fatal(err)
 	}

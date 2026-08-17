@@ -50,9 +50,17 @@ type Run struct {
 	// which inherited them.
 	Skipped bool `json:"skipped"`
 
-	// Digest and Tags are the publish hand-off to RollOps. Digest is the
-	// immutable `sha256:…` the registry assigned; Tags are the fully qualified
-	// references that now point at it.
+	// Artifacts are what the run published. A single commit routinely yields
+	// several — an image RollOps deploys and the release binaries a human
+	// downloads — so this is a list even when it usually holds one.
+	Artifacts []Artifact `json:"artifacts,omitempty"`
+
+	// Digest and Tags mirror the first image artifact.
+	//
+	// They are redundant with Artifacts and kept anyway: a ledger written by
+	// an earlier kiln has them and nothing else, and `kiln status --json` is
+	// something people script against. Removing them would break both for no
+	// gain.
 	Digest string   `json:"digest,omitempty"`
 	Tags   []string `json:"tags,omitempty"`
 
@@ -62,6 +70,31 @@ type Run struct {
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
+}
+
+// Artifact is one thing a run published.
+type Artifact struct {
+	// Kind is image or binaries.
+	Kind string `json:"kind"`
+	// Reference names exactly this artifact: image@digest, or a release tag.
+	Reference string `json:"reference"`
+	// Digest is the content identity — the registry digest for an image, the
+	// checksum manifest's digest for a release.
+	Digest string `json:"digest"`
+	// Names are the image tags, or the files in the release.
+	Names []string `json:"names,omitempty"`
+	// Signed records whether a signature was produced. False on a dry run.
+	Signed bool `json:"signed"`
+}
+
+// AddArtifact records a published artifact, keeping the legacy Digest/Tags
+// fields pointed at the first image so older readers still see something true.
+func (r *Run) AddArtifact(a Artifact) {
+	r.Artifacts = append(r.Artifacts, a)
+	if a.Kind == "image" && r.Digest == "" {
+		r.Digest = a.Digest
+		r.Tags = a.Names
+	}
 }
 
 // New starts a run in the queued phase with a fresh id.
@@ -137,6 +170,15 @@ func (r *Run) Clone() *Run {
 	cp := *r
 	if r.Tags != nil {
 		cp.Tags = append([]string(nil), r.Tags...)
+	}
+	if r.Artifacts != nil {
+		cp.Artifacts = make([]Artifact, len(r.Artifacts))
+		for i, a := range r.Artifacts {
+			cp.Artifacts[i] = a
+			if a.Names != nil {
+				cp.Artifacts[i].Names = append([]string(nil), a.Names...)
+			}
+		}
 	}
 	return &cp
 }

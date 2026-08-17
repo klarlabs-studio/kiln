@@ -43,7 +43,7 @@ func newFixture(t *testing.T) *fixture {
 	eng := engine.New(engine.Engine{
 		Prover: prove.Func(func(context.Context, prove.Request) error { return nil }),
 		Publisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
-			return publish.Result{Digest: "sha256:abc", Tags: req.Plan.Refs(), Signed: true}, nil
+			return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 		}),
 		Store: f.store,
 		Log:   obs.Discard(),

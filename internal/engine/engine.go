@@ -53,12 +53,16 @@ type Request struct {
 
 // Engine runs the phase sequence.
 type Engine struct {
-	Prover     prove.Prover
-	Publisher  publish.Publisher
-	Provenance provenance.Verifier
-	Checks     checks.Reporter
-	Store      store.Store
-	Log        obs.Logger
+	Prover prove.Prover
+	// Publisher builds images; ReleasePublisher builds binary releases. Two
+	// fields rather than a registry because there are two kinds, and a map
+	// would be indirection without a second caller to justify it.
+	Publisher        publish.Publisher
+	ReleasePublisher publish.Publisher
+	Provenance       provenance.Verifier
+	Checks           checks.Reporter
+	Store            store.Store
+	Log              obs.Logger
 }
 
 // New builds an engine, defaulting the optional collaborators so a caller that
@@ -175,65 +179,104 @@ func (e *Engine) doProve(ctx context.Context, req Request, r *run.Run, policy is
 	return nil
 }
 
-// doPublish builds and signs, if — and only if — both the pipeline and the
-// policy allow it.
+// doPublish produces every artifact the pipeline routes to this event — if,
+// and only if, the policy also allows it.
 func (e *Engine) doPublish(ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger) error {
-	wanted := req.Pipeline.Wants(req.Event.String(), config.StepPublish)
+	wanted := req.Pipeline.ArtifactsFor(req.Event.String())
 
 	// The overrule, stated plainly. A caller asking to publish on a fork pull
 	// request is not an error to reject loudly — an automated surface may
 	// simply have passed the pipeline through — but it must be visible in the
 	// log, or an operator will spend an afternoon wondering where their image
 	// went.
-	if wanted && !policy.Publish {
+	if len(wanted) > 0 && !policy.Publish {
 		log.Warn("publish suppressed by isolation policy",
-			"event", req.Event.String(), "fork", req.Fork,
+			"artifacts", len(wanted), "event", req.Event.String(), "fork", req.Fork,
 			"why", "a pull request head is a proposal, not a release; RollOps deploys from branches and tags")
 		return nil
 	}
-	if !wanted || !policy.Publish {
+	if len(wanted) == 0 || !policy.Publish {
 		return nil
-	}
-	if req.Pipeline.Publish == nil {
-		return errors.New("engine: publish is routed for this event but .kiln.yaml has no publish block")
-	}
-
-	plan, err := publish.BuildPlan(*req.Pipeline.Publish, req.SHA, req.Ref)
-	if err != nil {
-		e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NamePublish, req.SHA) }, log, checks.NamePublish)
-		conclusion, title, summary := checks.PublishSummary("", nil, false, err)
-		e.report(ctx, func() error {
-			return e.Checks.Complete(ctx, checks.NamePublish, req.SHA, conclusion, title, summary)
-		}, log, checks.NamePublish)
-		return err
 	}
 
 	r.Phase = run.PhasePublishing
 	e.persist(r, log)
 	e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NamePublish, req.SHA) }, log, checks.NamePublish)
 
-	res, pubErr := e.Publisher.Publish(ctx, publish.Request{
-		RepoDir: req.Dir,
-		SHA:     req.SHA,
-		Plan:    plan,
-		Output:  req.Output,
-	})
-	if pubErr == nil {
-		r.Digest = res.Digest
-		r.Tags = res.Tags
-	}
+	produced, err := e.publishAll(ctx, req, r, wanted, log)
 
-	conclusion, title, summary := checks.PublishSummary(res.Reference, res.Tags, res.Signed, pubErr)
+	conclusion, title, summary := checks.PublishSummary(produced, err)
 	e.report(ctx, func() error {
 		return e.Checks.Complete(ctx, checks.NamePublish, req.SHA, conclusion, title, summary)
 	}, log, checks.NamePublish)
 
-	if pubErr != nil {
-		log.Error("publish failed", "err", pubErr)
-		return pubErr
+	if err != nil {
+		log.Error("publish failed", "err", err)
+		return err
 	}
-	log.Info("published", "digest", res.Digest, "tags", res.Tags, "signed", res.Signed)
 	return nil
+}
+
+// publishAll runs each artifact's publisher in order, stopping at the first
+// failure.
+//
+// Stopping rather than continuing is deliberate. The artifacts of one commit
+// are a set, not independent jobs: a release whose image built but whose
+// binaries did not is a half-published version, and carrying on would hide
+// which half is missing behind a second, unrelated error. Whatever succeeded
+// before the failure is still recorded, so the operator can see how far it got.
+func (e *Engine) publishAll(
+	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact, log obs.Logger,
+) ([]run.Artifact, error) {
+	produced := make([]run.Artifact, 0, len(artifacts))
+
+	for i, artifact := range artifacts {
+		publisher := e.publisherFor(artifact)
+		if publisher == nil {
+			return produced, fmt.Errorf("engine: no publisher for artifact kind %q", artifact.Kind)
+		}
+
+		res, err := publisher.Publish(ctx, publish.Request{
+			RepoDir:  req.Dir,
+			SHA:      req.SHA,
+			Ref:      req.Ref,
+			Artifact: artifact,
+			Output:   req.Output,
+		})
+		if err != nil {
+			return produced, fmt.Errorf("publish[%d] (%s): %w", i, artifact.Kind, err)
+		}
+
+		entry := run.Artifact{
+			Kind:      string(res.Kind),
+			Reference: res.Reference,
+			Digest:    res.Digest,
+			Names:     res.Tags,
+			Signed:    res.Signed,
+		}
+		r.AddArtifact(entry)
+		produced = append(produced, entry)
+		e.persist(r, log)
+
+		log.Info("published",
+			"kind", string(res.Kind), "reference", res.Reference,
+			"digest", res.Digest, "signed", res.Signed)
+	}
+	return produced, nil
+}
+
+// publisherFor selects the publisher for an artifact kind. A nil result is a
+// configuration kiln cannot honour, which the caller turns into a failure
+// rather than a silent no-op.
+func (e *Engine) publisherFor(a config.Artifact) publish.Publisher {
+	switch a.Kind {
+	case config.KindBinaries:
+		return e.ReleasePublisher
+	case config.KindImage:
+		return e.Publisher
+	default:
+		return nil
+	}
 }
 
 // report performs a best-effort Checks call.

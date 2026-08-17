@@ -7,7 +7,6 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT  ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS ?= -X '$(MODULE)/internal/version.Version=$(VERSION)' -X '$(MODULE)/internal/version.Commit=$(COMMIT)' -X '$(MODULE)/internal/version.Date=$(DATE)'
-PLATFORMS ?= linux/amd64 linux/arm64 darwin/arm64
 
 IMAGE ?= ghcr.io/klarlabs-studio/kiln
 
@@ -57,31 +56,16 @@ examples-check: build
 		./$(BINDIR)/kiln doctor --config-only --pipeline "$$f" >/dev/null || exit 1; \
 	done
 
+# Release archives come from goreleaser, not from a hand-rolled loop here.
+# Two implementations of the same tarball would drift, and only one of them
+# signs the checksum manifest.
 dist:
-	rm -rf $(DISTDIR)
-	mkdir -p $(DISTDIR)
-	@set -e; \
-	for platform in $(PLATFORMS); do \
-		os=$${platform%/*}; arch=$${platform#*/}; \
-		name=kiln_$(VERSION)_$${os}_$${arch}; \
-		stage=$$(mktemp -d); \
-		mkdir -p "$$stage/$$name/bin" "$$stage/$$name/docs" "$$stage/$$name/examples"; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o "$$stage/$$name/bin/kiln"  ./cmd/kiln; \
-		GOOS=$$os GOARCH=$$arch CGO_ENABLED=0 $(GO) build -ldflags "$(LDFLAGS)" -o "$$stage/$$name/bin/kilnd" ./cmd/kilnd; \
-		cp README.md LICENSE "$$stage/$$name/"; \
-		cp docs/*.md "$$stage/$$name/docs/"; \
-		cp examples/*.yaml "$$stage/$$name/examples/"; \
-		tar -C "$$stage" -czf "$(DISTDIR)/$$name.tar.gz" "$$name"; \
-		rm -rf "$$stage"; \
-	done
-	cd $(DISTDIR) && shasum -a 256 *.tar.gz > checksums.txt
+	goreleaser release --clean --snapshot
 
-dist-check: dist
-	test -s $(DISTDIR)/checksums.txt
-	@count=$$(find $(DISTDIR) -name 'kiln_*.tar.gz' | wc -l | tr -d ' '); \
-	want=$$(printf '%s\n' $(PLATFORMS) | wc -l | tr -d ' '); \
-	if [ "$$count" != "$$want" ]; then echo "dist archive count $$count != $$want"; exit 1; fi
-	cd $(DISTDIR) && shasum -a 256 -c checksums.txt
+dist-check:
+	goreleaser check
+	$(GO) build -o $(BINDIR)/kiln ./cmd/kiln
+	./$(BINDIR)/kiln doctor --config-only
 
 docker:
 	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .

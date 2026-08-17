@@ -14,11 +14,12 @@ import (
 
 // Defaults for the values an operator usually leaves alone.
 const (
-	DefaultDB       = ".kiln/state.json"
-	DefaultAddr     = "127.0.0.1:8088"
-	DefaultWarden   = "warden"
-	DefaultNox      = "nox"
-	DefaultLogLevel = "info"
+	DefaultDB         = ".kiln/state.json"
+	DefaultAddr       = "127.0.0.1:8088"
+	DefaultWarden     = "warden"
+	DefaultNox        = "nox"
+	DefaultGoreleaser = "goreleaser"
+	DefaultLogLevel   = "info"
 )
 
 // Env is the resolved operator environment for one process.
@@ -27,9 +28,10 @@ type Env struct {
 	DB string
 	// Dry plans tags and skips every docker/cosign call (KILN_DRY=1).
 	Dry bool
-	// Warden and Nox are the binary names Kiln shells out to.
-	Warden string
-	Nox    string
+	// Warden, Nox and Goreleaser are the binary names Kiln shells out to.
+	Warden     string
+	Nox        string
+	Goreleaser string
 	// TrustedKeys are the signer keys a warden note must match before Kiln will
 	// skip a re-prove. Operator-pinned; never sourced from a PR head.
 	TrustedKeys []string
@@ -59,6 +61,7 @@ func Load() Env {
 		Dry:           truthy(os.Getenv("KILN_DRY")),
 		Warden:        firstNonEmpty(os.Getenv("KILN_WARDEN"), DefaultWarden),
 		Nox:           firstNonEmpty(os.Getenv("KILN_NOX"), DefaultNox),
+		Goreleaser:    firstNonEmpty(os.Getenv("KILN_GORELEASER"), DefaultGoreleaser),
 		TrustedKeys:   splitList(os.Getenv("KILN_TRUSTED_KEYS")),
 		Token:         firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
 		Repository:    os.Getenv("GITHUB_REPOSITORY"),

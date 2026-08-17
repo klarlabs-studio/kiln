@@ -1,10 +1,13 @@
 # `.kiln.yaml`
 
-Kiln reads two files, and they have different owners.
+Kiln reads three files, and they have different owners.
 
 `.warden.yaml` says what "passing" means. Kiln does not read it — it shells out
 to `warden run pre-push --attest-only` and reports what Warden said. If you want to change
 which checks run, change that file.
+
+`.goreleaser.yaml` says how binaries are cross-compiled, archived, signed and
+released. Kiln does not read it either, beyond one check — see `binaries` below.
 
 `.kiln.yaml` says what to publish and which events route where. That is all it
 says. It is deliberately small, and the things it *cannot* express are as much
@@ -30,13 +33,19 @@ prove:
   from: warden        # only accepted value
   nox: false          # run `nox scan .` after the gate
 
-publish:
-  image: ghcr.io/owner/name       # required when anything publishes
-  tags: [sha, latest]             # sha + at least one of latest|semver
-  sign: cosign                    # only accepted value
-  platforms: [linux/amd64]
-  dockerfile: Dockerfile
-  context: .
+publish:                          # a LIST of artifacts
+  - kind: image                   # image | binaries (default: image)
+    image: ghcr.io/owner/name     # required for kind: image
+    tags: [sha, latest]           # sha + at least one of latest|semver
+    sign: cosign                  # only accepted value
+    platforms: [linux/amd64]
+    dockerfile: Dockerfile
+    context: .
+
+  - kind: binaries
+    from: goreleaser              # only accepted value
+    config: .goreleaser.yaml
+    on: [tag]                     # default for this kind
 
 watch:
   remote: origin
@@ -77,6 +86,21 @@ A missing `nox` binary with `nox: true` is a prove failure, not a skip.
 
 ## `publish`
 
+A list, because one proven commit routinely yields more than one artifact: the
+image RollOps deploys and the release binaries a human downloads. Each entry
+carries a `kind`, defaulting to `image`.
+
+An entry may narrow the events it applies to with its own `on:`. Two gates must
+both pass for it to run — the event has to route to publish at all
+(`on.<event>` lists `publish`), and the artifact must not exclude it. That is
+what lets an image build on every push while a release happens only on tags.
+
+Fields belonging to the other kind are rejected rather than ignored, for the
+same reason unknown keys are: a setting that silently does nothing looks like
+it worked.
+
+## `kind: image`
+
 ### `tags`
 
 | Kind | Produces | RollOps reads it as |
@@ -111,6 +135,34 @@ daemon's image store, so buildx builds and pushes in a single step.
 
 `cosign`, always. Kiln signs the digest, never a tag: a tag is mutable, and a
 signature over one attests to whatever it points at when somebody checks.
+
+## `kind: binaries`
+
+Delegates to goreleaser. `config` names the release file, `.goreleaser.yaml` by
+default; `from` exists so the coupling is explicit in the file, and
+`goreleaser` is its only value.
+
+Defaults to `on: [tag]`. goreleaser derives the version from the tag, so a
+binary release on a branch push would publish something with a version nobody
+can ask for.
+
+Kiln adds exactly one rule of its own, and it is the point of the kind:
+
+**A release config with no `signs:` block is refused.** Kiln reads the file
+before it builds anything, and fails with a message naming what is missing.
+Among the sibling repos, warden's config signs its checksum manifest and the
+others do not — so whether a release could be verified depended on whether
+somebody remembered. This turns that from a habit into a property.
+
+The signature covers `checksums.txt`, and the manifest covers every archive by
+digest, so one signature verifies the whole release. That manifest's own digest
+is what kiln records as the release's identity.
+
+Note on keyless signing: cosign's keyless mode needs an ambient OIDC identity.
+A self-hosted build box does not have one, so a real release there wants either
+a cosign key pair (`COSIGN_KEY` / `COSIGN_PASSWORD`) or an OIDC token from
+somewhere. `KILN_DRY=1` skips the signing step for this reason — the static
+`signs:` check still runs, and it is the guarantee.
 
 ## `watch`
 

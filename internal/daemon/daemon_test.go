@@ -55,7 +55,7 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 	// contract, not the build.
 	deps.Engine.Prover = prove.Func(func(context.Context, prove.Request) error { return nil })
 	deps.Engine.Publisher = publish.Func(func(_ context.Context, r publish.Request) (publish.Result, error) {
-		return publish.Result{Digest: "sha256:abc", Tags: r.Plan.Refs(), Signed: true}, nil
+		return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 	})
 
 	srv, err := New(deps, token, secret, obs.Discard())

@@ -1,0 +1,83 @@
+# goreleaser owns the binary release, the way .warden.yaml owns the checks.
+# Kiln invokes this on a proven commit; it does not reimplement any of it.
+version: 2
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: kiln
+    main: ./cmd/kiln
+    binary: kiln
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X go.klarlabs.de/kiln/internal/version.Version={{.Version}}
+      - -X go.klarlabs.de/kiln/internal/version.Commit={{.ShortCommit}}
+      - -X go.klarlabs.de/kiln/internal/version.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+  - id: kilnd
+    main: ./cmd/kilnd
+    binary: kilnd
+    env: [CGO_ENABLED=0]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w
+      - -X go.klarlabs.de/kiln/internal/version.Version={{.Version}}
+      - -X go.klarlabs.de/kiln/internal/version.Commit={{.ShortCommit}}
+      - -X go.klarlabs.de/kiln/internal/version.Date={{.Date}}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "kiln_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    ids: [kiln, kilnd]
+    files:
+      - README.md
+      - LICENSE
+      - docs/*.md
+      - examples/*.yaml
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+# Kiln refuses to publish a release whose config has no signs: block, so this
+# is not optional decoration — it is what makes the release publishable at all.
+#
+# Keyless cosign (Fulcio certificate + Rekor transparency log) over the
+# checksum manifest. One signature covers every archive, because the manifest
+# names them all by digest.
+#
+# --bundle, not --output-signature/--output-certificate: cosign 3 deprecated
+# the split flags and refuses the new bundle format without it. The bundle is
+# one file carrying the signature, the certificate and the Rekor inclusion
+# proof, which is also one fewer asset for a verifier to fetch.
+signs:
+  - cmd: cosign
+    signature: "${artifact}.bundle"
+    args:
+      - sign-blob
+      - "--yes"
+      - "--new-bundle-format"
+      - "--bundle=${signature}"
+      - "${artifact}"
+    artifacts: checksum
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude: ["^docs:", "^test:", "^chore:"]
+
+release:
+  github:
+    owner: klarlabs-studio
+    name: kiln
+  draft: false
+  prerelease: auto

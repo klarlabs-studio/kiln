@@ -6,7 +6,9 @@ Kiln runs other programs. A machine that runs Kiln needs, on `PATH`:
 
 - `git` — always
 - `warden` — always
-- `docker` and `cosign` — if anything publishes
+- `docker` — if an `image` artifact publishes
+- `goreleaser` — if a `binaries` artifact publishes
+- `cosign` — if anything publishes at all
 - `nox` — only with `prove.nox: true`
 
 It also needs a checkout of the repository and credentials for the registry
@@ -201,3 +203,17 @@ cannot build multi-platform. `docker buildx create --use`.
 
 **A worktree was left behind** — should not happen; cleanup runs even on
 cancellation. `git worktree prune` clears the bookkeeping if it does.
+
+**"release config does not sign its artifacts"** — `.goreleaser.yaml` has no
+`signs:` block, so the release would ship a checksum manifest nobody can
+verify. Add a cosign `sign-blob` signer over `artifacts: checksum`; kiln's own
+`.goreleaser.yaml` is a working example.
+
+**"a binary release needs a tag"** — a `binaries` artifact ran on a branch
+push. goreleaser takes the version from the tag. Leave the kind on its `on:
+[tag]` default.
+
+**cosign asks for a browser during a release** — keyless signing wants an OIDC
+identity, and a self-hosted box has none. Use a key pair (`COSIGN_KEY`,
+`COSIGN_PASSWORD`) on a box that is not a CI provider, or supply an OIDC token.
+`KILN_DRY=1` skips signing precisely so a laptop rehearsal does not hit this.

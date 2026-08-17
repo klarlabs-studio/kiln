@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"go.klarlabs.de/kiln/internal/boot"
@@ -85,7 +86,7 @@ func (f *facade) Doctor(ctx context.Context) (mcpsrv.DoctorOutput, error) {
 	}
 
 	if d.Pipeline.WantsPublish() && !d.Dry() {
-		for _, tool := range []string{"docker", "cosign"} {
+		for _, tool := range f.publishTools() {
 			out.Toolchain[tool] = f.installed(tool)
 			if !out.Toolchain[tool] {
 				out.Problems = append(out.Problems, tool+" is not installed but an event routes to publish")
@@ -93,10 +94,16 @@ func (f *facade) Doctor(ctx context.Context) (mcpsrv.DoctorOutput, error) {
 		}
 	}
 
-	if d.Pipeline.Publish != nil {
-		out.Image = d.Pipeline.Publish.Image
-		if plan, err := publish.BuildPlan(*d.Pipeline.Publish, placeholderSHA, "refs/heads/main"); err == nil {
-			out.Tags = plan.Refs()
+	for _, artifact := range d.Pipeline.Publish {
+		out.Artifacts = append(out.Artifacts, artifactSummary(artifact))
+		if artifact.Kind != config.KindImage {
+			continue
+		}
+		if out.Image == "" {
+			out.Image = artifact.Image
+		}
+		if plan, err := publish.BuildPlan(artifact, placeholderSHA, "refs/heads/main"); err == nil {
+			out.Tags = append(out.Tags, plan.Refs()...)
 		}
 	}
 	if !d.PipelineFound {
@@ -113,6 +120,33 @@ func (f *facade) Doctor(ctx context.Context) (mcpsrv.DoctorOutput, error) {
 	}
 	_ = ctx
 	return out, nil
+}
+
+// publishTools names the binaries the configured artifact kinds need. cosign
+// is always in the list: every kind kiln publishes is signed.
+func (f *facade) publishTools() []string {
+	tools := []string{"cosign"}
+	for _, a := range f.deps.Pipeline.Publish {
+		switch a.Kind {
+		case config.KindBinaries:
+			tools = append(tools, "goreleaser")
+		default:
+			tools = append(tools, "docker")
+		}
+	}
+	slices.Sort(tools)
+	return slices.Compact(tools)
+}
+
+// artifactSummary describes one pipeline entry for an agent.
+func artifactSummary(a config.Artifact) mcpsrv.ArtifactSummary {
+	s := mcpsrv.ArtifactSummary{Kind: string(a.Kind), On: a.On}
+	if a.Kind == config.KindBinaries {
+		s.Target = a.From + " (" + a.Config + ")"
+		return s
+	}
+	s.Target = a.Image
+	return s
 }
 
 // placeholderSHA lets doctor render a representative tag plan without needing

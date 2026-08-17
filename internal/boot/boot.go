@@ -125,12 +125,13 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	deps.Checks = buildReporter(deps.GitHub, log)
 
 	deps.Engine = engine.New(engine.Engine{
-		Prover:     prove.NewWarden(runner, env.Warden, env.Nox),
-		Publisher:  buildPublisher(env, runner, log),
-		Provenance: provenance.NewWarden(runner, env.Warden, env.TrustedKeys),
-		Checks:     deps.Checks,
-		Store:      deps.Store,
-		Log:        log,
+		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
+		Publisher:        buildPublisher(env, runner, log),
+		ReleasePublisher: buildReleasePublisher(env, runner, log),
+		Provenance:       provenance.NewWarden(runner, env.Warden, env.TrustedKeys),
+		Checks:           deps.Checks,
+		Store:            deps.Store,
+		Log:              log,
 	})
 	// The engine does not know about Options.Output; surfaces attach it per
 	// request. Recording it here keeps the plumbing in one place.
@@ -224,6 +225,19 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publ
 		return publish.NewDry(log)
 	}
 	return publish.NewDocker(runner, log)
+}
+
+// buildReleasePublisher wires the binary-release path.
+//
+// KILN_DRY still runs goreleaser — a rehearsal that skipped the cross-compile
+// would rehearse nothing — but withholds the upload, so the dry publisher is
+// not substituted here the way it is for images.
+func buildReleasePublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publish.Publisher {
+	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
+	if env.Goreleaser != "" {
+		g.Binary = env.Goreleaser
+	}
+	return g
 }
 
 // ForkUnknown is the fork status to assume when GitHub cannot be asked.

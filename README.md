@@ -36,8 +36,9 @@ Kiln shells out to tools that must already be on the box:
 |---|---|
 | `git` | always |
 | `warden` | always — a missing gate is a **prove failure**, never a skip |
-| `docker` | publishing |
-| `cosign` | publishing — RollOps refuses to deploy an unsigned digest |
+| `docker` | publishing an image |
+| `goreleaser` | publishing binaries |
+| `cosign` | publishing anything — nothing leaves kiln unsigned |
 | `nox` | only when `prove.nox: true` |
 
 `kiln doctor` tells you which of these are missing before a build discovers it the hard way.
@@ -83,18 +84,24 @@ prove:
   from: warden          # the only accepted value
   nox: false
 publish:
-  image: ghcr.io/klarlabs-studio/kiln
-  tags: [sha, latest]   # sha + at least one of latest|semver
-  sign: cosign
-  platforms: [linux/amd64]
-  dockerfile: Dockerfile
-  context: .
+  - kind: image                        # the image RollOps deploys
+    image: ghcr.io/klarlabs-studio/kiln
+    tags: [sha, latest]                # sha + at least one of latest|semver
+    sign: cosign
+    platforms: [linux/amd64]
+    dockerfile: Dockerfile
+    context: .
+  - kind: binaries                     # the release a human downloads
+    from: goreleaser                   # .goreleaser.yaml owns the mechanics
+    on: [tag]
 watch:
   remote: origin
   ref: main
   pull_requests: true
   tags: true
 ```
+
+`publish:` is a **list**, because "signed artifact" is not a synonym for "container image": one proven commit routinely yields an image *and* a set of release binaries. A third kind later is one more list entry rather than one more top-level key.
 
 Unknown fields are rejected. A `deploy:` or `apply:` key is a load error that names RollOps. `on.tag` inherits `on.push` when omitted.
 
@@ -106,7 +113,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 |---|---|
 | `KILN_DB` | Run ledger path (default `.kiln/state.json`) |
 | `KILN_DRY=1` | Plan tags; call neither docker nor cosign |
-| `KILN_WARDEN` / `KILN_NOX` | Binary names |
+| `KILN_WARDEN` / `KILN_NOX` / `KILN_GORELEASER` | Binary names |
 | `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
@@ -149,7 +156,9 @@ The provenance skip requires **both** that policy allows it and that `warden ver
 
 ## Publish contract
 
-Every successful publish produces an **immutable sha tag plus at least one moving tag**.
+### Images
+
+Every successful image publish produces an **immutable sha tag plus at least one moving tag**.
 
 | Tag | Example | RollOps |
 |---|---|---|
@@ -159,7 +168,25 @@ Every successful publish produces an **immutable sha tag plus at least one movin
 
 A sha-only tag list is a config error: `imagePolicy` cannot follow a moving target that never moves.
 
-Cosign signs the **digest**, not a tag. Check names are a contract: **`Kiln / Prove`** and **`Kiln / Publish`**. Branch protection and RollOps' PR writeback wait on them, so renaming one needs a migration note.
+Cosign signs the **digest**, not a tag.
+
+### Binaries
+
+`kind: binaries` delegates cross-compilation, archives, checksums, the changelog and the GitHub Release to **goreleaser** — kiln invents a second release language no more than it invents a second check language. What kiln adds is the guarantee: it reads `.goreleaser.yaml` before building and **refuses to release a config with no `signs:` block**, so a verifiable release stops depending on whether somebody remembered.
+
+The release's identity is the digest of its `checksums.txt`, which covers every archive. That is what lands in the ledger and the Check.
+
+Both kinds report through one **`Kiln / Publish`** check: one commit, one event, one verdict. Check names are a contract — **`Kiln / Prove`** and **`Kiln / Publish`** — and branch protection and RollOps' PR writeback wait on them, so renaming one needs a migration note.
+
+### Division of labour
+
+| File | Owner | Says |
+|---|---|---|
+| `.warden.yaml` | Warden | what "passing" means |
+| `.goreleaser.yaml` | GoReleaser | how binaries are built and released |
+| `.kiln.yaml` | Kiln | what to publish, and which events route where |
+
+Versioning and release governance stay with **relicta**; kiln neither picks a version nor writes the notes.
 
 ---
 

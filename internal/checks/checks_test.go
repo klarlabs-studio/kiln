@@ -11,6 +11,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/obs"
+	"go.klarlabs.de/kiln/internal/run"
 )
 
 // The names are a contract with branch protection and with RollOps' PR
@@ -213,16 +214,42 @@ func TestProveSummaryForAFailure(t *testing.T) {
 	}
 }
 
-func TestPublishSummaryForASignedArtifact(t *testing.T) {
-	ref := "ghcr.io/x/y@sha256:aaa"
-	tags := []string{"ghcr.io/x/y:sha-abc1234", "ghcr.io/x/y:latest"}
+func TestPublishSummaryForASignedImage(t *testing.T) {
+	artifacts := []run.Artifact{{
+		Kind: "image", Reference: "ghcr.io/x/y@sha256:aaa", Digest: "sha256:aaa",
+		Names: []string{"ghcr.io/x/y:sha-abc1234", "ghcr.io/x/y:latest"}, Signed: true,
+	}}
 
-	got, title, summary := PublishSummary(ref, tags, true, nil)
+	got, title, summary := PublishSummary(artifacts, nil)
 
-	if got != Success || !strings.Contains(title, "signed") {
+	if got != Success || !strings.Contains(title, "image") {
 		t.Errorf("(%s, %q)", got, title)
 	}
-	for _, want := range append(tags, ref, "RollOps") {
+	for _, want := range []string{"ghcr.io/x/y:latest", "ghcr.io/x/y@sha256:aaa", "RollOps"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary missing %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestPublishSummaryListsBothKinds(t *testing.T) {
+	artifacts := []run.Artifact{
+		{Kind: "image", Reference: "ghcr.io/x/y@sha256:aaa", Names: []string{"ghcr.io/x/y:latest"}, Signed: true},
+		{Kind: "binaries", Reference: "v1.4.0", Digest: "sha256:bbb",
+			Names: []string{"checksums.txt", "checksums.txt.sig", "x_1.4.0_linux_amd64.tar.gz"}, Signed: true},
+	}
+
+	got, title, summary := PublishSummary(artifacts, nil)
+
+	if got != Success {
+		t.Errorf("Conclusion = %s", got)
+	}
+	// One event produced both, so one check reports both. Splitting them would
+	// make branch protection wait on a name that does not always exist.
+	if !strings.Contains(title, "image") || !strings.Contains(title, "binaries") {
+		t.Errorf("title = %q, want both kinds named", title)
+	}
+	for _, want := range []string{"v1.4.0", "checksums.txt.sig", "x_1.4.0_linux_amd64.tar.gz", "sha256:bbb"} {
 		if !strings.Contains(summary, want) {
 			t.Errorf("summary missing %q:\n%s", want, summary)
 		}
@@ -230,7 +257,12 @@ func TestPublishSummaryForASignedArtifact(t *testing.T) {
 }
 
 func TestDryRunPublishIsNeutralNotSuccess(t *testing.T) {
-	got, title, summary := PublishSummary("ghcr.io/x/y@sha256:000", []string{"ghcr.io/x/y:latest"}, false, nil)
+	artifacts := []run.Artifact{{
+		Kind: "image", Reference: "ghcr.io/x/y@sha256:000",
+		Names: []string{"ghcr.io/x/y:latest"}, Signed: false,
+	}}
+
+	got, title, summary := PublishSummary(artifacts, nil)
 
 	// A rehearsal on a pull request page must not read as a real artifact.
 	if got != Neutral {
@@ -241,8 +273,29 @@ func TestDryRunPublishIsNeutralNotSuccess(t *testing.T) {
 	}
 }
 
+func TestOneUnsignedArtifactMakesTheWholeCheckNeutral(t *testing.T) {
+	artifacts := []run.Artifact{
+		{Kind: "image", Reference: "ghcr.io/x/y@sha256:aaa", Signed: true},
+		{Kind: "binaries", Reference: "v1.4.0", Signed: false},
+	}
+
+	// "Mostly signed" is not a claim worth making on a check anyone reads as
+	// a guarantee.
+	if got, _, _ := PublishSummary(artifacts, nil); got != Neutral {
+		t.Errorf("Conclusion = %s, want neutral when any artifact is unsigned", got)
+	}
+}
+
+func TestPublishSummaryWithNothingRouted(t *testing.T) {
+	got, title, _ := PublishSummary(nil, nil)
+
+	if got != Neutral || !strings.Contains(title, "nothing") {
+		t.Errorf("(%s, %q)", got, title)
+	}
+}
+
 func TestPublishSummaryForAFailure(t *testing.T) {
-	got, _, summary := PublishSummary("", nil, false, errors.New("cosign sign refused"))
+	got, _, summary := PublishSummary(nil, errors.New("cosign sign refused"))
 
 	if got != Failure {
 		t.Errorf("Conclusion = %s", got)

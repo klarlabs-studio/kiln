@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/boot"
@@ -99,9 +101,9 @@ func (r *doctorReport) collect(ctx context.Context, deps *boot.Deps, sha, ref st
 		r.checkCredentials(deps)
 	}
 
-	if deps.Pipeline.Publish != nil {
-		r.section("tag plan")
-		r.checkPlan(ctx, deps, sha, ref)
+	if len(deps.Pipeline.Publish) > 0 {
+		r.section("artifacts")
+		r.checkArtifacts(ctx, deps, sha, ref)
 	}
 }
 
@@ -199,20 +201,54 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	}
 }
 
-func (r *doctorReport) checkPlan(ctx context.Context, deps *boot.Deps, commitish, ref string) {
+func (r *doctorReport) checkArtifacts(ctx context.Context, deps *boot.Deps, commitish, ref string) {
 	sha, err := resolveCommit(ctx, deps, commitish)
 	if err != nil {
 		r.warn("cannot resolve %q, planning against a placeholder: %v", commitish, err)
 		sha = strings.Repeat("0", 40)
 	}
 
-	plan, err := publish.BuildPlan(*deps.Pipeline.Publish, sha, ref)
+	for i, artifact := range deps.Pipeline.Publish {
+		events := "every publishing event"
+		if len(artifact.On) > 0 {
+			events = strings.Join(artifact.On, ", ")
+		}
+		r.ok("publish[%d] %s on %s", i, artifact.Kind, events)
+
+		switch artifact.Kind {
+		case config.KindBinaries:
+			r.checkRelease(deps, artifact)
+		default:
+			r.checkImagePlan(artifact, sha, ref)
+		}
+	}
+}
+
+func (r *doctorReport) checkImagePlan(artifact config.Artifact, sha, ref string) {
+	plan, err := publish.BuildPlan(artifact, sha, ref)
 	if err != nil {
 		r.fail("%v", err)
 		return
 	}
 	for line := range strings.SplitSeq(strings.TrimRight(plan.String(), "\n"), "\n") {
-		fmt.Fprintf(&r.b, "  %s\n", line)
+		fmt.Fprintf(&r.b, "    %s\n", line)
+	}
+}
+
+// checkRelease reports what a binary release would need, without running one.
+// The signing check is the valuable half: it is the difference between a
+// release anyone can verify and one nobody can.
+func (r *doctorReport) checkRelease(deps *boot.Deps, artifact config.Artifact) {
+	fmt.Fprintf(&r.b, "    from %s (%s)\n", artifact.From, artifact.Config)
+
+	path := filepath.Join(deps.Dir, artifact.Config)
+	switch err := publish.CheckReleaseSigning(path); {
+	case err == nil:
+		fmt.Fprintf(&r.b, "    sign %s signs its checksum manifest\n", artifact.Config)
+	case errors.Is(err, publish.ErrUnsignedRelease):
+		r.fail("%v", err)
+	default:
+		r.warn("cannot read %s: %v", artifact.Config, err)
 	}
 }
 

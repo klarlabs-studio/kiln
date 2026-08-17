@@ -1,9 +1,10 @@
 # Kiln pipeline — the Glossa API, which is the dogfood target.
 #
-# This file replaces ci.yml, release.yml and nox-scan.yml for
-# ghcr.io/felixgeelhaar/glossa-api. What it does NOT replace is .warden.yaml:
-# the checks still live there, because kiln does not invent a second check
-# language. This file only says what to publish and which events route where.
+# This file replaces ci.yml, release.yml and nox-scan.yml. What it does NOT
+# replace is .warden.yaml or .goreleaser.yaml: the checks live in one and the
+# release mechanics in the other, because kiln invents neither a second check
+# language nor a second release language. This file only says what to publish
+# and which events route where.
 apiVersion: kiln.klarlabs.de/v1
 kind: Pipeline
 
@@ -22,18 +23,29 @@ prove:
   # runs nox as a step — otherwise it runs twice.
   nox: true
 
+# One proven commit, two signed artifacts.
 publish:
-  image: ghcr.io/felixgeelhaar/glossa-api
-  # sha is the immutable tag RollOps pins to. At least one moving tag is
-  # required alongside it, or imagePolicy has nothing to follow.
-  #   sha    → ghcr.io/felixgeelhaar/glossa-api:sha-abc1234   (imagePolicy: pin)
-  #   latest → …:latest                                       (imagePolicy.mode: digest)
-  #   semver → …:v0.2.0, from a tag ref                        (imagePolicy.mode: minor)
-  tags: [sha, latest, semver]
-  sign: cosign
-  platforms: [linux/amd64]
-  dockerfile: Dockerfile
-  context: .
+  # The image RollOps deploys.
+  - kind: image
+    image: ghcr.io/felixgeelhaar/glossa-api
+    # sha is the immutable tag RollOps pins to. At least one moving tag is
+    # required alongside it, or imagePolicy has nothing to follow.
+    #   sha    → ghcr.io/felixgeelhaar/glossa-api:sha-abc1234   (imagePolicy: pin)
+    #   latest → …:latest                                       (imagePolicy.mode: digest)
+    #   semver → …:v0.2.0, from a tag ref                        (imagePolicy.mode: minor)
+    tags: [sha, latest, semver]
+    sign: cosign
+    platforms: [linux/amd64]
+    dockerfile: Dockerfile
+    context: .
+
+  # The CLI archives a human downloads. goreleaser cross-compiles, archives,
+  # writes checksums and creates the GitHub Release; kiln supplies the proven
+  # commit, the pinned worktree and the refusal to ship it unsigned.
+  - kind: binaries
+    from: goreleaser
+    config: .goreleaser.yaml
+    on: [tag]
 
 # Unattended discovery for `kiln watch`.
 watch:

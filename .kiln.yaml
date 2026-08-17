@@ -9,18 +9,29 @@ kind: Pipeline
 on:
   pull_request: [prove]
   push: [prove, publish]
+  # tag inherits push, so a release both publishes the image and cuts binaries.
 
 prove:
   from: warden
   nox: false
 
+# One commit, two artifacts. The image is for anyone running kilnd in a
+# container; the binaries are what an operator actually installs on a build
+# box, since kiln shells out to git, warden, docker and cosign.
 publish:
-  image: ghcr.io/klarlabs-studio/kiln
-  tags: [sha, latest, semver]
-  sign: cosign
-  platforms: [linux/amd64]
-  dockerfile: Dockerfile
-  context: .
+  - kind: image
+    image: ghcr.io/klarlabs-studio/kiln
+    tags: [sha, latest, semver]
+    sign: cosign
+    platforms: [linux/amd64]
+    dockerfile: Dockerfile
+    context: .
+
+  - kind: binaries
+    from: goreleaser
+    config: .goreleaser.yaml
+    # Tags only, by default: goreleaser derives the version from the tag.
+    on: [tag]
 
 watch:
   remote: origin

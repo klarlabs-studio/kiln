@@ -25,16 +25,19 @@ const (
 
 // harness wires an engine whose collaborators are all recording fakes.
 type harness struct {
-	engine    *Engine
-	checks    *checks.Recording
-	store     store.Store
-	proved    int
-	published int
-	proveErr  error
-	pubErr    error
-	lastProve prove.Request
-	lastPub   publish.Request
-	verdict   provenance.Result
+	engine      *Engine
+	checks      *checks.Recording
+	store       store.Store
+	proved      int
+	published   int
+	released    int
+	proveErr    error
+	pubErr      error
+	releaseErr  error
+	lastProve   prove.Request
+	lastPub     publish.Request
+	lastRelease publish.Request
+	verdict     provenance.Result
 }
 
 func newHarness(t *testing.T) *harness {
@@ -56,9 +59,25 @@ func newHarness(t *testing.T) *harness {
 			if h.pubErr != nil {
 				return publish.Result{}, h.pubErr
 			}
+			plan, err := publish.BuildPlan(req.Artifact, req.SHA, req.Ref)
+			if err != nil {
+				return publish.Result{}, err
+			}
 			return publish.Result{
-				Digest: digest, Reference: image + "@" + digest,
-				Tags: req.Plan.Refs(), Signed: true,
+				Kind: config.KindImage, Digest: digest, Reference: image + "@" + digest,
+				Tags: plan.Refs(), Signed: true,
+			}, nil
+		}),
+		ReleasePublisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
+			h.released++
+			h.lastRelease = req
+			if h.releaseErr != nil {
+				return publish.Result{}, h.releaseErr
+			}
+			return publish.Result{
+				Kind: config.KindBinaries, Digest: "sha256:manifest",
+				Reference: strings.TrimPrefix(req.Ref, "refs/tags/"),
+				Tags:      []string{"checksums.txt", "checksums.txt.sig"}, Signed: true,
 			}, nil
 		}),
 		Provenance: verifierFunc(func() provenance.Result { return h.verdict }),
@@ -85,8 +104,9 @@ on:
   push: [prove, publish]
 prove: {from: warden}
 publish:
-  image: ` + image + `
-  tags: [sha, latest]
+  - kind: image
+    image: ` + image + `
+    tags: [sha, latest]
 `))
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +266,7 @@ func TestPublishFailureFailsTheRun(t *testing.T) {
 func TestTagEventPublishesASemverTag(t *testing.T) {
 	h := newHarness(t)
 	r := req(t, isolation.EventTag, false, "refs/tags/v0.2.0")
-	r.Pipeline.Publish.Tags = []config.Tag{config.TagSHA, config.TagSemver, config.TagLatest}
+	r.Pipeline.Publish[0].Tags = []config.Tag{config.TagSHA, config.TagSemver, config.TagLatest}
 
 	got, err := h.engine.Execute(t.Context(), r)
 	if err != nil {
@@ -283,23 +303,29 @@ func TestPipelineWithoutPublishJustProves(t *testing.T) {
 	}
 }
 
-func TestPublishRoutedWithoutAPublishBlockFails(t *testing.T) {
+func TestPublishRoutedWithAnEmptyListDoesNothing(t *testing.T) {
 	h := newHarness(t)
 	r := req(t, isolation.EventPush, false, "refs/heads/main")
 	r.Pipeline.Publish = nil
 
-	_, err := h.engine.Execute(t.Context(), r)
-	if err == nil || !strings.Contains(err.Error(), "publish block") {
-		t.Errorf("err = %v, want a clear configuration failure", err)
+	// The loader rejects this shape, so reaching the engine with it means a
+	// caller built the pipeline by hand. Producing nothing is the honest
+	// outcome; there is no artifact to fail about.
+	got, err := h.engine.Execute(t.Context(), r)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 0 || got.Phase != run.PhaseSucceeded {
+		t.Errorf("published=%d phase=%s", h.published, got.Phase)
 	}
 }
 
 func TestSemverOnlyOnABranchFailsWithAReportedCheck(t *testing.T) {
 	h := newHarness(t)
 	r := req(t, isolation.EventPush, false, "refs/heads/main")
-	r.Pipeline.Publish.Tags = []config.Tag{config.TagSHA, config.TagSemver}
+	r.Pipeline.Publish[0].Tags = []config.Tag{config.TagSHA, config.TagSemver}
 
-	_, err := h.engine.Execute(t.Context(), r)
+	got, err := h.engine.Execute(t.Context(), r)
 
 	if err == nil {
 		t.Fatal("want a plan failure")
@@ -309,8 +335,10 @@ func TestSemverOnlyOnABranchFailsWithAReportedCheck(t *testing.T) {
 	if c, _ := h.checks.Conclusions(checks.NamePublish); c != checks.Failure {
 		t.Errorf("publish check = %s, want the plan failure reported", c)
 	}
-	if h.published != 0 {
-		t.Error("published despite an unbuildable plan")
+	// Planning now happens inside the publisher, so what matters is that
+	// nothing was recorded as shipped — not whether the publisher was called.
+	if len(got.Artifacts) != 0 {
+		t.Errorf("recorded %+v from an unbuildable plan", got.Artifacts)
 	}
 }
 
@@ -463,5 +491,152 @@ func TestNewDefaultsOptionalCollaborators(t *testing.T) {
 	// provenance verifier has no basis to trust anything.
 	if e.Provenance.Verify(t.Context(), "/repo", sha, isolation.For(isolation.EventPush, false)).Skip() {
 		t.Error("the default verifier skipped the gate")
+	}
+}
+
+// releasePipeline yields two artifacts from one commit: the image on every
+// push, the binaries on tags only.
+func releasePipeline(t *testing.T) config.Pipeline {
+	t.Helper()
+	p, err := config.Parse(strings.NewReader(`
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  push: [prove, publish]
+  tag: [prove, publish]
+publish:
+  - kind: image
+    image: ` + image + `
+    tags: [sha, latest, semver]
+  - kind: binaries
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestOneTagPublishesBothArtifacts(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	got, err := h.engine.Execute(t.Context(), r)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	if h.published != 1 || h.released != 1 {
+		t.Errorf("published=%d released=%d, want one of each", h.published, h.released)
+	}
+	if len(got.Artifacts) != 2 {
+		t.Fatalf("ledger recorded %d artifacts, want 2: %+v", len(got.Artifacts), got.Artifacts)
+	}
+	// The legacy fields still point at the image, so an older reader and
+	// `kiln status --json` both keep working.
+	if got.Digest != digest {
+		t.Errorf("Digest = %q, want the image digest", got.Digest)
+	}
+}
+
+func TestAPushPublishesTheImageAlone(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventPush, false, "refs/heads/main")
+	r.Pipeline = releasePipeline(t)
+
+	if _, err := h.engine.Execute(t.Context(), r); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	// goreleaser derives the version from a tag; a branch push has none.
+	if h.published != 1 || h.released != 0 {
+		t.Errorf("published=%d released=%d, want the image alone", h.published, h.released)
+	}
+}
+
+func TestTheReleaseSeesTheTagRef(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	if _, err := h.engine.Execute(t.Context(), r); err != nil {
+		t.Fatal(err)
+	}
+
+	if h.lastRelease.Ref != "refs/tags/v1.4.0" {
+		t.Errorf("release ref = %q", h.lastRelease.Ref)
+	}
+	if h.lastRelease.Artifact.Kind != config.KindBinaries {
+		t.Errorf("release got artifact kind %q", h.lastRelease.Artifact.Kind)
+	}
+}
+
+func TestAFailedReleaseStopsTheRunAndKeepsWhatShipped(t *testing.T) {
+	h := newHarness(t)
+	h.releaseErr = errors.New("goreleaser: archive failed")
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	got, err := h.engine.Execute(t.Context(), r)
+
+	if err == nil {
+		t.Fatal("want a failure")
+	}
+	if got.Phase != run.PhaseFailed {
+		t.Errorf("Phase = %s", got.Phase)
+	}
+	// The image did publish. Losing that from the record would leave an
+	// operator hunting for an artifact the ledger says was never made.
+	if len(got.Artifacts) != 1 || got.Artifacts[0].Kind != "image" {
+		t.Errorf("artifacts = %+v, want the image that did ship", got.Artifacts)
+	}
+	if !strings.Contains(err.Error(), "publish[1] (binaries)") {
+		t.Errorf("error should name which artifact failed, got %v", err)
+	}
+}
+
+func TestAFailedImageSkipsTheRelease(t *testing.T) {
+	h := newHarness(t)
+	h.pubErr = errors.New("registry refused")
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	if _, err := h.engine.Execute(t.Context(), r); err == nil {
+		t.Fatal("want a failure")
+	}
+
+	// A half-published version is worse than a clearly failed one.
+	if h.released != 0 {
+		t.Error("released binaries for a version whose image never shipped")
+	}
+}
+
+func TestForkPullRequestPublishesNeitherKind(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventPullRequest, true, "refs/pull/7/head")
+	r.Pipeline = releasePipeline(t)
+	r.Pipeline.On.PullRequest = []config.Step{config.StepProve, config.StepPublish}
+
+	if _, err := h.engine.Execute(t.Context(), r); err != nil {
+		t.Fatal(err)
+	}
+
+	if h.published != 0 || h.released != 0 {
+		t.Errorf("published=%d released=%d, want nothing from a fork", h.published, h.released)
+	}
+}
+
+func TestMissingReleasePublisherIsAFailure(t *testing.T) {
+	h := newHarness(t)
+	h.engine.ReleasePublisher = nil
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	_, err := h.engine.Execute(t.Context(), r)
+
+	// A kind kiln cannot honour must fail loudly rather than silently produce
+	// one artifact where two were configured.
+	if err == nil || !strings.Contains(err.Error(), "no publisher") {
+		t.Errorf("err = %v, want a missing-publisher failure", err)
 	}
 }

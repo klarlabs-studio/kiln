@@ -54,8 +54,9 @@ on:
   pull_request: [prove]
   push: [prove, publish]
 publish:
-  image: ghcr.io/felixgeelhaar/glossa-api
-  tags: [sha, latest]
+  - kind: image
+    image: ghcr.io/felixgeelhaar/glossa-api
+    tags: [sha, latest]
 `
 
 func TestVersionPrintsTheStamp(t *testing.T) {
@@ -112,7 +113,7 @@ func TestDoctorOnAPublishingRepo(t *testing.T) {
 	for _, want := range []string{
 		"pipeline", ".kiln.yaml parsed",
 		"on.push → prove, publish",
-		"toolchain", "tag plan",
+		"toolchain", "artifacts",
 		"ghcr.io/felixgeelhaar/glossa-api:latest",
 	} {
 		if !strings.Contains(out, want) {
@@ -169,8 +170,9 @@ func TestDoctorFlagsASHAOnlyTagPlan(t *testing.T) {
 kind: Pipeline
 on: {push: [prove, publish]}
 publish:
-  image: ghcr.io/x/y
-  tags: [sha]
+  - kind: image
+    image: ghcr.io/x/y
+    tags: [sha]
 `)
 
 	_, errOut, code := capture(t, "doctor")
@@ -190,8 +192,9 @@ on:
   pull_request: [prove, publish]
   push: [prove, publish]
 publish:
-  image: ghcr.io/x/y
-  tags: [sha, latest]
+  - kind: image
+    image: ghcr.io/x/y
+    tags: [sha, latest]
 `)
 
 	out, _, _ := capture(t, "doctor")
@@ -513,8 +516,8 @@ func TestDoctorConfigOnlySkipsTheToolchain(t *testing.T) {
 		t.Errorf("--config-only still checked the environment:\n%s", out)
 	}
 	// It must still validate the thing it is for.
-	if !strings.Contains(out, "tag plan") {
-		t.Errorf("--config-only dropped the tag plan:\n%s", out)
+	if !strings.Contains(out, "artifacts") {
+		t.Errorf("--config-only dropped the artifact plan:\n%s", out)
 	}
 }
 
@@ -523,8 +526,9 @@ func TestDoctorConfigOnlyStillRejectsABadPipeline(t *testing.T) {
 kind: Pipeline
 on: {push: [prove, publish]}
 publish:
-  image: ghcr.io/x/y
-  tags: [sha]
+  - kind: image
+    image: ghcr.io/x/y
+    tags: [sha]
 `)
 
 	_, errOut, code := capture(t, "doctor", "--config-only")

@@ -22,12 +22,13 @@ import (
 
 	"go.klarlabs.de/fortify/retry"
 
+	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/worktree"
 )
 
-// Request is one publish invocation.
+// Request is one publish invocation: one artifact from one commit.
 type Request struct {
 	// RepoDir is the repository to check the commit out of.
 	RepoDir string
@@ -35,21 +36,34 @@ type Request struct {
 	// worktree — the same reason prove does, and it must not rely on prove
 	// having left one behind.
 	SHA string
-	// Plan is the resolved tag plan.
-	Plan Plan
+	// Ref is the ref the commit was found on. The image publisher reads it for
+	// the semver tag; the binaries publisher requires it to be a tag at all.
+	Ref string
+	// Artifact is the pipeline entry being published. Each publisher plans
+	// from it, so the plan cannot drift from the configuration that produced
+	// it.
+	Artifact config.Artifact
 	// Output, when set, receives docker's live output. It is an io.Writer
 	// rather than an *os.File so a nil value stays a nil interface; a typed-nil
 	// *os.File would satisfy io.Writer and then panic on first write.
 	Output io.Writer
 }
 
-// Result is the hand-off to RollOps.
+// Result is one published artifact — the hand-off to whoever consumes it:
+// RollOps for an image, a human or an installer for a release.
 type Result struct {
-	// Digest is the immutable `sha256:…` the registry assigned.
+	// Kind echoes the artifact kind, so a caller aggregating several results
+	// can tell them apart without re-reading the pipeline.
+	Kind config.ArtifactKind
+	// Digest is the immutable `sha256:…` identity. For an image that is what
+	// the registry assigned; for a release it is the digest of the checksum
+	// manifest, which in turn covers every file in it.
 	Digest string
-	// Reference is image@digest — what cosign signed and what RollOps pins.
+	// Reference is what a consumer names to get exactly this artifact:
+	// image@digest, or the release tag.
 	Reference string
-	// Tags are the fully qualified tags now pointing at the digest.
+	// Tags are the fully qualified image tags now pointing at the digest, or
+	// the file names in a release.
 	Tags []string
 	// Signed reports whether cosign ran. False only on a dry run.
 	Signed bool
@@ -95,10 +109,15 @@ func (d *Docker) Publish(ctx context.Context, req Request) (Result, error) {
 		return Result{}, err
 	}
 
+	plan, err := BuildPlan(req.Artifact, req.SHA, req.Ref)
+	if err != nil {
+		return Result{}, err
+	}
+
 	var result Result
-	err := worktree.With(ctx, d.Runner, req.RepoDir, req.SHA, func(dir string) error {
+	err = worktree.With(ctx, d.Runner, req.RepoDir, req.SHA, func(dir string) error {
 		var inner error
-		result, inner = d.build(ctx, req, dir)
+		result, inner = d.build(ctx, req, plan, dir)
 		return inner
 	})
 	return result, err
@@ -119,16 +138,15 @@ func (d *Docker) preflight() error {
 	return nil
 }
 
-func (d *Docker) build(ctx context.Context, req Request, dir string) (Result, error) {
-	plan := req.Plan
+func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) (Result, error) {
 	multiArch := len(plan.Platforms) > 1
 
 	var digest string
 	var err error
 	if multiArch {
-		digest, err = d.buildxPush(ctx, req, dir)
+		digest, err = d.buildxPush(ctx, req, plan, dir)
 	} else {
-		digest, err = d.classicBuildPush(ctx, req, dir)
+		digest, err = d.classicBuildPush(ctx, req, plan, dir)
 	}
 	if err != nil {
 		return Result{}, err
@@ -140,6 +158,7 @@ func (d *Docker) build(ctx context.Context, req Request, dir string) (Result, er
 	}
 
 	return Result{
+		Kind:      config.KindImage,
 		Digest:    digest,
 		Reference: reference,
 		Tags:      plan.Refs(),
@@ -149,9 +168,7 @@ func (d *Docker) build(ctx context.Context, req Request, dir string) (Result, er
 
 // classicBuildPush is the single-platform path: plain `docker build`, one push
 // per tag, then read the digest the registry assigned.
-func (d *Docker) classicBuildPush(ctx context.Context, req Request, dir string) (string, error) {
-	plan := req.Plan
-
+func (d *Docker) classicBuildPush(ctx context.Context, req Request, plan Plan, dir string) (string, error) {
 	args := []string{"build", "--platform", plan.Platforms[0], "-f", plan.Dockerfile}
 	for _, ref := range plan.Refs() {
 		args = append(args, "-t", ref)
@@ -181,9 +198,7 @@ func (d *Docker) classicBuildPush(ctx context.Context, req Request, dir string) 
 // buildxPush is the multi-platform path. A multi-arch image cannot exist in
 // the local daemon's image store, so buildx builds and pushes in one step and
 // reports the manifest-list digest through a metadata file.
-func (d *Docker) buildxPush(ctx context.Context, req Request, dir string) (string, error) {
-	plan := req.Plan
-
+func (d *Docker) buildxPush(ctx context.Context, req Request, plan Plan, dir string) (string, error) {
 	metaFile, err := os.CreateTemp("", "kiln-buildx-*.json")
 	if err != nil {
 		return "", fmt.Errorf("publish: create metadata file: %w", err)
@@ -376,12 +391,28 @@ func NewDry(log obs.Logger) *Dry {
 const DryDigest = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
 
 func (d *Dry) Publish(_ context.Context, req Request) (Result, error) {
+	if req.Artifact.Kind == config.KindBinaries {
+		d.Log.Info("dry run: would release binaries",
+			"from", req.Artifact.From, "config", req.Artifact.Config, "ref", req.Ref)
+		return Result{
+			Kind:      config.KindBinaries,
+			Digest:    DryDigest,
+			Reference: req.Ref,
+			Signed:    false,
+		}, nil
+	}
+
+	plan, err := BuildPlan(req.Artifact, req.SHA, req.Ref)
+	if err != nil {
+		return Result{}, err
+	}
 	d.Log.Info("dry run: would publish",
-		"image", req.Plan.Image, "tags", req.Plan.Refs(), "sha", req.SHA)
+		"image", plan.Image, "tags", plan.Refs(), "sha", req.SHA)
 	return Result{
+		Kind:      config.KindImage,
 		Digest:    DryDigest,
-		Reference: req.Plan.Image + "@" + DryDigest,
-		Tags:      req.Plan.Refs(),
+		Reference: plan.Image + "@" + DryDigest,
+		Tags:      plan.Refs(),
 		Signed:    false,
 	}, nil
 }

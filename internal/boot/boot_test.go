@@ -18,8 +18,9 @@ on:
   pull_request: [prove]
   push: [prove, publish]
 publish:
-  image: ghcr.io/felixgeelhaar/glossa-api
-  tags: [sha, latest]
+  - kind: image
+    image: ghcr.io/felixgeelhaar/glossa-api
+    tags: [sha, latest]
 `
 
 func env(t *testing.T) envconfig.Env {
@@ -52,8 +53,8 @@ func TestBuildOnARepositoryWithAPipeline(t *testing.T) {
 	if !deps.PipelineFound {
 		t.Error("PipelineFound = false")
 	}
-	if deps.Pipeline.Publish.Image != "ghcr.io/felixgeelhaar/glossa-api" {
-		t.Errorf("image = %q", deps.Pipeline.Publish.Image)
+	if deps.Pipeline.Publish[0].Image != "ghcr.io/felixgeelhaar/glossa-api" {
+		t.Errorf("image = %q", deps.Pipeline.Publish[0].Image)
 	}
 	if deps.Engine == nil || deps.Store == nil || deps.Checks == nil {
 		t.Errorf("graph incomplete: %+v", deps)

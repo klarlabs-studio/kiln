@@ -1,6 +1,15 @@
-# The RollOps hand-off
+# Consumers
 
-Kiln produces. RollOps ships. This document is the seam between them.
+Kiln produces; something else consumes. This document is the seam.
+
+Two artifact kinds have two consumers. An **image** is consumed by RollOps,
+which deploys it — most of this page. A **binary release** is consumed by a
+human or an installer, and its contract is short: a GitHub Release whose
+`checksums.txt` is signed, so anything that downloads an archive can verify it
+against a manifest that was itself verified. The release's identity in the
+ledger is that manifest's digest.
+
+The rest of this page is the image half.
 
 ## What Kiln guarantees
 
