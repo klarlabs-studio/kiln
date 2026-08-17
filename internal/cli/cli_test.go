@@ -40,6 +40,11 @@ func repoWith(t *testing.T, pipeline string) *gittest.Repo {
 		t.Setenv(k, "")
 	}
 	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	// Pin a stub gate. Otherwise every doctor and run test quietly depends on
+	// whether the developer happens to have warden installed, and passes on a
+	// laptop while failing on a runner. Tests that need a *missing* gate
+	// override KILN_WARDEN after calling this.
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-stub", "exit 0"))
 	return repo
 }
 
@@ -247,8 +252,8 @@ func TestRunWithoutWardenIsAConfigFailure(t *testing.T) {
 }
 
 func TestRunGatePassing(t *testing.T) {
-	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
 
@@ -263,8 +268,8 @@ func TestRunGatePassing(t *testing.T) {
 }
 
 func TestRunGateFailingUsesADistinctExitCode(t *testing.T) {
-	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-fail", "echo 'lint failed' >&2; exit 1"))
+	repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-fail", "echo 'lint failed' >&2; exit 1"))
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
 
@@ -280,7 +285,7 @@ func TestRunGateFailingUsesADistinctExitCode(t *testing.T) {
 
 func TestRunResolvesHEAD(t *testing.T) {
 	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 
 	out, _, _ := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
 
@@ -292,8 +297,8 @@ func TestRunResolvesHEAD(t *testing.T) {
 }
 
 func TestRunOnAPullRequestWithoutATokenIsTreatedAsAFork(t *testing.T) {
-	repo := repoWith(t, publishingPipeline)
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "pull_request", "--quiet")
 
@@ -310,8 +315,8 @@ func TestRunOnAPullRequestWithoutATokenIsTreatedAsAFork(t *testing.T) {
 }
 
 func TestRunDryPlansWithoutDocker(t *testing.T) {
-	repo := repoWith(t, publishingPipeline)
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 	t.Setenv("KILN_DRY", "1")
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
@@ -340,7 +345,7 @@ func TestStatusOnAnEmptyLedger(t *testing.T) {
 
 func TestStatusAfterARun(t *testing.T) {
 	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 	if _, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet"); code != ExitOK {
 		t.Fatalf("run failed with %d", code)
 	}
@@ -356,8 +361,8 @@ func TestStatusAfterARun(t *testing.T) {
 }
 
 func TestStatusJSON(t *testing.T) {
-	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 	_, _, _ = capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
 
 	out, _, code := capture(t, "status", "--json")
@@ -382,7 +387,7 @@ func TestStatusUnknownRunID(t *testing.T) {
 
 func TestLedgerLandsInsideTheRepository(t *testing.T) {
 	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-pass", "exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 	// A cron entry whose working directory differs from the checkout must not
 	// keep a second, always-empty ledger.
 	t.Chdir(t.TempDir())
@@ -405,7 +410,7 @@ func TestWatchOnceOnAFreshClone(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("KILN_LOG_LEVEL", "fatal")
-	t.Setenv("KILN_WARDEN", fakeBin(t, local.Dir, "warden-pass", "exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
 
 	out, _, code := capture(t, "watch", "--once")
 
@@ -478,7 +483,7 @@ func TestMCPRequiresTheServeSubcommand(t *testing.T) {
 // fakeBin writes an executable shell script and returns its name, adding its
 // directory to PATH. It stands in for warden so the CLI tests can exercise
 // both verdicts without installing anything.
-func fakeBin(t *testing.T, dir, name, body string) string {
+func fakeBin(t *testing.T, name, body string) string {
 	t.Helper()
 	binDir := filepath.Join(t.TempDir(), "bin")
 	if err := os.MkdirAll(binDir, 0o750); err != nil {
@@ -490,7 +495,6 @@ func fakeBin(t *testing.T, dir, name, body string) string {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	_ = dir
 	return name
 }
 
@@ -531,11 +535,11 @@ publish:
 }
 
 func TestQuietDoesNotBreakACommandThatPrints(t *testing.T) {
-	repo := repoWith(t, "")
+	repoWith(t, "")
 	// A gate that writes to stderr is the common case, and it is what exposes
 	// a typed-nil writer: a nil *os.File inside an io.Writer reads as "output
 	// configured" and then fails on the first byte with "invalid argument".
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
 
@@ -548,8 +552,8 @@ func TestQuietDoesNotBreakACommandThatPrints(t *testing.T) {
 }
 
 func TestNonQuietRunAlsoWorksWithAChattyGate(t *testing.T) {
-	repo := repoWith(t, "")
-	t.Setenv("KILN_WARDEN", fakeBin(t, repo.Dir, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
+	repoWith(t, "")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-chatty", "echo running checks >&2; echo done; exit 0"))
 
 	out, _, code := capture(t, "run", "--sha", "HEAD", "--event", "push")
 
@@ -567,7 +571,7 @@ func TestQuietWatchDoesNotBreakACommandThatPrints(t *testing.T) {
 		t.Setenv(k, "")
 	}
 	t.Setenv("KILN_LOG_LEVEL", "fatal")
-	t.Setenv("KILN_WARDEN", fakeBin(t, local.Dir, "warden-chatty", "echo running checks >&2; exit 0"))
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-chatty", "echo running checks >&2; exit 0"))
 
 	out, _, code := capture(t, "watch", "--once", "--quiet")
 

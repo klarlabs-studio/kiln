@@ -10,6 +10,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -38,6 +40,10 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 	env.Token = ""
 	env.TrustedKeys = nil
 	env.LogLevel = "fatal"
+	// readyz reports 503 when the gate is missing, which is correct behaviour
+	// and a poor thing to leave depending on the developer's PATH: with a real
+	// warden installed the probe test passes locally and fails on a runner.
+	env.Warden = stubGate(t)
 
 	deps, err := boot.Build(t.Context(), boot.Options{
 		Dir: repo.Dir, Env: &env, Log: obs.Discard(),
@@ -57,6 +63,23 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 		t.Fatalf("New: %v", err)
 	}
 	return srv, repo
+}
+
+// stubGate puts an always-succeeding executable on PATH and returns its name.
+// The daemon tests stub the prover anyway, so the binary is only ever
+// LookPath'd — but readyz does look for it.
+func stubGate(t *testing.T) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), "bin")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	const name = "warden-stub"
+	if err := os.WriteFile(filepath.Join(dir, name), []byte("#!/bin/sh\nexit 0\n"), 0o700); err != nil { //nolint:gosec // test fixture
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return name
 }
 
 func do(t *testing.T, srv *Server, method, path string, body []byte, headers map[string]string) *httptest.ResponseRecorder {
