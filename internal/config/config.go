@@ -102,6 +102,23 @@ type Task struct {
 	// something advisory — a nightly report — a red run trains people to
 	// ignore red runs.
 	AllowFailure bool `yaml:"allow_failure,omitempty"`
+	// PullRequest opens or updates a pull request from whatever the command
+	// changed in the worktree. Nil leaves the changes where they are, which
+	// for most tasks is nothing at all.
+	PullRequest *PullRequest `yaml:"pull_request,omitempty"`
+}
+
+// PullRequest describes the pull request a task's changes should land in.
+type PullRequest struct {
+	// Branch is the head branch. Reused across runs on purpose: a daily
+	// remediation task updates its own pull request rather than opening
+	// thirty of them.
+	Branch string   `yaml:"branch"`
+	Title  string   `yaml:"title"`
+	Body   string   `yaml:"body,omitempty"`
+	Labels []string `yaml:"labels,omitempty"`
+	// Base is the target branch. Empty means the repository default.
+	Base string `yaml:"base,omitempty"`
 }
 
 // ScheduleEvent is the pseudo-event a scheduled task routes to.
@@ -511,6 +528,26 @@ func (p Pipeline) validateTasks() error {
 			return fmt.Errorf(`%s is scheduled but has no interval: add every: "24h"`, where)
 		case !scheduled && t.Every.Std() > 0:
 			return fmt.Errorf("%s has every: but is not routed to schedule — the interval would be ignored", where)
+		}
+		if pr := t.PullRequest; pr != nil {
+			switch {
+			case strings.TrimSpace(pr.Branch) == "":
+				return fmt.Errorf("%s.pull_request.branch is required: it is the identity that makes "+
+					"a repeating task update its pull request instead of opening another one", where)
+			case strings.TrimSpace(pr.Title) == "":
+				return fmt.Errorf("%s.pull_request.title is required", where)
+			case pr.Branch == pr.Base:
+				return fmt.Errorf("%s.pull_request: branch and base are both %q", where, pr.Branch)
+			case strings.HasPrefix(pr.Branch, "refs/"):
+				return fmt.Errorf("%s.pull_request.branch is a branch name, not a ref: %q", where, pr.Branch)
+			}
+			for _, event := range t.On {
+				if event == "pull_request" {
+					// A task on a pull request opening pull requests is a loop
+					// with a write credential in it.
+					return fmt.Errorf("%s: a task routed to pull_request cannot open pull requests", where)
+				}
+			}
 		}
 		if filepath.IsAbs(t.Workdir) || strings.Contains(t.Workdir, "..") {
 			// The worktree is the boundary. A task reaching outside it is

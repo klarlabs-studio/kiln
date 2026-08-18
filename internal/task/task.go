@@ -159,6 +159,9 @@ func Describe(name string, t config.Task) string {
 		events += " every " + humanInterval(t.Every.Std())
 	}
 	line := fmt.Sprintf("%s on %s", name, events)
+	if pr := t.PullRequest; pr != nil {
+		line += fmt.Sprintf(" → pull request on %s", pr.Branch)
+	}
 	if t.AllowFailure {
 		line += " (failure tolerated)"
 	}

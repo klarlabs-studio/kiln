@@ -28,6 +28,18 @@ All notable changes to kiln are documented here. The format follows
   than red, because a red check for something declared advisory is how a wall
   of red gets ignored.
 
+  **`pull_request:` on a task** commits what the command changed, pushes the
+  branch and opens or updates a pull request — the capability 19 repos depend
+  on the shared nox-remediate workflow for. Nothing happens when the worktree
+  is clean: an empty commit and a pull request saying "nothing to fix" is how
+  an automation becomes noise. One branch, so a daily task updates its own
+  pull request rather than opening thirty; labels applied on creation only, so
+  an operator who removed one is not fighting the machine every morning; the
+  branch rebuilt from the commit under test, so yesterday's fix does not
+  outlive the code it was fixing. A failed task proposes nothing. A task routed
+  to `pull_request` may not open one — that is a loop with a write credential
+  in it — and an untrusted head is refused again at runtime.
+
   Scheduled tasks fire from the watch tick, against the head of the tracked
   ref, with the last run recorded beside the ledger so an interval survives a
   restart. A box that was off for a week fires each due task **once** when it

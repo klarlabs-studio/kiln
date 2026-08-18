@@ -21,6 +21,7 @@ import (
 	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/prove"
@@ -81,8 +82,12 @@ type Engine struct {
 	// Tasks runs the pipeline's automation. Nil disables tasks entirely, which
 	// is what a caller that only wants prove-and-publish gets by default.
 	Tasks *task.Runner
-	Store store.Store
-	Log   obs.Logger
+	// GitHub opens the pull requests tasks propose. Nil pushes the branch and
+	// stops there, which is the right behaviour on a box with no token: the
+	// work is not thrown away, it just needs a human to notice it.
+	GitHub *github.Client
+	Store  store.Store
+	Log    obs.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
@@ -548,6 +553,22 @@ func (e *Engine) runTasks(
 			result.Tolerated = nt.Task.AllowFailure
 		}
 
+		// Proposing runs only for a task that succeeded. Committing whatever a
+		// failed remediation left behind would open a pull request full of a
+		// half-applied fix, which is worse than no pull request.
+		if spec := nt.Task.PullRequest; spec != nil && result.Err == nil {
+			proposal, perr := e.Tasks.Propose(ctx, task.Request{
+				Name: nt.Name, Task: nt.Task, Dir: dir, SHA: req.SHA,
+				Ref: req.Ref, Event: req.Event.String(), Policy: policy,
+			}, *spec, e.forge())
+			if perr != nil {
+				result.Err = perr
+				result.Tolerated = nt.Task.AllowFailure
+			}
+			fmt.Fprintf(&output, "\n%s\n", proposal.Summary())
+			log.Info("task proposal", "task", nt.Name, "outcome", proposal.Summary())
+		}
+
 		conclusion, title, summary := checks.TaskSummary(result.Err, result.Tolerated, output.String())
 		e.report(ctx, func() error {
 			return e.Checks.Complete(ctx, checks.TaskName(nt.Name), req.SHA, conclusion, title, summary)
@@ -573,6 +594,32 @@ func (e *Engine) runTasks(
 		return fmt.Errorf("%w: %s", task.ErrTaskFailed, strings.Join(failed, ", "))
 	}
 	return nil
+}
+
+// forge returns the pull-request opener, or nil when there is no usable
+// token — a typed nil in an interface would satisfy `!= nil` and then panic on
+// the first call, which is the classic version of this bug.
+func (e *Engine) forge() task.Forge {
+	if e.GitHub == nil || !e.GitHub.Enabled() {
+		return nil
+	}
+	return forge{client: e.GitHub}
+}
+
+// forge adapts the GitHub client to what proposing needs.
+//
+// A narrow interface declared by the consumer, so the task package does not
+// import the whole client and a test can supply four lines instead of an HTTP
+// server.
+type forge struct{ client *github.Client }
+
+func (f forge) OpenPullRequest(ctx context.Context, head, base, title, body string) (int, bool, error) {
+	pull, opened, err := f.client.OpenPullRequest(ctx, head, base, title, body)
+	return pull.Number, opened, err
+}
+
+func (f forge) LabelPull(ctx context.Context, number int, labels []string) error {
+	return f.client.LabelPull(ctx, number, labels)
 }
 
 // orDiscard keeps io.MultiWriter from panicking on a nil writer, which is what

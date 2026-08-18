@@ -255,6 +255,62 @@ func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
 	return out, nil
 }
 
+// OpenPullRequest creates a pull request, or returns the open one that already
+// exists for this head branch.
+//
+// Idempotent by head branch, which is what makes a repeating task safe: a
+// daily remediation run pushes to the same branch and updates its existing
+// pull request rather than opening one per day until somebody notices thirty
+// of them.
+func (c *Client) OpenPullRequest(ctx context.Context, head, base, title, body string) (Pull, bool, error) {
+	if existing, found, err := c.pullForHead(ctx, head); err != nil {
+		return Pull{}, false, err
+	} else if found {
+		return existing, false, nil
+	}
+
+	payload := map[string]any{"head": head, "title": title, "body": body}
+	if base != "" {
+		payload["base"] = base
+	}
+
+	var p pullPayload
+	if err := c.do(ctx, http.MethodPost, c.path("pulls"), payload, &p); err != nil {
+		return Pull{}, false, fmt.Errorf("github: open pull request for %s: %w", head, err)
+	}
+	return Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
+}
+
+// pullForHead finds an open pull request whose head is this branch.
+func (c *Client) pullForHead(ctx context.Context, head string) (Pull, bool, error) {
+	// Qualified with the owner, because GitHub's head filter matches
+	// `owner:branch` and an unqualified name silently matches nothing.
+	query := fmt.Sprintf("pulls?state=open&head=%s:%s", url.QueryEscape(c.Repo.Owner), url.QueryEscape(head))
+
+	var payload []pullPayload
+	if err := c.do(ctx, http.MethodGet, c.path(query), nil, &payload); err != nil {
+		return Pull{}, false, fmt.Errorf("github: look for an existing pull request on %s: %w", head, err)
+	}
+	if len(payload) == 0 {
+		return Pull{}, false, nil
+	}
+	p := payload[0]
+	return Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
+}
+
+// LabelPull adds labels to a pull request. Labels are an issue-level concept
+// in GitHub's API, which is why this is not a pulls/ path.
+func (c *Client) LabelPull(ctx context.Context, number int, labels []string) error {
+	if len(labels) == 0 {
+		return nil
+	}
+	path := c.path(fmt.Sprintf("issues/%d/labels", number))
+	if err := c.do(ctx, http.MethodPost, path, map[string]any{"labels": labels}, nil); err != nil {
+		return fmt.Errorf("github: label pull request #%d: %w", number, err)
+	}
+	return nil
+}
+
 func (c *Client) path(suffix string) string {
 	return fmt.Sprintf("/repos/%s/%s/%s", c.Repo.Owner, c.Repo.Name, suffix)
 }

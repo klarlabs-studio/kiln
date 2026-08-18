@@ -228,6 +228,49 @@ tasks:
     run: make build && rsync -a public/ /srv/www/
 ```
 
+### `pull_request` — propose what a task changed
+
+A task that edits the worktree can put the result up for review:
+
+```yaml
+tasks:
+  remediate:
+    on: [schedule]
+    every: 24h
+    run: nox remediate --fix
+    pull_request:
+      branch: kiln/nox-remediate
+      title: "chore(sec): apply nox remediations"
+      body: Opened by kiln. Review the diff before merging.
+      labels: [security]
+      base: main        # optional; the repository default otherwise
+```
+
+**Nothing happens when the worktree is clean.** A remediation task that found
+nothing to fix must not push an empty commit or open a pull request saying so
+— that is how a useful automation becomes noise people filter out, and then
+miss on the day it matters. The check says "no changes to propose".
+
+**One pull request, not one per run.** The branch is the identity: a daily task
+pushes to the same branch and updates its existing pull request. Labels are
+applied when it is opened and not re-applied afterwards, so an operator who
+removed one is not fighting the machine every morning.
+
+**The branch is rebuilt from the commit under test**, force-pushed rather than
+fast-forwarded. Yesterday's fix should not outlive the code it was fixing.
+
+**A failed task proposes nothing.** Committing whatever a half-finished
+remediation left behind would open a pull request full of a partial fix, which
+is worse than no pull request at all.
+
+**A task routed to `pull_request` may not open one** — that is a loop with a
+write credential in it, and the config refuses to load. An untrusted head is
+refused a second time at runtime, for any caller that assembles a request by
+hand.
+
+With no `GITHUB_TOKEN` the branch is still pushed and the check says so. The
+work is not thrown away; it just needs a human to notice it.
+
 | Field | Meaning |
 |---|---|
 | `on` | `pull_request`, `push`, `tag`, `schedule` — required |

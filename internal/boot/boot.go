@@ -139,6 +139,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
+		GitHub:           deps.GitHub,
 		Checks:           deps.Checks,
 		Store:            deps.Store,
 		Log:              log,

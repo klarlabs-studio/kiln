@@ -1,6 +1,6 @@
 {
   "project_id": "kiln",
-  "version": 3,
+  "version": 4,
   "task_states": {
     "task-core-foundation": {
       "status": "pending",
@@ -8,11 +8,12 @@
       "elapsed_minutes": 0
     },
     "task-fire-scheduled-tasks-from-the-watch-loop": {
-      "status": "in_progress",
+      "status": "done",
       "path": "",
       "owner": "Felix Geelhaar",
       "started_at": "2026-08-18T22:11:09.307396+02:00",
-      "elapsed_minutes": 0
+      "completed_at": "2026-08-18T22:13:28.609089+02:00",
+      "elapsed_minutes": 2
     },
     "task-migrate-one-private-repository-off-actions-end-to-end": {
       "status": "pending",
@@ -35,5 +36,5 @@
       "elapsed_minutes": 0
     }
   },
-  "updated_at": "2026-08-18T22:11:09.307396+02:00"
+  "updated_at": "2026-08-18T22:13:28.609089+02:00"
 }
