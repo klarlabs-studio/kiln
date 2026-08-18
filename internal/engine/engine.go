@@ -92,6 +92,13 @@ type Engine struct {
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
 	ToolVersions map[string]string
+	// KeepRoot is where retained task output is written, normally the .kiln
+	// directory beside the ledger. Empty disables retention.
+	KeepRoot string
+	// KeepRuns bounds how many runs of retained output survive. Zero uses the
+	// default; a box that keeps every artifact forever fills its disk, and the
+	// first symptom is an unrelated build failing.
+	KeepRuns int
 	// PhaseTimeout bounds each phase separately. Zero means unbounded.
 	//
 	// Per phase rather than per run, because the phases fail differently: a
@@ -553,6 +560,24 @@ func (e *Engine) runTasks(
 			result.Tolerated = nt.Task.AllowFailure
 		}
 
+		// Retention runs whether the task passed or failed — especially when
+		// it failed. The log that explains a failure is the thing somebody
+		// wants after the worktree is gone, and keeping it only on success
+		// would withhold it in exactly the case it matters.
+		if len(nt.Task.Keep) > 0 && e.KeepRoot != "" {
+			kept, kerr := task.Keep(dir, task.KeepDir(e.KeepRoot, r.ID, nt.Name), nt.Task.Keep)
+			for _, f := range kept {
+				fmt.Fprintf(&output, "kept %s (%d bytes)\n", f.Name, f.Bytes)
+			}
+			if kerr != nil {
+				// Not fatal to the task: the command did its job. But it is
+				// reported, because retention that quietly kept nothing looks
+				// identical to a task that produced nothing.
+				fmt.Fprintf(&output, "retention: %v\n", kerr)
+				log.Warn("could not keep task output", "task", nt.Name, "err", kerr)
+			}
+		}
+
 		// Proposing runs only for a task that succeeded. Committing whatever a
 		// failed remediation left behind would open a pull request full of a
 		// half-applied fix, which is worse than no pull request.
@@ -590,11 +615,26 @@ func (e *Engine) runTasks(
 		}
 	}
 
+	if e.KeepRoot != "" {
+		keep := e.KeepRuns
+		if keep <= 0 {
+			keep = DefaultKeepRuns
+		}
+		if err := task.Sweep(e.KeepRoot, keep); err != nil {
+			// Housekeeping never fails a run: that would be the disk-space
+			// protection causing the outage it exists to prevent.
+			log.Warn("could not sweep old task output", "err", err)
+		}
+	}
+
 	if len(failed) > 0 {
 		return fmt.Errorf("%w: %s", task.ErrTaskFailed, strings.Join(failed, ", "))
 	}
 	return nil
 }
+
+// DefaultKeepRuns is how many runs of retained task output are kept.
+const DefaultKeepRuns = 20
 
 // forge returns the pull-request opener, or nil when there is no usable
 // token — a typed nil in an interface would satisfy `!= nil` and then panic on

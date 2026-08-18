@@ -28,6 +28,15 @@ All notable changes to kiln are documented here. The format follows
   than red, because a red check for something declared advisory is how a wall
   of red gets ignored.
 
+  **`keep:` on a task** copies declared globs out of the worktree before it is
+  destroyed, into `.kiln/runs/<run-id>/<task>/` — the local answer to 22
+  upload-artifact uses. Kept on failure too, especially on failure: the log
+  that explains a failure is exactly what somebody wants after the tree is
+  gone. A glob matching nothing is reported rather than passed over. Patterns
+  cannot escape the worktree, including through a symlink, because the pattern
+  comes from the repository and retention writes somewhere an operator reads.
+  Bounded at the last 20 runs.
+
   **`pull_request:` on a task** commits what the command changed, pushes the
   branch and opens or updates a pull request — the capability 19 repos depend
   on the shared nox-remediate workflow for. Nothing happens when the worktree

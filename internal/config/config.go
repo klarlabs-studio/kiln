@@ -102,6 +102,10 @@ type Task struct {
 	// something advisory — a nightly report — a red run trains people to
 	// ignore red runs.
 	AllowFailure bool `yaml:"allow_failure,omitempty"`
+	// Keep are globs, relative to the worktree, whose matches are copied out
+	// before the tree is destroyed — a coverage report, a scan, the log that
+	// explains the failure. The local equivalent of upload-artifact.
+	Keep []string `yaml:"keep,omitempty"`
 	// PullRequest opens or updates a pull request from whatever the command
 	// changed in the worktree. Nil leaves the changes where they are, which
 	// for most tasks is nothing at all.
@@ -547,6 +551,15 @@ func (p Pipeline) validateTasks() error {
 					// with a write credential in it.
 					return fmt.Errorf("%s: a task routed to pull_request cannot open pull requests", where)
 				}
+			}
+		}
+		for _, pattern := range t.Keep {
+			// The pattern comes from the repository, so this is reachable from
+			// a pull request. The runtime check is the real one; this refuses
+			// the obvious form at load time, where the message can explain
+			// itself.
+			if filepath.IsAbs(pattern) || strings.Contains(pattern, "..") {
+				return fmt.Errorf("%s.keep: %q must stay inside the worktree", where, pattern)
 			}
 		}
 		if filepath.IsAbs(t.Workdir) || strings.Contains(t.Workdir, "..") {

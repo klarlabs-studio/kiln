@@ -228,6 +228,39 @@ tasks:
     run: make build && rsync -a public/ /srv/www/
 ```
 
+### `keep` — files that outlive the worktree
+
+```yaml
+tasks:
+  report:
+    on: [push, pull_request]
+    run: go test -coverprofile=coverage.out ./... && nox scan --format sarif -o nox.sarif
+    keep: ["coverage.out", "*.sarif"]
+```
+
+The worktree is destroyed the moment the run ends — which is exactly when
+somebody wants the coverage report, or the scan output that explains why the
+run failed. Matches are copied to `.kiln/runs/<run-id>/<task>/` before the tree
+goes, and `kiln status` lists them.
+
+**Kept on failure too**, especially on failure: withholding the log that
+explains a failure in the one case it matters would be the wrong way round.
+
+**A glob that matches nothing is reported.** It is nearly always a typo or a
+build that did not get far enough, and silence is how somebody discovers a week
+later that the report was never kept.
+
+**Patterns cannot escape the worktree**, including through a symlink. The
+pattern comes from the repository, so `keep: ["../../.ssh/id_ed25519"]` is
+something a pull request can contain; retention writes into a directory the
+operator later reads, and must not become a way to lift files off the build
+box. Directory matches are skipped rather than walked, so a stray `*` does not
+copy the whole checkout.
+
+Retention is bounded at the last 20 runs, for the same reason the ledger caps
+itself and the docker prune keeps ten builds: a box that keeps everything
+forever fills its disk, and the first symptom is an unrelated build failing.
+
 ### `pull_request` — propose what a task changed
 
 A task that edits the worktree can put the result up for review:

@@ -140,6 +140,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
 		GitHub:           deps.GitHub,
+		KeepRoot:         filepath.Dir(deps.Store.Path()),
 		Checks:           deps.Checks,
 		Store:            deps.Store,
 		Log:              log,

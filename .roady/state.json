@@ -1,6 +1,6 @@
 {
   "project_id": "kiln",
-  "version": 4,
+  "version": 7,
   "task_states": {
     "task-core-foundation": {
       "status": "pending",
@@ -21,13 +21,18 @@
       "elapsed_minutes": 0
     },
     "task-open-a-pull-request-from-a-task": {
-      "status": "pending",
+      "status": "done",
       "path": "",
+      "owner": "Felix Geelhaar",
+      "started_at": "2026-08-18T22:24:31.306839+02:00",
+      "completed_at": "2026-08-18T22:24:31.33062+02:00",
       "elapsed_minutes": 0
     },
     "task-retain-a-task-s-output-files": {
-      "status": "pending",
+      "status": "in_progress",
       "path": "",
+      "owner": "Felix Geelhaar",
+      "started_at": "2026-08-18T22:24:42.677861+02:00",
       "elapsed_minutes": 0
     },
     "task-upload-a-task-s-sarif-to-code-scanning": {
@@ -36,5 +41,5 @@
       "elapsed_minutes": 0
     }
   },
-  "updated_at": "2026-08-18T22:13:28.609089+02:00"
+  "updated_at": "2026-08-18T22:24:42.677861+02:00"
 }
