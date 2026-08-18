@@ -6,6 +6,15 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A `go install`ed kiln knows what it is.** Installing from the module path
+  passes no ldflags, so the binary reported `kiln dev (unknown) built unknown`
+  — leaving the operator of a provenance tool unable to say which provenance
+  tool they were running. The module version and VCS stamp the toolchain
+  already embeds are read when the link-time values are absent. A release's
+  own ldflags still win.
+
 ## [0.1.0] - 2026-08-18
 
 First release. Kiln takes a commit warden has already gated, builds it, signs
