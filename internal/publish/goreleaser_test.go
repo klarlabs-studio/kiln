@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
@@ -8,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/gittest"
@@ -342,4 +345,163 @@ func TestADryReleaseStillRefusesAnUnsignableConfig(t *testing.T) {
 	if !errors.Is(err, ErrUnsignedRelease) {
 		t.Errorf("err = %v, want ErrUnsignedRelease even on a rehearsal", err)
 	}
+}
+
+// recordingUploader captures what would be attached to a release.
+type recordingUploader struct {
+	tag, name string
+	body      []byte
+	err       error
+}
+
+func (u *recordingUploader) UploadReleaseAssetByTag(_ context.Context, tag, name string, body []byte) error {
+	u.tag, u.name, u.body = tag, name, body
+	return u.err
+}
+
+func provenanceInput() attest.Input {
+	return attest.Input{
+		Repo: "klarlabs-studio/kiln", SHA: "c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
+		Ref: "refs/tags/v1.4.0", Event: "tag", GateReproved: true, KilnVersion: "v0.1.0",
+		InvocationID: "run-1", StartedOn: time.Unix(0, 0).UTC(),
+	}
+}
+
+func TestReleaseAttachesProvenance(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+	up := &recordingUploader{}
+	g := NewGoreleaser(fake, obs.Discard(), "tok", false)
+	g.Uploader = up
+	// The real cosign writes the bundle; the fake must too, or there is
+	// nothing to upload.
+	fake.On("cosign attest-blob", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte(`{"dsseEnvelope":{}}`), 0o600)
+	}})
+
+	res, err := g.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
+		Artifact: binariesArtifact(), Provenance: provenanceInput(),
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
+	}
+
+	if !res.Attested {
+		t.Error("Attested = false after attaching provenance")
+	}
+	if up.name != ProvenanceAsset || up.tag != "v1.4.0" {
+		t.Errorf("uploaded %q to %q", up.name, up.tag)
+	}
+	if len(up.body) == 0 {
+		t.Error("uploaded an empty bundle")
+	}
+	if !slices.Contains(res.Tags, ProvenanceAsset) {
+		t.Errorf("the release listing omits the provenance: %v", res.Tags)
+	}
+}
+
+func TestProvenanceCoversTheChecksumManifest(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+	g := NewGoreleaser(fake, obs.Discard(), "tok", false)
+	g.Uploader = &recordingUploader{}
+
+	var predicate []byte
+	fake.On("cosign attest-blob", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		predicate, _ = os.ReadFile(flagValue(c.Args, "--predicate"))
+		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte("{}"), 0o600)
+	}})
+
+	if _, err := g.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
+		Artifact: binariesArtifact(), Provenance: provenanceInput(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stmt, err := attest.Parse(predicate)
+	if err != nil {
+		t.Fatalf("predicate is not a statement: %v", err)
+	}
+	// The manifest names every archive by digest, so one statement covers the
+	// whole release the same way one signature does.
+	if stmt.Subject[0].Name != "checksums.txt" {
+		t.Errorf("subject = %q, want the checksum manifest", stmt.Subject[0].Name)
+	}
+	if stmt.SourceCommit() != provenanceInput().SHA {
+		t.Errorf("SourceCommit = %q", stmt.SourceCommit())
+	}
+	// cosign must sign the manifest itself, not the predicate file.
+	if signed := fake.Find("cosign attest-blob"); !strings.Contains(signed.String(), "checksums.txt") {
+		t.Errorf("attest-blob subject = %s", signed.String())
+	}
+}
+
+func TestAFailedUploadFailsTheRelease(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+	g := NewGoreleaser(fake, obs.Discard(), "tok", false)
+	g.Uploader = &recordingUploader{err: errors.New("422 already exists")}
+	fake.On("cosign attest-blob", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte("{}"), 0o600)
+	}})
+
+	_, err := g.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
+		Artifact: binariesArtifact(), Provenance: provenanceInput(),
+	})
+
+	// A release whose provenance silently failed to attach is one nobody can
+	// check, which is the thing this kind exists to prevent.
+	if err == nil || !strings.Contains(err.Error(), "attach provenance") {
+		t.Errorf("err = %v, want the upload failure surfaced", err)
+	}
+}
+
+func TestNoUploaderMeansNoAttestation(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+	g := NewGoreleaser(fake, obs.Discard(), "tok", false)
+
+	// Without a forge client there is no release to attach to. Failing would
+	// make a tokenless run impossible; claiming attestation would be a lie.
+	res, err := g.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
+		Artifact: binariesArtifact(), Provenance: provenanceInput(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Attested {
+		t.Error("Attested = true with nowhere to attach it")
+	}
+	if fake.Ran("cosign attest-blob") {
+		t.Error("signed a statement it could not publish")
+	}
+}
+
+func TestDryReleaseDoesNotAttest(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+	g := NewGoreleaser(fake, obs.Discard(), "", true)
+	g.Uploader = &recordingUploader{}
+
+	res, err := g.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
+		Artifact: binariesArtifact(), Provenance: provenanceInput(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Attested || fake.Ran("cosign attest-blob") {
+		t.Error("a rehearsal must not attest: there is no release to attach to")
+	}
+}
+
+// bundlePath and flagValue read a flag out of a scripted cosign invocation.
+func bundlePath(args []string) string { return flagValue(args, "--bundle") }
+
+func flagValue(args []string, flag string) string {
+	for i, a := range args {
+		if a == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+	}
+	return ""
 }

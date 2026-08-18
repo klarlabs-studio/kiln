@@ -586,3 +586,44 @@ func TestQuietWatchDoesNotBreakACommandThatPrints(t *testing.T) {
 		t.Errorf("watch output:\n%s", out)
 	}
 }
+
+func TestVerifyRequiresAReference(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "verify")
+
+	if code != ExitUsage || !strings.Contains(errOut, "kiln verify <image-ref>") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestVerifyRefusesAnUnpinnedKeylessCheck(t *testing.T) {
+	repoWith(t, "")
+
+	out, _, code := capture(t, "verify", "ghcr.io/x/y@sha256:aaa")
+
+	// "Signed by somebody" is not a security property, and cosign would refuse
+	// this anyway — better to say why than to pass the refusal through.
+	if code == ExitOK {
+		t.Errorf("an unpinned keyless verification must not succeed:\n%s", out)
+	}
+	if !strings.Contains(out, "proves nothing") {
+		t.Errorf("output should explain the refusal:\n%s", out)
+	}
+}
+
+func TestVerifyReportsEveryLink(t *testing.T) {
+	repoWith(t, "")
+	// No cosign is reachable under the test PATH, so this exercises the
+	// "nothing could be checked" path rather than a real verification.
+	t.Setenv("PATH", t.TempDir())
+
+	out, _, code := capture(t, "verify", "ghcr.io/x/y@sha256:aaa", "--key", "cosign.pub")
+
+	if code == ExitOK {
+		t.Error("a verification that checked nothing must not exit zero")
+	}
+	if !strings.Contains(out, "cosign is not installed") {
+		t.Errorf("output should name what was missing:\n%s", out)
+	}
+}

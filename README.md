@@ -142,6 +142,55 @@ A same-repo pull request may skip the re-prove but still may not publish. An ima
 
 ---
 
+## The provenance chain
+
+Two statements, one chain, and both are now verifiable by anyone — not just by
+the machine that built the artifact.
+
+1. **Warden's note** on the commit: the configured checks ran and passed.
+2. **Kiln's attestation** on the artifact: it was built from that commit — and
+   whether this build ran the checks or inherited a trusted note.
+
+The second is a [SLSA v1](https://slsa.dev/provenance/v1) predicate in an
+in-toto statement, attached with `cosign attest` to the image digest (and to a
+release's `checksums.txt` as `provenance.intoto.jsonl`). It pins the commit as
+a `gitCommit` resolved dependency, which is exactly what Warden's note is bound
+to — that shared commit is what makes the two statements one chain.
+
+```bash
+kiln verify ghcr.io/felixgeelhaar/glossa-api@sha256:… --key cosign.pub --dir .
+```
+
+```
+  ok       signature    cosign accepted the pinned key
+  ok       provenance   built from c3f7aca on refs/tags/v0.2.0
+  ok       builder      https://github.com/klarlabs-studio/kiln@v0.1.0
+  ok       source gate  warden note on c3f7aca
+
+chain verified end to end
+```
+
+Each link is reported separately and a break in one does not hide the others —
+"the signature is fine but the source gate is missing" is a far more useful
+answer than "invalid". The **builder** link is not ceremony: cosign proves a
+trusted key signed *an* attestation, not what it says, so anything reading
+kiln's `sourceGate` field must first confirm kiln wrote it.
+
+Exit codes: `0` verified, `2` a link broke. A link that could not be checked —
+no local clone for the note, no cosign — is reported as `unknown`, and an
+unchecked *signature* is a failure while an unchecked *source gate* is a
+caveat: the artifact really is signed either way.
+
+Verifying a binary release works on the downloaded files instead:
+
+```bash
+cosign verify-blob-attestation --key cosign.pub \
+  --type https://slsa.dev/provenance/v1 \
+  --bundle provenance.intoto.jsonl checksums.txt
+```
+
+---
+
 ## One run
 
 ```
@@ -151,6 +200,8 @@ queued → isolating → proving → publishing → succeeded | failed
 Prove and publish each check the commit out into their own disposable worktree. A dirty operator checkout can never leak into a signed artifact.
 
 The provenance skip requires **both** that policy allows it and that `warden verify --require-signed --key $KILN_TRUSTED_KEYS` passes. No pinned keys means no skip: an unpinned verify would accept a note signed by a key the pull request author generated five minutes ago.
+
+A skipped re-prove is recorded in the attestation as `sourceGate.reproved: false`, so the distinction between "these checks ran for this artifact" and "this artifact inherited a verdict" survives all the way to whoever verifies it.
 
 ---
 
@@ -204,6 +255,7 @@ Same engine, four ways in.
 | `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
+| `kiln verify <ref>` | Walk a published artifact's whole provenance chain |
 | `kiln mcp serve` | Stdio MCP |
 
 Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage. Cron can tell "your code is wrong" from "this machine is broken".

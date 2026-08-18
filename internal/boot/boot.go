@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
@@ -127,7 +128,8 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	deps.Engine = engine.New(engine.Engine{
 		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
 		Publisher:        buildPublisher(env, runner, log),
-		ReleasePublisher: buildReleasePublisher(env, runner, log),
+		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
+		ToolVersions:     toolVersions(ctx, runner, env),
 		Provenance:       provenance.NewWarden(runner, env.Warden, env.TrustedKeys),
 		Checks:           deps.Checks,
 		Store:            deps.Store,
@@ -232,12 +234,73 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publ
 // KILN_DRY still runs goreleaser — a rehearsal that skipped the cross-compile
 // would rehearse nothing — but withholds the upload, so the dry publisher is
 // not substituted here the way it is for images.
-func buildReleasePublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publish.Publisher {
+func buildReleasePublisher(
+	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log obs.Logger,
+) publish.Publisher {
+	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
 	if env.Goreleaser != "" {
 		g.Binary = env.Goreleaser
 	}
+	if gh != nil && gh.Enabled() {
+		g.Uploader = releaseUploader{gh}
+	}
 	return g
+}
+
+// releaseUploader adapts the forge client to the narrow interface the release
+// publisher needs, so that package keeps no dependency on the client.
+type releaseUploader struct{ c *github.Client }
+
+func (u releaseUploader) UploadReleaseAssetByTag(ctx context.Context, tag, name string, body []byte) error {
+	rel, err := u.c.ReleaseByTag(ctx, tag)
+	if err != nil {
+		return err
+	}
+	return u.c.UploadReleaseAsset(ctx, rel, name, body)
+}
+
+// toolVersions records what the gate and the builders are, for the provenance
+// predicate.
+//
+// Best-effort by design: a tool whose version cannot be read is simply absent
+// from the record. Guessing would put a false claim inside something signed,
+// which is worse than an incomplete one.
+func toolVersions(ctx context.Context, runner execx.Runner, env envconfig.Env) map[string]string {
+	probes := map[string][]string{
+		env.Warden: {"version"},
+		"cosign":   {"version", "--json"},
+	}
+	out := make(map[string]string, len(probes))
+	for bin, args := range probes {
+		res, err := runner.Run(ctx, execx.Cmd{Name: bin, Args: args})
+		if err != nil {
+			continue
+		}
+		if v := firstVersionToken(res.Output()); v != "" {
+			out[bin] = v
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// firstVersionToken pulls a version out of a tool's banner. Tools disagree
+// wildly on format, so this takes the first token that looks like one and
+// gives up otherwise rather than recording a line of ASCII art.
+func firstVersionToken(s string) string {
+	for _, field := range strings.Fields(s) {
+		trimmed := strings.TrimPrefix(field, "v")
+		if trimmed == "" {
+			continue
+		}
+		if trimmed[0] >= '0' && trimmed[0] <= '9' && strings.Contains(trimmed, ".") {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 // ForkUnknown is the fork status to assume when GitHub cannot be asked.

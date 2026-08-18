@@ -85,6 +85,9 @@ type Artifact struct {
 	Names []string `json:"names,omitempty"`
 	// Signed records whether a signature was produced. False on a dry run.
 	Signed bool `json:"signed"`
+	// Attested records whether SLSA provenance was attached. A signature says
+	// somebody vouched for these bytes; provenance says where they came from.
+	Attested bool `json:"attested"`
 }
 
 // AddArtifact records a published artifact, keeping the legacy Digest/Tags

@@ -7,7 +7,9 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/gittest"
@@ -410,4 +412,124 @@ func metadataPath(args []string) string {
 		}
 	}
 	return ""
+}
+
+func imageProvenance() attest.Input {
+	return attest.Input{
+		Repo: "felixgeelhaar/glossa", Ref: "refs/heads/main", Event: "push",
+		GateReproved: true, GateReason: "checks ran", KilnVersion: "v0.1.0",
+		InvocationID: "run-1", StartedOn: time.Unix(0, 0).UTC(),
+	}
+}
+
+func TestImageProvenanceIsAttachedToTheDigest(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+	prov := imageProvenance()
+	prov.SHA = head
+
+	res, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art, Provenance: prov,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
+	}
+
+	if !res.Attested {
+		t.Error("Attested = false after a real publish")
+	}
+	cmd := fake.Find("cosign attest")
+	if cmd == nil {
+		t.Fatalf("no attestation: %s", fake.Transcript())
+	}
+	// The subject must be the immutable digest, for the same reason the
+	// signature is: a tag moves.
+	if !strings.Contains(cmd.String(), image+"@"+digest) {
+		t.Errorf("attested %q, want the digest", cmd.String())
+	}
+	if !strings.Contains(cmd.String(), "https://slsa.dev/provenance/v1") {
+		t.Errorf("attestation is not typed as SLSA provenance: %s", cmd.String())
+	}
+}
+
+func TestImageProvenancePredicateRecordsTheChain(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+
+	fake := dockerFake(t)
+	var predicate []byte
+	fake.On("cosign attest", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		for i, a := range c.Args {
+			if a == "--predicate" && i+1 < len(c.Args) {
+				predicate, _ = os.ReadFile(c.Args[i+1])
+			}
+		}
+		return execx.Result{}, nil
+	}})
+
+	prov := imageProvenance()
+	prov.SHA = head
+	prov.GateReproved = false
+	prov.GateReason = "warden note is signed by a trusted key"
+
+	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	stmt, err := attest.Parse(predicate)
+	if err != nil {
+		t.Fatalf("predicate is not a statement: %v", err)
+	}
+	if stmt.SourceCommit() != head {
+		t.Errorf("SourceCommit = %q, want %q", stmt.SourceCommit(), head)
+	}
+	// The inherited verdict must travel with the artifact: a reader deciding
+	// how far to trust it needs to know the checks did not run here.
+	gate := stmt.Predicate.BuildDefinition.InternalParameters.SourceGate
+	if gate.Reproved {
+		t.Error("predicate claims the checks ran when they were inherited")
+	}
+	if !strings.Contains(gate.Reason, "trusted key") {
+		t.Errorf("reason = %q", gate.Reason)
+	}
+}
+
+func TestAFailedAttestationFailsThePublish(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t).On("cosign attest", execx.Response{ExitCode: 1, Stderr: "no identity token"})
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	_, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
+	})
+
+	// An image carrying a signature but no provenance is one whose origin
+	// cannot be checked. Failing beats quietly downgrading what shipped.
+	if err == nil || !strings.Contains(err.Error(), "cosign attest") {
+		t.Errorf("err = %v, want the attestation failure", err)
+	}
+}
+
+func TestDryRunClaimsNoAttestation(t *testing.T) {
+	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
+
+	res, err := NewDry(obs.Discard()).Publish(t.Context(), Request{
+		RepoDir: "/repo", SHA: sha, Ref: ref, Artifact: art, Provenance: imageProvenance(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Attested {
+		t.Error("a rehearsal must not claim provenance it never published")
+	}
 }

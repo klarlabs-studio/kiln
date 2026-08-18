@@ -18,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/isolation"
@@ -27,6 +28,7 @@ import (
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/version"
 )
 
 // Request is what a surface asks for.
@@ -63,6 +65,10 @@ type Engine struct {
 	Checks           checks.Reporter
 	Store            store.Store
 	Log              obs.Logger
+	// ToolVersions pins the components whose behaviour affected the result,
+	// for the provenance predicate. Empty is acceptable — an unknown version
+	// is better recorded as absent than guessed.
+	ToolVersions map[string]string
 }
 
 // New builds an engine, defaulting the optional collaborators so a caller that
@@ -105,13 +111,14 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 		"secrets", policy.Secrets, "may_publish", policy.Publish, "may_skip", policy.Skip)
 	e.persist(r, log)
 
-	if err := e.doProve(ctx, req, r, policy, log); err != nil {
+	gate, err := e.doProve(ctx, req, r, policy, log)
+	if err != nil {
 		r.Fail(err)
 		e.persist(r, log)
 		return r, err
 	}
 
-	if err := e.doPublish(ctx, req, r, policy, log); err != nil {
+	if err := e.doPublish(ctx, req, r, policy, gate, log); err != nil {
 		r.Fail(err)
 		e.persist(r, log)
 		return r, err
@@ -138,13 +145,19 @@ func validate(req Request) error {
 }
 
 // doProve gates the commit, or establishes that a trusted note already did.
-func (e *Engine) doProve(ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger) error {
+//
+// It returns the provenance verdict as well as the error, because the publish
+// phase has to state in the attestation whether this build ran the checks or
+// inherited them — a fact only this phase knows.
+func (e *Engine) doProve(
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger,
+) (provenance.Result, error) {
 	if !req.Pipeline.Wants(req.Event.String(), config.StepProve) {
 		// A pipeline that routes an event to nothing is a pipeline that wants
 		// nothing done. It is not an error, but it is worth saying out loud:
 		// silence here looks identical to a broken trigger.
 		log.Info("prove not routed for this event", "event", req.Event.String())
-		return nil
+		return provenance.Result{Decision: provenance.Reprove, Reason: "prove not routed for this event"}, nil
 	}
 
 	r.Phase = run.PhaseProving
@@ -174,14 +187,17 @@ func (e *Engine) doProve(ctx context.Context, req Request, r *run.Run, policy is
 
 	if err != nil {
 		log.Error("prove failed", "err", err)
-		return err
+		return verdict, err
 	}
-	return nil
+	return verdict, nil
 }
 
 // doPublish produces every artifact the pipeline routes to this event — if,
 // and only if, the policy also allows it.
-func (e *Engine) doPublish(ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger) error {
+func (e *Engine) doPublish(
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
+	gate provenance.Result, log obs.Logger,
+) error {
 	wanted := req.Pipeline.ArtifactsFor(req.Event.String())
 
 	// The overrule, stated plainly. A caller asking to publish on a fork pull
@@ -203,7 +219,7 @@ func (e *Engine) doPublish(ctx context.Context, req Request, r *run.Run, policy 
 	e.persist(r, log)
 	e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NamePublish, req.SHA) }, log, checks.NamePublish)
 
-	produced, err := e.publishAll(ctx, req, r, wanted, log)
+	produced, err := e.publishAll(ctx, req, r, wanted, e.provenanceInput(req, r, policy, gate), log)
 
 	conclusion, title, summary := checks.PublishSummary(produced, err)
 	e.report(ctx, func() error {
@@ -226,7 +242,8 @@ func (e *Engine) doPublish(ctx context.Context, req Request, r *run.Run, policy 
 // which half is missing behind a second, unrelated error. Whatever succeeded
 // before the failure is still recorded, so the operator can see how far it got.
 func (e *Engine) publishAll(
-	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact, log obs.Logger,
+	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact,
+	prov attest.Input, log obs.Logger,
 ) ([]run.Artifact, error) {
 	produced := make([]run.Artifact, 0, len(artifacts))
 
@@ -237,11 +254,12 @@ func (e *Engine) publishAll(
 		}
 
 		res, err := publisher.Publish(ctx, publish.Request{
-			RepoDir:  req.Dir,
-			SHA:      req.SHA,
-			Ref:      req.Ref,
-			Artifact: artifact,
-			Output:   req.Output,
+			RepoDir:    req.Dir,
+			SHA:        req.SHA,
+			Ref:        req.Ref,
+			Artifact:   artifact,
+			Provenance: prov,
+			Output:     req.Output,
 		})
 		if err != nil {
 			return produced, fmt.Errorf("publish[%d] (%s): %w", i, artifact.Kind, err)
@@ -253,6 +271,7 @@ func (e *Engine) publishAll(
 			Digest:    res.Digest,
 			Names:     res.Tags,
 			Signed:    res.Signed,
+			Attested:  res.Attested,
 		}
 		r.AddArtifact(entry)
 		produced = append(produced, entry)
@@ -260,9 +279,34 @@ func (e *Engine) publishAll(
 
 		log.Info("published",
 			"kind", string(res.Kind), "reference", res.Reference,
-			"digest", res.Digest, "signed", res.Signed)
+			"digest", res.Digest, "signed", res.Signed, "attested", res.Attested)
 	}
 	return produced, nil
+}
+
+// provenanceInput assembles the run-level facts every artifact's attestation
+// shares. The publisher adds the subject, which is the only part that is not
+// known until the artifact exists.
+func (e *Engine) provenanceInput(
+	req Request, r *run.Run, policy isolation.Policy, gate provenance.Result,
+) attest.Input {
+	return attest.Input{
+		Repo:  req.Repo,
+		SHA:   req.SHA,
+		Ref:   req.Ref,
+		Event: req.Event.String(),
+		// A build that could not see the operator's credentials is a
+		// materially different build, and a reader deciding what to trust
+		// should not have to infer it from the event name.
+		Isolated:     !policy.Secrets,
+		GateTool:     "warden",
+		GateReproved: !r.Skipped,
+		GateReason:   gate.Reason,
+		KilnVersion:  version.Version,
+		ToolVersions: e.ToolVersions,
+		InvocationID: r.ID,
+		StartedOn:    r.StartedAt,
+	}
 }
 
 // publisherFor selects the publisher for an artifact kind. A nil result is a

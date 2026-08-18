@@ -14,6 +14,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
+	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/obs"
@@ -44,9 +45,23 @@ type Goreleaser struct {
 	Cosign string
 	// Token is the forge credential goreleaser needs to create the release.
 	Token string
+	// Uploader attaches the provenance bundle to the release goreleaser made.
+	// Nil disables the attachment, which the dry path relies on.
+	Uploader AssetUploader
 	// Dry stops short of uploading.
 	Dry bool
 }
+
+// AssetUploader attaches a file to an existing release. It is an interface so
+// this package does not depend on the forge client, and so the attachment can
+// be exercised without a network.
+type AssetUploader interface {
+	UploadReleaseAssetByTag(ctx context.Context, tag, name string, body []byte) error
+}
+
+// ProvenanceAsset is the file name the release provenance is attached under.
+// A verifier looks for it by name, so it is a contract.
+const ProvenanceAsset = "provenance.intoto.jsonl"
 
 // NewGoreleaser builds a release publisher.
 func NewGoreleaser(r execx.Runner, log obs.Logger, token string, dry bool) *Goreleaser {
@@ -141,7 +156,7 @@ func (g *Goreleaser) release(ctx context.Context, req Request, dir string) (Resu
 		return Result{}, fmt.Errorf("publish: goreleaser release: %w", err)
 	}
 
-	return g.collect(dir, req)
+	return g.collect(ctx, dir, req)
 }
 
 // CheckReleaseSigning refuses a release config that would produce artifacts
@@ -184,7 +199,7 @@ type artifact struct {
 var publishedTypes = []string{"Archive", "Checksum", "Signature", "Certificate", "Linux Package", "SBOM"}
 
 // collect reads what goreleaser produced and derives the release's identity.
-func (g *Goreleaser) collect(dir string, req Request) (Result, error) {
+func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Result, error) {
 	distDir := filepath.Join(dir, "dist")
 
 	raw, err := os.ReadFile(filepath.Join(distDir, "artifacts.json")) //nolint:gosec // path is derived from kiln's own worktree
@@ -223,6 +238,16 @@ func (g *Goreleaser) collect(dir string, req Request) (Result, error) {
 	}
 
 	tag := strings.TrimPrefix(req.Ref, "refs/tags/")
+
+	attested, err := g.attest(ctx, distDir, checksumFile, digest, tag, req)
+	if err != nil {
+		return Result{}, err
+	}
+	if attested {
+		names = append(names, ProvenanceAsset)
+		slices.Sort(names)
+	}
+
 	g.Log.Info("released binaries", "tag", tag, "files", len(names), "checksums", digest)
 
 	return Result{
@@ -232,8 +257,73 @@ func (g *Goreleaser) collect(dir string, req Request) (Result, error) {
 		Tags:      names,
 		// Signing was verified as configured before the run and performed by
 		// goreleaser before it uploaded anything.
-		Signed: !g.Dry,
+		Signed:   !g.Dry,
+		Attested: attested,
 	}, nil
+}
+
+// attest signs SLSA provenance over the checksum manifest and attaches it to
+// the release.
+//
+// The manifest is the right subject: it names every archive by digest, so one
+// statement covers the whole release the same way one signature does. A
+// per-archive attestation would be four statements saying the same thing.
+//
+// Returns false without error when the run is dry or no uploader is wired —
+// there is no release to attach to in either case, and failing would make a
+// rehearsal impossible.
+func (g *Goreleaser) attest(
+	ctx context.Context, distDir, checksumFile, digest, tag string, req Request,
+) (bool, error) {
+	if g.Dry || g.Uploader == nil {
+		return false, nil
+	}
+
+	in := req.Provenance
+	in.SubjectName = checksumFile
+	in.SubjectDigest = digest
+	in.ArtifactKind = string(config.KindBinaries)
+	if in.Config == "" {
+		in.Config = req.Artifact.Config
+	}
+
+	stmt, err := attest.Build(in)
+	if err != nil {
+		return false, fmt.Errorf("publish: %w", err)
+	}
+	predicate, cleanup, err := writePredicate(stmt)
+	if err != nil {
+		return false, err
+	}
+	defer cleanup()
+
+	bundle := filepath.Join(distDir, ProvenanceAsset)
+	if _, err := g.Runner.Run(ctx, execx.Cmd{
+		Name: g.Cosign,
+		Args: []string{
+			"attest-blob", "--yes",
+			"--type", attest.CosignType,
+			"--predicate", predicate,
+			"--new-bundle-format",
+			"--bundle", bundle,
+			filepath.Join(distDir, checksumFile),
+		},
+		Dir:    distDir,
+		Stdout: req.Output, Stderr: req.Output,
+	}); err != nil {
+		return false, fmt.Errorf("publish: cosign attest-blob %s: %w", checksumFile, err)
+	}
+
+	body, err := os.ReadFile(filepath.Clean(bundle)) //nolint:gosec // path is kiln's own dist dir
+	if err != nil {
+		return false, fmt.Errorf("publish: read provenance bundle: %w", err)
+	}
+	if err := g.Uploader.UploadReleaseAssetByTag(ctx, tag, ProvenanceAsset, body); err != nil {
+		return false, fmt.Errorf("publish: attach provenance to release %s: %w", tag, err)
+	}
+
+	g.Log.Info("provenance attached", "release", tag, "asset", ProvenanceAsset, "commit", in.SHA)
+	return true, nil
 }
 
 func fileDigest(path string) (string, error) {

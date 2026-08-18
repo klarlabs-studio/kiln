@@ -76,6 +76,7 @@ Usage:
   kiln watch [--once | --every D]       discover and build new refs
   kiln poll [--once | --every D]        watch, restricted to the tracked branch
   kiln status [run-id]                  show the latest run, or a named one
+  kiln verify <ref> [--key k]           check a published artifact's whole chain
   kiln mcp serve                        MCP server over stdio
 
 Run flags:
@@ -94,6 +95,11 @@ Environment:
   KILN_TRUSTED_KEYS    signer keys that permit a provenance skip
   GITHUB_TOKEN         checks and pull request lookup
   KILN_LOG_LEVEL       debug, info, warn or error
+
+Verify flags:
+  --key K        cosign public key; omit for keyless
+  --identity I   certificate identity to require, with --issuer
+  --dir D        local clone, so the warden note on the source commit is read
 
 Kiln never deploys. Deployment belongs to RollOps.
 `
@@ -125,6 +131,8 @@ func Main(ctx context.Context, args []string, io IO) int {
 		return report(io, runWatch(ctx, rest, io, true))
 	case "status":
 		return report(io, runStatus(ctx, rest, io))
+	case "verify":
+		return report(io, runVerify(ctx, rest, io))
 	case "mcp":
 		return report(io, runMCP(ctx, rest, io))
 

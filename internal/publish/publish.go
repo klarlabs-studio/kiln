@@ -22,6 +22,7 @@ import (
 
 	"go.klarlabs.de/fortify/retry"
 
+	"go.klarlabs.de/kiln/internal/attest"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/obs"
@@ -43,6 +44,11 @@ type Request struct {
 	// from it, so the plan cannot drift from the configuration that produced
 	// it.
 	Artifact config.Artifact
+	// Provenance carries the run-level facts the attestation needs — which
+	// commit, which gate verdict, which builder. The publisher fills in the
+	// subject once the digest exists, because the digest is the one field
+	// nobody knows until the artifact is built.
+	Provenance attest.Input
 	// Output, when set, receives docker's live output. It is an io.Writer
 	// rather than an *os.File so a nil value stays a nil interface; a typed-nil
 	// *os.File would satisfy io.Writer and then panic on first write.
@@ -67,6 +73,11 @@ type Result struct {
 	Tags []string
 	// Signed reports whether cosign ran. False only on a dry run.
 	Signed bool
+	// Attested reports whether SLSA provenance was attached to the artifact.
+	// Separate from Signed because they answer different questions: a
+	// signature says somebody vouched for these bytes, provenance says where
+	// they came from.
+	Attested bool
 }
 
 // Publisher builds, pushes and signs.
@@ -156,6 +167,9 @@ func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) 
 	if err := d.sign(ctx, reference, req); err != nil {
 		return Result{}, err
 	}
+	if err := d.attest(ctx, plan.Image, digest, reference, req); err != nil {
+		return Result{}, err
+	}
 
 	return Result{
 		Kind:      config.KindImage,
@@ -163,7 +177,81 @@ func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) 
 		Reference: reference,
 		Tags:      plan.Refs(),
 		Signed:    true,
+		Attested:  true,
 	}, nil
+}
+
+// attest attaches SLSA build provenance to the digest.
+//
+// It runs after signing and before the result is reported, and a failure
+// fails the publish. That is deliberate: an image in the registry carrying a
+// signature but no provenance is one whose origin cannot be checked, and
+// "signed by someone" is a much weaker claim than the one kiln exists to
+// make. Better to fail a build than to quietly downgrade what shipped.
+func (d *Docker) attest(ctx context.Context, image, digest, reference string, req Request) error {
+	in := req.Provenance
+	in.SubjectName = image
+	in.SubjectDigest = digest
+	in.ArtifactKind = string(config.KindImage)
+	if in.Config == "" {
+		in.Config = req.Artifact.Dockerfile
+	}
+
+	stmt, err := attest.Build(in)
+	if err != nil {
+		return fmt.Errorf("publish: %w", err)
+	}
+	path, cleanup, err := writePredicate(stmt)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	err = d.withRetry(ctx, "cosign attest", func(ctx context.Context) error {
+		_, e := d.Runner.Run(ctx, execx.Cmd{
+			Name: d.Cosign,
+			Args: []string{
+				"attest", "--yes",
+				"--type", attest.CosignType,
+				"--predicate", path,
+				reference,
+			},
+			Dir:    req.RepoDir,
+			Stdout: req.Output, Stderr: req.Output,
+		})
+		return e
+	})
+	if err != nil {
+		return fmt.Errorf("publish: cosign attest %s: %w", reference, err)
+	}
+	d.Log.Info("provenance attached", "reference", reference, "commit", in.SHA)
+	return nil
+}
+
+// writePredicate spills the statement to a file for cosign to read. cosign
+// takes a path, not stdin, so there is no way to avoid the temp file.
+func writePredicate(stmt attest.Statement) (path string, cleanup func(), err error) {
+	data, err := stmt.JSON()
+	if err != nil {
+		return "", func() {}, err
+	}
+	f, err := os.CreateTemp("", "kiln-provenance-*.json")
+	if err != nil {
+		return "", func() {}, fmt.Errorf("publish: create predicate file: %w", err)
+	}
+	name := f.Name()
+	cleanup = func() { _ = os.Remove(name) }
+
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		cleanup()
+		return "", func() {}, fmt.Errorf("publish: write predicate: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		cleanup()
+		return "", func() {}, fmt.Errorf("publish: close predicate: %w", err)
+	}
+	return name, cleanup, nil
 }
 
 // classicBuildPush is the single-platform path: plain `docker build`, one push

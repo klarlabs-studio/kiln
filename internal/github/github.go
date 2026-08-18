@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -371,4 +372,72 @@ func truncate(s string, max int) string {
 		cut--
 	}
 	return s[:cut] + ellipsis
+}
+
+// Release is the subset of a GitHub Release Kiln needs to attach an asset.
+type Release struct {
+	ID      int64  `json:"id"`
+	TagName string `json:"tag_name"`
+	// UploadURL is a URI template ending in "{?name,label}"; the braces are
+	// stripped before use.
+	UploadURL string `json:"upload_url"`
+}
+
+// ReleaseByTag finds an existing release. Kiln does not create releases —
+// goreleaser already did, and two components racing to create the same one
+// would be a good way to lose a changelog.
+func (c *Client) ReleaseByTag(ctx context.Context, tag string) (Release, error) {
+	var r Release
+	err := c.do(ctx, http.MethodGet, c.path("releases/tags/"+url.PathEscape(tag)), nil, &r)
+	return r, err
+}
+
+// UploadReleaseAsset attaches a file to a release.
+//
+// The upload host is api.github.com's sibling, uploads.github.com, and the
+// endpoint takes raw bytes rather than JSON — so this cannot go through `do`
+// and carries its own request. Retries are deliberately absent: a half-
+// uploaded asset that succeeded on retry would be indistinguishable from one
+// that uploaded twice, and GitHub rejects a duplicate name anyway.
+func (c *Client) UploadReleaseAsset(ctx context.Context, rel Release, name string, body []byte) error {
+	if !c.Enabled() {
+		return errors.New("github: no token or repository configured")
+	}
+
+	endpoint, err := assetURL(rel.UploadURL, name)
+	if err != nil {
+		return err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("github: build upload request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.Token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "kiln")
+	req.Header.Set("Content-Type", "application/octet-stream")
+	req.ContentLength = int64(len(body))
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return fmt.Errorf("github: upload %s: %w", name, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	payload, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return &APIError{Status: resp.StatusCode, Method: http.MethodPost, Path: name, Body: string(payload)}
+	}
+	return nil
+}
+
+// assetURL turns GitHub's "{?name,label}" template into a concrete URL.
+func assetURL(template, name string) (string, error) {
+	base, _, _ := strings.Cut(template, "{")
+	if base == "" {
+		return "", fmt.Errorf("github: release has no upload url")
+	}
+	return base + "?name=" + url.QueryEscape(name), nil
 }
