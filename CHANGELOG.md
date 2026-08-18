@@ -6,6 +6,29 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`kiln login` and `kiln box install` — two commands between installing kiln
+  and having a build box.** The honest instructions used to be a cron line
+  with a token in it, or a Kubernetes manifest plus a container image carrying
+  your whole toolchain. Both are places people stop, and neither is necessary:
+  a box is a machine that already has your tools on it, usually the one you
+  are typing on.
+
+  `kiln login` stores the token in the macOS keychain or the freedesktop
+  secret service, falling back to a 0600 file and saying so rather than
+  pretending. It validates the token before storing it, so a wrong one is
+  caught at the moment it is pasted rather than on a scheduled tick nobody is
+  reading. `kiln box install` writes a launchd agent or a systemd user timer,
+  loads it, and ticks immediately.
+
+  Two traps the installer handles, both found by installing it: a launchd
+  agent inherits `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else — the first
+  box found thirteen commits and failed all thirteen on a missing `warden` —
+  so the unit carries the PATH you installed with; and a background job
+  reading the keychain pops a dialog unless the binary is on the item's access
+  list, which `kiln login` arranges.
+
 ### Fixed
 
 - **Kiln can post results outside GitHub Actions at all.** The Checks API

@@ -72,6 +72,8 @@ RollOps is the only thing allowed to ship it.
 
 Usage:
   kiln version                          print version, commit and build date
+  kiln login [--status | --logout]      store a GitHub token in the OS keychain
+  kiln box install [--every 5m]         schedule this repository on this machine
   kiln doctor [--config-only]           validate configuration and toolchain; run nothing
   kiln run --sha S --event E [flags]    build one commit
   kiln watch [--once | --every D]       discover and build new refs
@@ -124,6 +126,10 @@ func Main(ctx context.Context, args []string, io IO) int {
 		io.print(usage)
 		return ExitOK
 
+	case "login":
+		return report(io, runLogin(ctx, rest, io))
+	case "box":
+		return report(io, runBox(ctx, rest, io))
 	case "doctor":
 		return report(io, runDoctor(ctx, rest, io))
 	case "run":

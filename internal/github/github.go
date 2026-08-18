@@ -266,6 +266,28 @@ func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
 	return out, nil
 }
 
+// WhoAmI validates a token and returns the login it belongs to.
+//
+// A cheap round trip that turns "the token is wrong" from something discovered
+// on the next scheduled tick, in a log nobody is reading, into something said
+// at the moment it is pasted.
+func WhoAmI(ctx context.Context, token string) (string, error) {
+	c := &Client{Token: token, Repo: Repo{Owner: "x", Name: "y"}}
+
+	var out struct {
+		Login string `json:"login"`
+	}
+	if err := c.do(ctx, http.MethodGet, "/user", nil, &out); err != nil {
+		return "", err
+	}
+	if out.Login == "" {
+		// A fine-grained token with no user scope still authenticates; the
+		// caller only needs to know the credential works.
+		return "the token", nil
+	}
+	return out.Login, nil
+}
+
 // ErrNeedsGitHubApp reports the Checks API refusing a personal access token.
 //
 // Check runs can only be created by a GitHub App. Inside Actions this is
