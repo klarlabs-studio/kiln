@@ -79,6 +79,13 @@ func (r *doctorReport) warn(format string, args ...any) {
 	fmt.Fprintf(&r.b, "  warn  %s\n", fmt.Sprintf(format, args...))
 }
 
+// note is for something kiln could not establish either way. It is not a
+// warning: reporting an unknown as a problem is how a doctor teaches people to
+// skim past its output.
+func (r *doctorReport) note(format string, args ...any) {
+	fmt.Fprintf(&r.b, "  ?     %s\n", fmt.Sprintf(format, args...))
+}
+
 // fail is for something that will break a real run.
 func (r *doctorReport) fail(format string, args ...any) {
 	fmt.Fprintf(&r.b, "  FAIL  %s\n", fmt.Sprintf(format, args...))
@@ -201,6 +208,8 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 		r.warn("no usable GITHUB_TOKEN: no checks, and every pull request is treated as a fork")
 	}
 
+	r.checkRegistries(deps)
+
 	if len(deps.Env.TrustedKeys) == 0 {
 		// Not a failure: a box that always re-proves is correct, just slower.
 		r.warn("no KILN_TRUSTED_KEYS: every run re-proves, because kiln only skips for a note " +
@@ -208,6 +217,45 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	} else {
 		r.ok("%d trusted signing key(s) pinned: a matching warden note may skip the re-prove",
 			len(deps.Env.TrustedKeys))
+	}
+}
+
+// checkRegistries reports whether the box can authenticate to the registries
+// this pipeline pushes to.
+//
+// The push is the last thing a publish does, so a missing login is discovered
+// after the gate has run and the image has been built — the most expensive
+// possible moment to learn it, and on an unattended box one that repeats every
+// tick. This reads docker's own configuration and says so up front.
+//
+// It deliberately does not contact the registry. Whether the credentials are
+// *valid* is a question only the registry can answer, and asking it here would
+// turn `kiln doctor` into something that needs the network and a rate-limit
+// budget to run.
+func (r *doctorReport) checkRegistries(deps *boot.Deps) {
+	seen := map[string]bool{}
+	for _, a := range deps.Pipeline.Publish {
+		if a.Kind != config.KindImage || a.Image == "" {
+			continue
+		}
+		registry := publish.RegistryOf(a.Image)
+		if seen[registry] {
+			continue
+		}
+		seen[registry] = true
+
+		switch publish.CheckRegistryCredentials(registry) {
+		case publish.CredentialsPresent:
+			r.ok("docker credentials for %s", registry)
+		case publish.CredentialsMissing:
+			r.warn("no docker credentials for %s: `docker login %s` before publishing, "+
+				"or the push will fail after the build", registry, registry)
+		case publish.CredentialsUnknown:
+			// A CI runner may be injecting credentials in a way this cannot
+			// see. Saying "not logged in" there would be a false alarm, and a
+			// doctor that cries wolf is a doctor nobody reads.
+			r.note("could not tell whether %s has credentials; docker's config says nothing either way", registry)
+		}
 	}
 }
 

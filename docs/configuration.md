@@ -101,6 +101,45 @@ it worked.
 
 ## `kind: image`
 
+### `image` — any registry, not just GHCR
+
+`image:` is a plain repository reference, and nothing in kiln is specific to
+GHCR. Docker Hub, ECR, Artifactory, Harbor or a registry on your own box all
+work the same way:
+
+```yaml
+publish:
+  - kind: image
+    image: docker.io/you/app        # Docker Hub
+  - kind: image
+    image: 1234.dkr.ecr.eu-central-1.amazonaws.com/app
+  - kind: image
+    image: registry.internal/team/app
+```
+
+A name with no host is a Docker Hub repository — `you/app` and
+`docker.io/you/app` are the same image — because that is docker's own rule: the
+first path element is a host only if it contains a dot or a colon, or is
+exactly `localhost`.
+
+**Kiln never logs in.** It uses whatever credentials docker and cosign already
+have, so `docker login` is the operator's job and stays out of the pipeline
+file. `kiln doctor` reads docker's config and reports, before a build starts,
+whether the registries this pipeline pushes to have credentials — the push is
+the last thing a publish does, so a missing login would otherwise surface after
+the gate has run and the image has been built.
+
+It reports three states, and the third is not a failure: a credential store or
+helper keeps logins outside `config.json`, and a CI runner may inject them in a
+way this cannot see, so "could not tell" is said plainly rather than guessed at.
+
+**Docker Hub caveat: attestations land in tags, not referrers.** Docker Hub
+implements OCI 1.0.1 and has no referrers API, so cosign falls back to its tag
+scheme — `sha256-<digest>.sig` and `.att` appear as tags in the repository next
+to your images. Everything works, including `kiln verify`; the signatures are
+simply visible in the tag list. Registries that implement OCI 1.1 store them as
+referrers instead, out of sight.
+
 ### `tags`
 
 | Kind | Produces | RollOps reads it as |

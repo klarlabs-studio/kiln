@@ -295,6 +295,12 @@ A skipped re-prove is recorded in the attestation as `sourceGate.reproved: false
 
 ### Images
 
+`image:` is any registry — GHCR, Docker Hub (`docker.io/you/app`, or just
+`you/app`), ECR, Harbor, one on your own box. Kiln never logs in: it uses the
+credentials docker and cosign already have, and `kiln doctor` says before the
+build whether the registries in your pipeline have any. See
+[`docs/configuration.md`](docs/configuration.md#image--any-registry-not-just-ghcr).
+
 Every successful image publish produces an **immutable sha tag plus at least one moving tag**.
 
 | Tag | Example | RollOps |

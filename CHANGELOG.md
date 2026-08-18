@@ -31,6 +31,20 @@ All notable changes to kiln are documented here. The format follows
   attacker-controlled metadata, useful for picking a key out of a roster and
   worthless as an authorisation.
 
+- **`kiln doctor` checks registry credentials before a build, not after.**
+  `image:` has always accepted any registry — Docker Hub, ECR, Harbor, one on
+  your own box — but the push is the last thing a publish does, so a missing
+  `docker login` surfaced only after the gate had run and the image had been
+  built, and repeated every tick on an unattended box. Doctor now reads
+  docker's own configuration and says so up front.
+
+  Docker Hub in particular: docker records it as `https://index.docker.io/v1/`
+  and always has, so a check looking up "docker.io" would report a missing
+  login that is right there. A credential store or helper counts as present —
+  holding credentials outside that file is its entire job — and an
+  unreadable or absent config is reported as *unknown* rather than missing,
+  because a CI runner may inject credentials in a way this cannot see.
+
 - **`kiln verify --json`** emits the report for a job that has to act on which
   link broke. The exit code is unchanged and the message goes to stderr, so
   stdout stays parseable.
