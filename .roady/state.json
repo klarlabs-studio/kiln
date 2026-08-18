@@ -1,6 +1,6 @@
 {
   "project_id": "kiln",
-  "version": 11,
+  "version": 14,
   "task_states": {
     "task-core-foundation": {
       "status": "pending",
@@ -42,11 +42,22 @@
       "completed_at": "2026-08-18T22:29:00.735257+02:00",
       "elapsed_minutes": 4
     },
+    "task-service-containers-for-the-gate-and-tasks": {
+      "status": "done",
+      "path": "",
+      "owner": "Felix Geelhaar",
+      "evidence": [
+        "kiln PR #8; verified against a real postgres — dynamic port 54190, the gate itself queried the database, no containers leaked"
+      ],
+      "started_at": "2026-08-18T22:59:35.963279+02:00",
+      "completed_at": "2026-08-18T22:59:35.982581+02:00",
+      "elapsed_minutes": 0
+    },
     "task-upload-a-task-s-sarif-to-code-scanning": {
       "status": "blocked",
       "path": "",
       "elapsed_minutes": 0
     }
   },
-  "updated_at": "2026-08-18T22:45:37.75819+02:00"
+  "updated_at": "2026-08-18T22:59:35.982582+02:00"
 }
