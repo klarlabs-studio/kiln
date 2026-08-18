@@ -137,7 +137,30 @@ func (s VSAStatement) SourceCommit() string {
 		}
 	}
 	if i := strings.LastIndex(s.Predicate.ResourceURI, "@"); i >= 0 {
-		return s.Predicate.ResourceURI[i+1:]
+		// Only when the tail is actually an object id. An ssh remote —
+		// git+ssh://git@github.com/o/r.git — has an @ in it and no commit at
+		// all, and taking the tail regardless yields "github.com/o/r.git" as
+		// the commit, which then gets compared against the real one and
+		// refused with a message naming a hostname as a commit.
+		if commit := s.Predicate.ResourceURI[i+1:]; isObjectID(commit) {
+			return commit
+		}
 	}
 	return ""
+}
+
+// isObjectID reports whether s is a full git object id, sha-1 or sha-256.
+//
+// Full length only. An abbreviated id would turn every commit comparison into
+// a prefix match, and a prefix is not an identity.
+func isObjectID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	for _, c := range s {
+		if !strings.ContainsRune("0123456789abcdefABCDEF", c) {
+			return false
+		}
+	}
+	return true
 }

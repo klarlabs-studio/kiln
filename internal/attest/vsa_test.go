@@ -89,6 +89,38 @@ func TestTheCommitSurvivesCosignRewritingTheSubject(t *testing.T) {
 	}
 }
 
+func TestAnSSHRemoteIsNotMistakenForACommit(t *testing.T) {
+	// git+ssh://git@github.com/o/r.git has an @ in it and no commit. Reading
+	// the tail regardless makes "github.com/o/r.git" the commit — which is
+	// then compared against the real one and refused, with a message naming a
+	// hostname where an operator expects a sha.
+	var s attest.VSAStatement
+	if err := json.Unmarshal([]byte(wardenVSA), &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Subject = nil
+	s.Predicate.ResourceURI = "git+ssh://git@github.com/klarlabs-studio/kiln.git"
+
+	if got := s.SourceCommit(); got != "" {
+		t.Errorf("SourceCommit = %q, want nothing: that URI names no commit", got)
+	}
+}
+
+func TestAnAbbreviatedCommitIsNotACommit(t *testing.T) {
+	// A prefix is not an identity. Accepting one would make every join
+	// between a summary and a build provenance a prefix comparison.
+	var s attest.VSAStatement
+	if err := json.Unmarshal([]byte(wardenVSA), &s); err != nil {
+		t.Fatal(err)
+	}
+	s.Subject = nil
+	s.Predicate.ResourceURI = "git+ssh://git@github.com/o/r.git@8115748"
+
+	if got := s.SourceCommit(); got != "" {
+		t.Errorf("SourceCommit = %q, want nothing for an abbreviated id", got)
+	}
+}
+
 func TestAFailedVerdictIsNotAPass(t *testing.T) {
 	failed := strings.Replace(wardenVSA, `"PASSED"`, `"FAILED"`, 1)
 
