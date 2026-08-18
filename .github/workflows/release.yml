@@ -22,15 +22,18 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # GoReleaser builds the changelog from history; a shallow clone gives
           # it one commit and a changelog to match.
           fetch-depth: 0
 
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: '1.25.x'
+          # From go.mod, like CI does. A hardcoded version here would drift the
+          # day the module's minimum moves, and a release built on a toolchain
+          # the tests never ran on is not the thing that was tested.
+          go-version-file: go.mod
 
       # CI already ran on the commit this tag points at. Running the suite
       # again here is not redundancy for its own sake: a tag can be moved, and
@@ -38,17 +41,27 @@ jobs:
       - name: Test
         run: go test -race ./...
 
+      # cosign is named explicitly rather than left to the action's default.
+      # The default moved from v2 to v3 between installer releases, and v3
+      # rejects the flags v2 accepted — so which cosign a release used is a
+      # fact worth reading off this file rather than inferring from a SHA.
       - name: Install cosign
         uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+        with:
+          cosign-release: v3.0.6
 
       - name: Install syft
-        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
       - name: GoReleaser
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
-          version: "~> v2"
+          # Exact, not "~> v2". A release is the one artifact that must be
+          # reproducible from what this file says; a range means the tool that
+          # built v0.1.0 and the tool that builds v0.2.0 may differ without a
+          # commit recording it.
+          version: "2.16.0"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

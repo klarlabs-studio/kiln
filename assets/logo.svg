@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" role="img" aria-label="kiln">
+  <rect width="200" height="200" rx="44" fill="#17202e"/>
+  <g transform="translate(100 100) scale(1.18) translate(-66 -52)">
+    <g fill="none" stroke="#eef2f6" stroke-width="12" stroke-linecap="round" stroke-linejoin="miter">
+      <path d="M22 84 L22 50 A44 44 0 0 1 110 50 L110 84"/>
+      <path d="M14 90 L118 90"/>
+    </g>
+    <path d="M66 42 L84 60 L66 78 L48 60 Z" fill="#f59e0b"/>
+  </g>
+</svg>
