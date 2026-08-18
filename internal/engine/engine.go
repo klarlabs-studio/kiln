@@ -432,6 +432,52 @@ func (e *Engine) report(ctx context.Context, fn func() error, log obs.Logger, na
 // persist saves the run, logging rather than failing on a storage error. The
 // ledger is runtime bookkeeping; git is the desired state. Losing a write
 // costs a duplicate build on the next tick, never correctness.
+// RunScheduled executes the tasks a schedule is due to fire.
+//
+// A separate entry point from Execute rather than a fourth event, because a
+// scheduled run is a different animal: there is no new commit, nothing is
+// proven, and nothing is published. It runs named errands against the head of
+// a branch. Squeezing it into the event model would mean answering "may a
+// schedule publish?" — and the honest answer, "no, because a schedule is not
+// evidence that anything changed", is better expressed by not offering it.
+func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.NamedTask) (*run.Run, error) {
+	r := run.New(req.SHA, req.Ref, config.ScheduleEvent, false, req.Repo)
+	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", config.ScheduleEvent)
+
+	if e.Tasks == nil || len(tasks) == 0 {
+		r.Succeed()
+		return r, nil
+	}
+	if strings.TrimSpace(req.SHA) == "" {
+		err := errors.New("engine: no commit to run scheduled tasks against")
+		r.Fail(err)
+		e.persist(r, log)
+		return r, err
+	}
+
+	r.Phase = run.PhaseTasks
+	e.persist(r, log)
+	log.Info("scheduled tasks", "count", len(tasks))
+
+	// A schedule fires on the tracked ref of the operator's own repository —
+	// never a fork head — so the tasks get the trusted policy. The publish
+	// bit is off regardless: RunScheduled never publishes.
+	policy := isolation.Policy{Secrets: true, Skip: true}
+
+	err := worktree.With(ctx, e.Tasks.Exec, req.Dir, req.SHA, func(dir string) error {
+		return e.runTasks(ctx, req, r, policy, tasks, dir, log)
+	})
+	if err != nil {
+		r.Fail(err)
+		e.persist(r, log)
+		return r, err
+	}
+
+	r.Succeed()
+	e.persist(r, log)
+	return r, nil
+}
+
 // doTasks runs every task routed to this event.
 //
 // Unlike publish, one failure does not stop the rest. The artifacts of a

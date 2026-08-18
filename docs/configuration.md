@@ -236,6 +236,12 @@ tasks:
 | `workdir` | relative to the worktree root |
 | `allow_failure` | record the failure, do not fail the run |
 
+A `schedule` task fires from a `kiln watch` tick against the head of the
+tracked ref — there is no new commit, nothing is proven and nothing is
+published. The last fire time is kept beside the ledger, so the interval
+survives a restart, and a box that was off for a week fires each due task once
+rather than replaying the backlog.
+
 Each task posts its own GitHub Check, named `Kiln / <task>`, so branch
 protection can require one and a red check names the thing that broke.
 

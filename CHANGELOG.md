@@ -28,6 +28,13 @@ All notable changes to kiln are documented here. The format follows
   than red, because a red check for something declared advisory is how a wall
   of red gets ignored.
 
+  Scheduled tasks fire from the watch tick, against the head of the tracked
+  ref, with the last run recorded beside the ledger so an interval survives a
+  restart. A box that was off for a week fires each due task **once** when it
+  comes back — cron catch-up is how a nightly remediation job opens seven pull
+  requests at breakfast. A task is marked fired *before* it runs, so one that
+  takes the process down does not re-fire on every restart.
+
   Commands run under `sh -euc`: `-e` so a script that fails halfway fails
   rather than reporting the status of its last echo, `-u` so a typo'd variable
   is an error instead of an empty string deleting the wrong directory.
