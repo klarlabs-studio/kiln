@@ -69,6 +69,43 @@ signs:
       - "${artifact}"
     artifacts: checksum
 
+# An SBOM per archive, in CycloneDX. Kiln's whole argument is that an artifact
+# should arrive describing itself rather than requiring trust in the pipeline
+# that made it; shipping releases without one would be arguing it for other
+# people's artifacts and not our own.
+sboms:
+  - id: archive-sbom
+    artifacts: archive
+    documents: ["${artifact}.sbom.cdx.json"]
+    cmd: syft
+    args: ["$artifact", "--output", "cyclonedx-json=$document"]
+
+# macOS install path. A cask rather than a formula because goreleaser
+# deprecated `brews`, and casks are macOS-only — Linux gets `go install` or the
+# tarball, both documented in the README.
+#
+# The quarantine hook is not optional: without it macOS refuses a downloaded
+# unsigned binary with "damaged and cannot be opened", which reads as a
+# corrupted release rather than Gatekeeper doing its job.
+homebrew_casks:
+  - name: kiln
+    binaries: [kiln, kilnd]
+    repository:
+      owner: klarlabs-studio
+      name: homebrew-tap
+      # The release job's own GITHUB_TOKEN cannot write to another repository,
+      # so the tap needs its own.
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: "https://github.com/klarlabs-studio/kiln"
+    description: "Signed-artifact factory: prove a commit, build it, sign it, attest it"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kiln"]
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kilnd"]
+          end
+
 changelog:
   use: git
   sort: asc

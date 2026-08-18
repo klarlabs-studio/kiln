@@ -26,9 +26,32 @@ Status: OSS MVP, MIT, module `go.klarlabs.de/kiln`, Go 1.25.
 ## Install
 
 ```bash
+brew tap klarlabs-studio/tap && brew install --cask kiln   # macOS and Linux
+```
+
+```bash
 go install go.klarlabs.de/kiln/cmd/kiln@latest
 go install go.klarlabs.de/kiln/cmd/kilnd@latest   # optional HTTP surface
 ```
+
+Or take the archive from [Releases](https://github.com/klarlabs-studio/kiln/releases) —
+and verify it, since a tool that argues for verification and ships unverifiable
+downloads is arguing against itself. Every release carries a cosign bundle over
+the checksum manifest, signed keylessly by the release workflow, plus a
+CycloneDX SBOM per archive:
+
+```bash
+cosign verify-blob \
+  --bundle checksums.txt.bundle \
+  --certificate-identity \
+    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0" \
+  --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+  checksums.txt
+sha256sum --check --ignore-missing checksums.txt
+```
+
+The identity is the point: the signature names the workflow and the tag that
+produced the file, so it cannot be reused for a build made anywhere else.
 
 Kiln shells out to tools that must already be on the box:
 
