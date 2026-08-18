@@ -3,11 +3,14 @@ package cli
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.klarlabs.de/kiln/internal/gittest"
+	"go.klarlabs.de/kiln/internal/lock"
 )
 
 // capture runs a command against buffers and returns its output and exit code.
@@ -639,5 +642,125 @@ func TestVerifyWithoutCosignChecksNothing(t *testing.T) {
 	}
 	if !strings.Contains(out, "cosign is not installed") {
 		t.Errorf("output should name what was missing:\n%s", out)
+	}
+}
+
+// holdRepoLock takes the repository lock from another process, which is the
+// only way to model the cron overlap this exists for: flock is per open file
+// description, so locking twice inside one process proves nothing.
+//
+// It re-execs this test binary rather than `go run`-ing a helper, because the
+// tests chdir into throwaway git repositories and `go run` needs a module.
+func holdRepoLock(t *testing.T, dir string) {
+	t.Helper()
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestRepoLockHolderHelper", "-test.timeout=10m")
+	cmd.Env = append(os.Environ(),
+		"KILN_CLI_LOCK_HELPER=1",
+		"KILN_CLI_LOCK_DIR="+dir,
+	)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("starting the lock holder: %v", err)
+	}
+	t.Cleanup(func() { _ = cmd.Process.Kill(); _ = cmd.Wait() })
+
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		if lock.ReadHolder(lock.PathFor(dir)).PID != 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatal("the holder never took the lock")
+}
+
+// TestRepoLockHolderHelper is the body of the process holdRepoLock starts. It
+// returns immediately under a normal run.
+func TestRepoLockHolderHelper(t *testing.T) {
+	if os.Getenv("KILN_CLI_LOCK_HELPER") == "" {
+		t.Skip("helper process entry point")
+	}
+	l, err := lock.TryAcquire(lock.PathFor(os.Getenv("KILN_CLI_LOCK_DIR")), "kiln run --sha deadbee")
+	if err != nil {
+		t.Fatalf("helper could not take the lock: %v", err)
+	}
+	defer func() { _ = l.Release() }()
+	// A timer keeps Go's deadlock detector from killing us and freeing the
+	// lock, which would make every caller's assertion meaningless.
+	time.Sleep(5 * time.Minute)
+}
+
+func TestABusyRepositoryRefusesARun(t *testing.T) {
+	repo := repoWith(t, "")
+	holdRepoLock(t, repo.Dir)
+
+	out, errOut, code := capture(t, "run", "--sha", "HEAD", "--event", "push", "--quiet")
+
+	// An explicit command must not silently do nothing.
+	if code != ExitBusy {
+		t.Errorf("code = %d, want %d\n%s%s", code, ExitBusy, out, errOut)
+	}
+	if !strings.Contains(errOut, "holds this repository") {
+		t.Errorf("stderr = %q", errOut)
+	}
+	// The message should name who, so the operator can go look.
+	if !strings.Contains(errOut, "kiln run --sha deadbee") {
+		t.Errorf("stderr should name the holder: %q", errOut)
+	}
+}
+
+func TestABusyRepositoryIsNotAWatchFailure(t *testing.T) {
+	upstream := gittest.New(t)
+	upstream.Commit("first", "app.txt", "one\n")
+	local := upstream.Clone(t)
+	t.Chdir(local.Dir)
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN", "KILN_DB", "KILN_DIR"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
+	holdRepoLock(t, local.Dir)
+
+	out, _, code := capture(t, "watch", "--once")
+
+	// Under cron an overlap is expected. Exiting non-zero would page somebody
+	// every time a build outran the schedule.
+	if code != ExitOK {
+		t.Errorf("code = %d, want 0 for an expected overlap\n%s", code, out)
+	}
+	if !strings.Contains(out, "busy") {
+		t.Errorf("output should say why nothing happened:\n%s", out)
+	}
+}
+
+func TestADryRunIgnoresTheLock(t *testing.T) {
+	upstream := gittest.New(t)
+	upstream.Commit("first", "app.txt", "one\n")
+	local := upstream.Clone(t)
+	t.Chdir(local.Dir)
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
+	holdRepoLock(t, local.Dir)
+
+	out, _, code := capture(t, "watch", "--once", "--dry-run")
+
+	// Refusing to show an operator the plan because a build is in flight would
+	// be obstructive at exactly the moment they want to look.
+	if code != ExitOK || !strings.Contains(out, "plan") {
+		t.Errorf("code = %d, out = %q", code, out)
+	}
+}
+
+func TestReadOnlyCommandsIgnoreTheLock(t *testing.T) {
+	repo := repoWith(t, publishingPipeline)
+	holdRepoLock(t, repo.Dir)
+
+	// status, doctor and verify must stay usable during a build — that is when
+	// an operator most wants them.
+	if _, _, code := capture(t, "doctor"); code == ExitBusy {
+		t.Error("doctor blocked on the lock")
+	}
+	if _, _, code := capture(t, "status"); code == ExitBusy {
+		t.Error("status blocked on the lock")
 	}
 }

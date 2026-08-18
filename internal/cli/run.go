@@ -11,6 +11,7 @@ import (
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/prove"
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/run"
@@ -54,14 +55,30 @@ func runRun(ctx context.Context, args []string, io IO) error {
 		return wrapExit(ExitConfig, err)
 	}
 
-	isFork := resolveFork(ctx, deps, parsedEvent, *fork, *pr)
-	resolvedRef := defaultRef(*ref, parsedEvent, *pr)
+	// A one-shot run was asked for explicitly, so a busy repository is a
+	// refusal rather than a shrug: the operator wants to know their command
+	// did not happen.
+	return withRepoLock(deps.Dir, "kiln run --sha "+run.ShortSHA(resolved),
+		func(h lock.Holder) error {
+			return failWith(ExitBusy, "%v: %s", lock.ErrBusy, h)
+		},
+		func() error {
+			return executeRun(ctx, deps, io, parsedEvent, resolved,
+				resolveFork(ctx, deps, parsedEvent, *fork, *pr),
+				defaultRef(*ref, parsedEvent, *pr))
+		})
+}
 
+// executeRun is the body of a locked run.
+func executeRun(
+	ctx context.Context, deps *boot.Deps, io IO,
+	event isolation.Event, sha string, fork bool, ref string,
+) error {
 	r, execErr := deps.Engine.Execute(ctx, engine.Request{
-		SHA:      resolved,
-		Event:    parsedEvent,
-		Fork:     isFork,
-		Ref:      resolvedRef,
+		SHA:      sha,
+		Event:    event,
+		Fork:     fork,
+		Ref:      ref,
 		Repo:     repoName(deps),
 		Dir:      deps.Dir,
 		Pipeline: deps.Pipeline,

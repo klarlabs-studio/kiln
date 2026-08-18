@@ -30,6 +30,7 @@ import (
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/mcpsrv"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/store"
@@ -301,7 +302,12 @@ func (s *Server) startBackground(job github.Job) {
 	}()
 }
 
-// execute resolves the commit and runs the engine.
+// execute resolves the commit and runs the engine under the repository lock.
+//
+// kilnd is the surface most likely to be handed concurrent work: GitHub
+// delivers a push and a pull_request within the same second all the time, and
+// each starts its own background build. Without the lock they would race each
+// other's worktrees and ledger writes on one checkout.
 func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.RunOutput, error) {
 	d := s.Deps
 
@@ -309,6 +315,12 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 	if err != nil {
 		return mcpsrv.RunOutput{}, fmt.Errorf("resolve %s: %w", job.SHA, err)
 	}
+
+	l, err := s.repoLock(ctx)
+	if err != nil {
+		return mcpsrv.RunOutput{}, err
+	}
+	defer func() { _ = l.Release() }()
 
 	fork := job.Fork
 	if !fork && job.Event == isolation.EventPullRequest && pr > 0 {
@@ -325,6 +337,34 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 		Pipeline: d.Pipeline,
 	})
 	return mcpsrv.FromRun(rec), execErr
+}
+
+// repoLock waits for the repository, rather than refusing like the CLI does.
+//
+// A webhook delivery is work that arrived on its own schedule and cannot be
+// retried by a human, so dropping it because another build was in flight would
+// lose it. Waiting is bounded by the caller's context — the background build
+// timeout — so a wedged holder cannot pile deliveries up forever.
+func (s *Server) repoLock(ctx context.Context) (*lock.Lock, error) {
+	path := lock.PathFor(s.Deps.Dir)
+	const poll = 2 * time.Second
+
+	for {
+		l, err := lock.TryAcquire(path, "kilnd")
+		if err == nil {
+			return l, nil
+		}
+		if !errors.Is(err, lock.ErrBusy) {
+			return nil, err
+		}
+
+		s.Log.Debug("waiting for the repository lock", "holder", lock.ReadHolder(path).String())
+		select {
+		case <-ctx.Done():
+			return nil, fmt.Errorf("gave up waiting for the repository lock: %w", ctx.Err())
+		case <-time.After(poll):
+		}
+	}
 }
 
 func repoName(d *boot.Deps) string {

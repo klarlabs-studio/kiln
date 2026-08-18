@@ -26,6 +26,7 @@ import (
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
@@ -164,7 +165,7 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 	defer ticker.Stop()
 
 	for {
-		res, err := w.Once(ctx, dryRun)
+		res, err := w.tickLocked(ctx, dryRun)
 		switch {
 		case errors.Is(err, context.Canceled):
 			return nil
@@ -186,6 +187,32 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 		case <-ticker.C:
 		}
 	}
+}
+
+// tickLocked runs one tick under the repository lock.
+//
+// Per tick rather than for the loop's lifetime: a watcher that held the lock
+// while sleeping would shut out an operator's `kiln run` for as long as it
+// ran, which is not what serialising builds is meant to cost.
+func (w *Watcher) tickLocked(ctx context.Context, dryRun bool) (Result, error) {
+	if dryRun || w.Dir == "" {
+		return w.Once(ctx, dryRun)
+	}
+
+	l, err := lock.TryAcquire(lock.PathFor(w.Dir), "kiln watch --every")
+	if errors.Is(err, lock.ErrBusy) {
+		// Something else is working this repository. Skipping is the whole
+		// point; the next tick will find whatever is left.
+		w.logger().Info("skipping tick: another kiln holds this repository",
+			"holder", lock.ReadHolder(lock.PathFor(w.Dir)).String())
+		return Result{}, nil
+	}
+	if err != nil {
+		return Result{}, err
+	}
+	defer func() { _ = l.Release() }()
+
+	return w.Once(ctx, dryRun)
 }
 
 // fetch updates the local refs discovery reads.

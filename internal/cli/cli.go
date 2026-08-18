@@ -21,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/version"
 )
 
@@ -184,6 +185,32 @@ func report(io IO, err error) int {
 		return exit.code
 	}
 	return ExitError
+}
+
+// ExitBusy reports that another kiln process holds the repository.
+//
+// Distinct from ExitError because it is not a fault: on a cron schedule an
+// overlap is expected, and an operator alerting on failures should not be
+// paged because a build took longer than the interval.
+const ExitBusy = 75
+
+// withRepoLock runs fn holding the repository lock.
+//
+// Every command that fetches, builds or writes the ledger goes through here.
+// Read-only commands — status, doctor, verify — deliberately do not: they must
+// stay usable while a build is running, which is exactly when an operator
+// wants to look.
+func withRepoLock(dir, command string, onBusy func(lock.Holder) error, fn func() error) error {
+	l, err := lock.TryAcquire(lock.PathFor(dir), command)
+	if errors.Is(err, lock.ErrBusy) {
+		return onBusy(lock.ReadHolder(lock.PathFor(dir)))
+	}
+	if err != nil {
+		return wrapExit(ExitConfig, err)
+	}
+	defer func() { _ = l.Release() }()
+
+	return fn()
 }
 
 // newFlagSet builds a flag set that reports usage errors through the command's

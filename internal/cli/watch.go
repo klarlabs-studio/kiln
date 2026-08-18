@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/poll"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/watch"
@@ -63,17 +64,41 @@ func runWatch(ctx context.Context, args []string, io IO, branchesOnly bool) erro
 		}
 		// Every returns nil on cancellation: Ctrl-C is how an operator stops a
 		// watcher, not a failure.
+		//
+		// The lock is taken per tick rather than for the whole loop, so a
+		// long-lived `--every` watcher does not shut out a one-off `kiln run`
+		// between its ticks.
 		return watcher.Every(ctx, interval, *dryRun)
 	}
 
 	// Default to a single tick. `kiln watch` with no flags is the cron entry,
 	// and a command that unexpectedly never returned would be a nasty surprise
 	// in a crontab.
-	result, err := tick(ctx, watcher, branchesOnly, *dryRun)
+	//
+	// A dry run takes no lock: it writes nothing and builds nothing, and
+	// refusing to show an operator the plan because a build is in flight would
+	// be obstructive at exactly the wrong moment.
+	if *dryRun {
+		return finishTick(ctx, watcher, io, branchesOnly, true)
+	}
+
+	return withRepoLock(deps.Dir, "kiln "+name,
+		func(h lock.Holder) error {
+			// Overlap is expected under cron and is not a fault. Exiting
+			// non-zero here would page somebody every time a build outran the
+			// schedule.
+			io.printf("busy   %s is already working here (%s)\n", name, h)
+			return nil
+		},
+		func() error { return finishTick(ctx, watcher, io, branchesOnly, false) })
+}
+
+func finishTick(ctx context.Context, w *watch.Watcher, io IO, branchesOnly, dryRun bool) error {
+	result, err := tick(ctx, w, branchesOnly, dryRun)
 	if err != nil {
 		return wrapExit(ExitError, err)
 	}
-	printTick(io, result, *dryRun)
+	printTick(io, result, dryRun)
 
 	if n := result.Failures(); n > 0 {
 		// The tick itself worked; some jobs did not. Cron should see this as a
