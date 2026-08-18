@@ -1,6 +1,19 @@
-# Kiln
+<p align="center">
+  <img src="assets/logo.svg" alt="kiln" width="116" height="116">
+</p>
 
-**Warden proves a commit. Kiln turns that commit into a signed container image. RollOps is the only thing allowed to ship it.**
+<h1 align="center">kiln</h1>
+
+<p align="center">
+  <a href="https://github.com/klarlabs-studio/kiln/actions/workflows/ci.yml"><img src="https://github.com/klarlabs-studio/kiln/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/klarlabs-studio/kiln/releases/latest"><img src="https://img.shields.io/github/v/release/klarlabs-studio/kiln?sort=semver" alt="Release"></a>
+  <a href="https://pkg.go.dev/go.klarlabs.de/kiln"><img src="https://pkg.go.dev/badge/go.klarlabs.de/kiln.svg" alt="Go Reference"></a>
+  <a href="https://goreportcard.com/report/go.klarlabs.de/kiln"><img src="https://goreportcard.com/badge/go.klarlabs.de/kiln" alt="Go Report Card"></a>
+  <a href="https://slsa.dev/spec/v1.0/levels"><img src="https://img.shields.io/badge/SLSA-v1%20provenance-f59e0b" alt="SLSA v1 provenance"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/klarlabs-studio/kiln" alt="License: MIT"></a>
+</p>
+
+**Warden proves a commit. Kiln turns that commit into a signed artifact. RollOps is the only thing allowed to ship it.**
 
 Kiln is a signed-artifact factory. It is deliberately *not* a GitHub Actions clone, not a `runs-on` worker, and not a CD product. GitHub stays the forge — pull requests, Checks, GHCR. Kiln takes the compute and the build provenance.
 

@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest something kiln should do
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do that kiln makes hard or impossible?
+    validations: { required: true }
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: What should kiln do instead?
+    validations: { required: true }
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries
+      description: >
+        Some things are deliberately out of scope, and saying so up front saves
+        everyone a round trip — see the README's Boundaries section and
+        docs/competitive.md.
+      options:
+        - label: >
+            This is not an apply/canary/drift/rollback feature (that is RollOps),
+            an Actions runner protocol, or a second check language beside
+            `.warden.yaml`.
+          required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you've tried
+      description: Workarounds, other tools, or why the existing surfaces don't fit.

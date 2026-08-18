@@ -1,0 +1,45 @@
+name: Bug report
+description: Something in kiln doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, what happened instead?
+    validations: { required: true }
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: Minimal steps, or the `.kiln.yaml` snippet that reproduces it.
+    validations: { required: true }
+  - type: textarea
+    id: output
+    attributes:
+      label: Output
+      description: >
+        The failing command and its output. Logs are bolt JSON on stderr, so
+        `kiln run ... 2>kiln.log` captures them. Redact tokens and registry
+        credentials.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: kiln version
+      description: Output of `kiln version`.
+    validations: { required: true }
+  - type: textarea
+    id: doctor
+    attributes:
+      label: kiln doctor
+      description: >
+        Output of `kiln doctor`. Most surprises are a missing or unexpected
+        toolchain — this says which.
+      render: shell
+  - type: input
+    id: os
+    attributes:
+      label: OS / arch
+      placeholder: macOS 15 arm64
+    validations: { required: true }

@@ -22,7 +22,11 @@ concurrency:
 
 jobs:
   ci:
-    uses: klarlabs-studio/.github/.github/workflows/go-ci.yml@main
+    # Pinned to a commit, not @main. The shared bar decides what "passing"
+    # means for this repository, so leaving it floating means anyone who can
+    # push to another repository can change this one's gate. Dependabot bumps
+    # it, which makes each change a reviewable diff instead of a silent one.
+    uses: klarlabs-studio/.github/.github/workflows/go-ci.yml@4b0f34c9c8efdfe6bb4aa9854e569f894f896118 # main, 2026-08-10
     permissions:
       contents: read
       security-events: write
@@ -38,8 +42,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # From go.mod, like the shared bar does — a hardcoded version here
           # would silently drift the day the module's minimum moves.
