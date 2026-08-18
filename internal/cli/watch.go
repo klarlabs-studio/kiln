@@ -14,6 +14,7 @@ import (
 	"go.klarlabs.de/kiln/internal/poll"
 	"go.klarlabs.de/kiln/internal/prune"
 	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/schedule"
 	"go.klarlabs.de/kiln/internal/watch"
 )
 
@@ -246,15 +247,19 @@ func watchOne(ctx context.Context, io IO, dir string, opts watchOptions) error {
 // fleet paths cannot drift in what they wire.
 func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 	return &watch.Watcher{
-		Engine:           deps.Engine,
-		Store:            deps.Store,
-		Runner:           deps.Runner,
-		GitHub:           deps.GitHub,
-		Log:              deps.Log,
-		Dir:              deps.Dir,
-		Pipeline:         deps.Pipeline,
-		Repo:             repoName(deps),
-		BranchesOnly:     branchesOnly,
+		Engine:       deps.Engine,
+		Store:        deps.Store,
+		Runner:       deps.Runner,
+		GitHub:       deps.GitHub,
+		Log:          deps.Log,
+		Dir:          deps.Dir,
+		Pipeline:     deps.Pipeline,
+		Repo:         repoName(deps),
+		BranchesOnly: branchesOnly,
+		// Beside the ledger, in the directory kiln already owns, so a
+		// repository gains no new top-level clutter and the interval survives
+		// a restart.
+		Schedule:         schedule.NewStore(filepath.Dir(deps.Store.Path())),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
 	}

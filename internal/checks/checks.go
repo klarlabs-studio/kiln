@@ -28,6 +28,34 @@ const (
 	NamePublish = "Kiln / Publish"
 )
 
+// TaskName is the check name for one task.
+//
+// One check per task rather than one for all of them, because a check is the
+// unit branch protection can require and the unit a reader scans. "Kiln /
+// Tasks failed" tells somebody to go read a log; "Kiln / sarif" tells them
+// which thing broke without leaving the pull request.
+func TaskName(task string) string { return "Kiln / " + task }
+
+// TaskSummary renders the body of a task's check.
+func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, string) {
+	body := strings.TrimSpace(output)
+	if body != "" {
+		body = "```\n" + body + "\n```"
+	}
+
+	switch {
+	case err == nil:
+		return Success, "task passed", body
+	case tolerated:
+		// Neutral, not failure: the pipeline was told this one may fail. A red
+		// check for something the author declared advisory is how a wall of
+		// red gets ignored.
+		return Neutral, "task failed (tolerated)", body
+	default:
+		return Failure, "task failed", body
+	}
+}
+
 // Conclusion is a completed check's verdict, in GitHub's vocabulary.
 type Conclusion string
 

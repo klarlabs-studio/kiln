@@ -203,6 +203,195 @@ a cosign key pair (`COSIGN_KEY` / `COSIGN_PASSWORD`) or an OIDC token from
 somewhere. `KILN_DRY=1` skips the signing step for this reason — the static
 `signs:` check still runs, and it is the guarantee.
 
+## `services`
+
+Containers the gate needs beside it — the database a test suite talks to, a
+fake API. This is the Actions `services:` equivalent, and it was the one thing
+standing between the first migrated repository and leaving Actions.
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    port: 5432                    # the port *inside* the container
+    env:
+      POSTGRES_PASSWORD: test
+    ready: pg_isready -U postgres
+    ready_timeout: 60s
+```
+
+The gate and every task get the address:
+
+```
+KILN_SERVICE_POSTGRES_HOST=127.0.0.1
+KILN_SERVICE_POSTGRES_PORT=54190
+```
+
+**The host port is docker's choice, not yours.** A kiln box runs many
+repositories; two pipelines that both bound 5432 would collide, and the symptom
+would be a test failing for reasons unrelated to the commit. The published port
+is read back after the container starts and handed over in the environment. It
+binds loopback only — a test database should not be reachable from the network.
+
+**`ready` is polled until it succeeds**, inside the container, before the gate
+starts. Without it the gate begins the instant the container does, which is
+well before postgres accepts connections; `kiln doctor` warns about a service
+that has no probe.
+
+**Teardown is guaranteed** — after the tasks, on failure, on cancellation, and
+if a later service fails to start the earlier ones come down before the error
+is returned. A leaked container holds a port on a box that is about to try
+again on the next tick.
+
+Service addresses reach even a fork pull request's gate. They are ephemeral
+loopback ports rather than secrets, and a fork's tests need the database as
+much as anyone's.
+
+## `tasks`
+
+The automation that is neither a check nor an artifact: uploading a scan
+result, opening a remediation pull request, refreshing a docs site.
+
+```yaml
+tasks:
+  sarif:
+    on: [push, pull_request]
+    run: |
+      nox scan --format sarif --output nox.sarif
+      gh api repos/$GITHUB_REPOSITORY/code-scanning/sarifs -f commit_sha=$KILN_SHA ...
+
+  remediate:
+    on: [schedule]
+    every: 24h
+    run: nox remediate --open-pr
+    allow_failure: true
+
+  docs:
+    on: [push]
+    workdir: site
+    run: make build && rsync -a public/ /srv/www/
+```
+
+### `keep` — files that outlive the worktree
+
+```yaml
+tasks:
+  report:
+    on: [push, pull_request]
+    run: go test -coverprofile=coverage.out ./... && nox scan --format sarif -o nox.sarif
+    keep: ["coverage.out", "*.sarif"]
+```
+
+The worktree is destroyed the moment the run ends — which is exactly when
+somebody wants the coverage report, or the scan output that explains why the
+run failed. Matches are copied to `.kiln/runs/<run-id>/<task>/` before the tree
+goes, and `kiln status` lists them.
+
+**Kept on failure too**, especially on failure: withholding the log that
+explains a failure in the one case it matters would be the wrong way round.
+
+**A glob that matches nothing is reported.** It is nearly always a typo or a
+build that did not get far enough, and silence is how somebody discovers a week
+later that the report was never kept.
+
+**Patterns cannot escape the worktree**, including through a symlink. The
+pattern comes from the repository, so `keep: ["../../.ssh/id_ed25519"]` is
+something a pull request can contain; retention writes into a directory the
+operator later reads, and must not become a way to lift files off the build
+box. Directory matches are skipped rather than walked, so a stray `*` does not
+copy the whole checkout.
+
+Retention is bounded at the last 20 runs, for the same reason the ledger caps
+itself and the docker prune keeps ten builds: a box that keeps everything
+forever fills its disk, and the first symptom is an unrelated build failing.
+
+### `pull_request` — propose what a task changed
+
+A task that edits the worktree can put the result up for review:
+
+```yaml
+tasks:
+  remediate:
+    on: [schedule]
+    every: 24h
+    run: nox remediate --fix
+    pull_request:
+      branch: kiln/nox-remediate
+      title: "chore(sec): apply nox remediations"
+      body: Opened by kiln. Review the diff before merging.
+      labels: [security]
+      base: main        # optional; the repository default otherwise
+```
+
+**Nothing happens when the worktree is clean.** A remediation task that found
+nothing to fix must not push an empty commit or open a pull request saying so
+— that is how a useful automation becomes noise people filter out, and then
+miss on the day it matters. The check says "no changes to propose".
+
+**One pull request, not one per run.** The branch is the identity: a daily task
+pushes to the same branch and updates its existing pull request. Labels are
+applied when it is opened and not re-applied afterwards, so an operator who
+removed one is not fighting the machine every morning.
+
+**The branch is rebuilt from the commit under test**, force-pushed rather than
+fast-forwarded. Yesterday's fix should not outlive the code it was fixing.
+
+**A failed task proposes nothing.** Committing whatever a half-finished
+remediation left behind would open a pull request full of a partial fix, which
+is worse than no pull request at all.
+
+**A task routed to `pull_request` may not open one** — that is a loop with a
+write credential in it, and the config refuses to load. An untrusted head is
+refused a second time at runtime, for any caller that assembles a request by
+hand.
+
+With no `GITHUB_TOKEN` the branch is still pushed and the check says so. The
+work is not thrown away; it just needs a human to notice it.
+
+| Field | Meaning |
+|---|---|
+| `on` | `pull_request`, `push`, `tag`, `schedule` — required |
+| `every` | interval for `schedule`, as a duration string (`24h`, `15m`) |
+| `run` | the command, executed by `sh -euc` |
+| `workdir` | relative to the worktree root |
+| `allow_failure` | record the failure, do not fail the run |
+
+A `schedule` task fires from a `kiln watch` tick against the head of the
+tracked ref — there is no new commit, nothing is proven and nothing is
+published. The last fire time is kept beside the ledger, so the interval
+survives a restart, and a box that was off for a week fires each due task once
+rather than replaying the backlog.
+
+Each task posts its own GitHub Check, named `Kiln / <task>`, so branch
+protection can require one and a red check names the thing that broke.
+
+**A task cannot mint provenance.** That is the line this feature does not
+cross: the signed artifacts of a run are exactly what `publish:` produced, and
+no amount of task surface can add to them or make an unsigned thing look
+signed. A task's blast radius is a check that goes red and whatever the command
+itself did.
+
+Tasks run **after** publish, in a disposable worktree pinned to the commit —
+never the operator's working copy, for the same reason the gate and the build
+are not. Most tasks are about a build that happened; the ones that are not lose
+nothing by waiting, and an automation failure never stops an artifact that was
+otherwise ready to ship.
+
+One failure does not stop the others. Artifacts are a set — a release whose
+image built and whose binaries did not is incoherent — but tasks are
+independent errands, and refusing to upload a scan because a docs build broke
+would only hide the second problem behind the first.
+
+`KILN_SHA`, `KILN_REF`, `KILN_EVENT` and `KILN_TASK` are exported. They are
+named `KILN_` rather than `GITHUB_` on purpose: a task reading `GITHUB_SHA`
+would keep working if somebody moved it back into Actions and silently mean
+something different — the merge commit rather than the head.
+
+**On an untrusted head the environment is scrubbed**, exactly as it is for the
+gate. A task runs repository-authored commands, so a fork pull request that
+could read the environment would put every secret on the box one pull request
+away.
+
 ## `watch`
 
 `remote` and `ref` name the branch a tick follows. `pull_requests` and `tags`

@@ -8,6 +8,72 @@ All notable changes to kiln are documented here. The format follows
 
 ### Added
 
+- **`tasks:` — the automation a pipeline needs that is neither a check nor an
+  artifact.** Named commands routed by event (`pull_request`, `push`, `tag`,
+  `schedule`), each posting its own `Kiln / <task>` check so branch protection
+  can require one and a red check names the thing that broke.
+
+  The line this does not cross: **a task cannot mint provenance.** The signed
+  artifacts of a run are exactly what `publish:` produced, so growing this
+  surface can never dilute the claim kiln exists to make. `.warden.yaml`
+  remains the only check language; this is automation, and it is deliberately
+  the weakest of the three things a pipeline does.
+
+  Tasks run after publish, in a disposable worktree pinned to the commit —
+  never the operator's working copy — with the environment scrubbed on an
+  untrusted head, exactly as the gate runs. One failure does not stop the
+  others: artifacts are a set, tasks are independent errands, and hiding the
+  second problem behind the first helps nobody. `allow_failure` records a
+  failure without failing the run, and concludes the check *neutral* rather
+  than red, because a red check for something declared advisory is how a wall
+  of red gets ignored.
+
+- **`services:` — containers the gate needs beside it.** The blocker the first
+  migration found: skene and vorhut both use Actions service containers, so
+  neither could leave. An image, an environment and a readiness probe; the gate
+  and every task get `KILN_SERVICE_<NAME>_HOST/PORT`.
+
+  The host port is allocated by docker and read back rather than fixed. A box
+  runs many repositories, and two pipelines both binding 5432 would collide in
+  a way that reads as a flaky test. Loopback only, since a test database should
+  not be reachable from the network. Readiness is polled before the gate
+  starts, because a gate that begins before postgres accepts connections fails
+  in a way nobody debugs twice. Teardown is guaranteed — after the tasks, on
+  failure, on cancellation, and a service that fails to start takes down the
+  ones already up before returning.
+
+  **`keep:` on a task** copies declared globs out of the worktree before it is
+  destroyed, into `.kiln/runs/<run-id>/<task>/` — the local answer to 22
+  upload-artifact uses. Kept on failure too, especially on failure: the log
+  that explains a failure is exactly what somebody wants after the tree is
+  gone. A glob matching nothing is reported rather than passed over. Patterns
+  cannot escape the worktree, including through a symlink, because the pattern
+  comes from the repository and retention writes somewhere an operator reads.
+  Bounded at the last 20 runs.
+
+  **`pull_request:` on a task** commits what the command changed, pushes the
+  branch and opens or updates a pull request — the capability 19 repos depend
+  on the shared nox-remediate workflow for. Nothing happens when the worktree
+  is clean: an empty commit and a pull request saying "nothing to fix" is how
+  an automation becomes noise. One branch, so a daily task updates its own
+  pull request rather than opening thirty; labels applied on creation only, so
+  an operator who removed one is not fighting the machine every morning; the
+  branch rebuilt from the commit under test, so yesterday's fix does not
+  outlive the code it was fixing. A failed task proposes nothing. A task routed
+  to `pull_request` may not open one — that is a loop with a write credential
+  in it — and an untrusted head is refused again at runtime.
+
+  Scheduled tasks fire from the watch tick, against the head of the tracked
+  ref, with the last run recorded beside the ledger so an interval survives a
+  restart. A box that was off for a week fires each due task **once** when it
+  comes back — cron catch-up is how a nightly remediation job opens seven pull
+  requests at breakfast. A task is marked fired *before* it runs, so one that
+  takes the process down does not re-fire on every restart.
+
+  Commands run under `sh -euc`: `-e` so a script that fails halfway fails
+  rather than reporting the status of its last echo, `-u` so a typo'd variable
+  is an error instead of an empty string deleting the wrong directory.
+
 - **`kiln verify --policy` — verification you can adopt without adopting
   kiln.** Producing provenance means changing how you build; checking it does
   not. The policy file declares whose signature counts, which builders are

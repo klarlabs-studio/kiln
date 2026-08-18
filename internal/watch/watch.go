@@ -31,6 +31,7 @@ import (
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/prune"
 	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/schedule"
 	"go.klarlabs.de/kiln/internal/store"
 	"go.klarlabs.de/kiln/internal/worktree"
 )
@@ -69,6 +70,13 @@ type Watcher struct {
 	BranchesOnly bool
 	// FetchAttempts bounds the per-fetch retry. Zero uses the default.
 	FetchAttempts int
+	// Schedule remembers when each scheduled task last fired. Nil disables
+	// scheduled tasks, which is what a caller with no persistent directory —
+	// a test, a dry run — should get.
+	Schedule *schedule.Store
+	// Now is the clock, injectable so a test can state what "tomorrow" means
+	// rather than sleep through it.
+	Now func() time.Time
 	// Pruner reclaims docker disk each tick. Nil disables it.
 	Pruner *prune.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
@@ -118,6 +126,12 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 
 	if err := w.fetch(ctx); err != nil {
 		return Result{}, err
+	}
+
+	// After the fetch, so a scheduled task runs against the head that exists
+	// now rather than whatever was last pulled.
+	if !dryRun {
+		w.runScheduled(ctx)
 	}
 
 	jobs, err := w.discover(ctx)
@@ -382,6 +396,66 @@ func (w *Watcher) discover(ctx context.Context) ([]Job, error) {
 		jobs = append(jobs, prJobs...)
 	}
 	return jobs, nil
+}
+
+// runScheduled fires the scheduled tasks that are due.
+//
+// Never fatal to the tick. A remediation job that cannot run is a problem, but
+// stopping the watcher from discovering and building commits because of it
+// would turn a broken errand into a stopped pipeline.
+func (w *Watcher) runScheduled(ctx context.Context) {
+	log := w.logger()
+	if w.Schedule == nil {
+		return
+	}
+	due := w.Pipeline.TasksFor(config.ScheduleEvent)
+	if len(due) == 0 {
+		return
+	}
+
+	now := time.Now
+	if w.Now != nil {
+		now = w.Now
+	}
+
+	var fire []config.NamedTask
+	for _, nt := range due {
+		ready, err := w.Schedule.DueAt(nt.Name, nt.Task.Every.Std(), now())
+		if err != nil {
+			log.Warn("could not read schedule state", "task", nt.Name, "err", err)
+			continue
+		}
+		if ready {
+			fire = append(fire, nt)
+		}
+	}
+	if len(fire) == 0 {
+		return
+	}
+
+	head, err := w.branchJob(ctx)
+	if err != nil {
+		log.Warn("scheduled tasks skipped: cannot resolve the tracked branch", "err", err)
+		return
+	}
+
+	// Marked as fired before running, not after. A task that takes down the
+	// process would otherwise re-fire on every restart until it stopped doing
+	// so — a loop with an audience, for anything that opens a pull request.
+	for _, nt := range fire {
+		if err := w.Schedule.Fired(nt.Name, now()); err != nil {
+			log.Warn("could not record schedule state; skipping to avoid a repeat loop",
+				"task", nt.Name, "err", err)
+			return
+		}
+	}
+
+	log.Info("running scheduled tasks", "count", len(fire), "sha", run.ShortSHA(head.SHA))
+	if _, err := w.Engine.RunScheduled(ctx, engine.Request{
+		Dir: w.Dir, SHA: head.SHA, Ref: head.Ref, Repo: w.Repo, Pipeline: w.Pipeline,
+	}, fire); err != nil {
+		log.Error("scheduled tasks failed", "err", err)
+	}
 }
 
 func (w *Watcher) branchJob(ctx context.Context) (Job, error) {
