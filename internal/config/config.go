@@ -82,7 +82,28 @@ type Pipeline struct {
 	// artifacts of a run are exactly what `publish:` produced, so growing this
 	// surface can never dilute the claim kiln exists to make.
 	Tasks map[string]Task `yaml:"tasks"`
-	Watch Watch           `yaml:"watch"`
+	// Services are containers started beside the gate — a database a test
+	// suite talks to, a fake API. They run for the whole of prove and tasks
+	// and are torn down afterwards whatever happened.
+	Services map[string]Service `yaml:"services,omitempty"`
+	Watch    Watch              `yaml:"watch"`
+}
+
+// Service is a container the gate needs beside it.
+type Service struct {
+	Image string            `yaml:"image"`
+	Env   map[string]string `yaml:"env,omitempty"`
+	// Command overrides the image's entrypoint arguments.
+	Command []string `yaml:"command,omitempty"`
+	// Port is the port *inside* the container. The host port is allocated by
+	// docker and exported as KILN_SERVICE_<NAME>_PORT — never fixed, because a
+	// box runs many repositories and two pipelines both wanting 5432 would
+	// collide in a way that looks like a flaky test.
+	Port int `yaml:"port,omitempty"`
+	// Ready is a command run inside the container until it succeeds, e.g.
+	// `pg_isready -U postgres`.
+	Ready        string   `yaml:"ready,omitempty"`
+	ReadyTimeout Duration `yaml:"ready_timeout,omitempty"`
 }
 
 // Task is one named automation.
@@ -481,6 +502,9 @@ func (p Pipeline) validate() error {
 	if err := p.validateTasks(); err != nil {
 		return err
 	}
+	if err := p.validateServices(); err != nil {
+		return err
+	}
 	for i, a := range p.Publish {
 		if err := a.validate(i); err != nil {
 			return err
@@ -566,6 +590,30 @@ func (p Pipeline) validateTasks() error {
 			// The worktree is the boundary. A task reaching outside it is
 			// reaching into whatever else the box builds.
 			return fmt.Errorf("%s.workdir must stay inside the worktree, got %q", where, t.Workdir)
+		}
+	}
+	return nil
+}
+
+// validateServices refuses a service that cannot work.
+func (p Pipeline) validateServices() error {
+	for name, svc := range p.Services {
+		where := fmt.Sprintf("services.%s", name)
+		switch {
+		case strings.TrimSpace(name) == "":
+			return errors.New("services: a service needs a name")
+		case strings.ContainsAny(name, " \t/"):
+			return fmt.Errorf("%s: a service name becomes a container name and an environment "+
+				"variable; keep it to letters, digits, dashes and underscores", where)
+		case strings.TrimSpace(svc.Image) == "":
+			return fmt.Errorf("%s.image is required", where)
+		case svc.Port < 0 || svc.Port > 65535:
+			return fmt.Errorf("%s.port %d is not a port", where, svc.Port)
+		case svc.Ready != "" && svc.Port == 0:
+			// Not fatal in principle, but it is always a mistake: a readiness
+			// probe with nothing listening means the author expected an
+			// address to be exported and will not get one.
+			return fmt.Errorf("%s has ready: but no port: nothing would be exported to connect to", where)
 		}
 	}
 	return nil

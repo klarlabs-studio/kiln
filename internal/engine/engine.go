@@ -28,6 +28,7 @@ import (
 	"go.klarlabs.de/kiln/internal/provenance"
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/service"
 	"go.klarlabs.de/kiln/internal/store"
 	"go.klarlabs.de/kiln/internal/task"
 	"go.klarlabs.de/kiln/internal/version"
@@ -54,6 +55,9 @@ type Request struct {
 	Pipeline config.Pipeline
 	// Output, when set, streams subprocess output to a terminal.
 	Output io.Writer
+	// ServiceEnv is the addresses of the running service containers, exported
+	// to the gate and to tasks. Set by the engine, not by callers.
+	ServiceEnv []string
 }
 
 // SourceAttester produces the source gate's own attestation for a commit.
@@ -92,6 +96,9 @@ type Engine struct {
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
 	ToolVersions map[string]string
+	// Services starts the containers a gate needs beside it. Nil disables
+	// them, which is what a pipeline with no services: block gets anyway.
+	Services *service.Runner
 	// KeepRoot is where retained task output is written, normally the .kiln
 	// directory beside the ledger. Empty disables retention.
 	KeepRoot string
@@ -147,6 +154,20 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 		"ref", req.Ref, "fork", req.Fork,
 		"secrets", policy.Secrets, "may_publish", policy.Publish, "may_skip", policy.Skip)
 	e.persist(r, log)
+
+	// Services come up before the gate and go down after the tasks, whatever
+	// happened in between. The gate is the thing that usually needs them —
+	// a test suite talking to postgres — so starting them after it would
+	// serve nobody.
+	services, err := e.startServices(ctx, req, r, log)
+	if err != nil {
+		r.Fail(err)
+		e.persist(r, log)
+		return r, err
+	}
+	defer services.Stop()
+
+	req.ServiceEnv = services.Env()
 
 	gate, err := e.doProve(ctx, req, r, policy, log)
 	if err != nil {
@@ -247,11 +268,12 @@ func (e *Engine) doProve(
 	} else {
 		err = e.withPhaseTimeout(ctx, "prove", func(ctx context.Context) error {
 			return e.Prover.Prove(ctx, prove.Request{
-				RepoDir: req.Dir,
-				SHA:     req.SHA,
-				Policy:  policy,
-				Nox:     req.Pipeline.Prove.Nox,
-				Output:  req.Output,
+				RepoDir:    req.Dir,
+				SHA:        req.SHA,
+				Policy:     policy,
+				Nox:        req.Pipeline.Prove.Nox,
+				Output:     req.Output,
+				ServiceEnv: req.ServiceEnv,
 			})
 		})
 	}
@@ -490,6 +512,22 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	return r, nil
 }
 
+// startServices brings up the pipeline's service containers.
+func (e *Engine) startServices(
+	ctx context.Context, req Request, r *run.Run, log obs.Logger,
+) (*service.Set, error) {
+	if e.Services == nil || len(req.Pipeline.Services) == 0 {
+		return &service.Set{}, nil
+	}
+	log.Info("starting services", "count", len(req.Pipeline.Services))
+
+	set, err := e.Services.Start(ctx, req.Pipeline.Services, r.ID)
+	if err != nil {
+		return &service.Set{}, fmt.Errorf("services: %w", err)
+	}
+	return set, nil
+}
+
 // doTasks runs every task routed to this event.
 //
 // Unlike publish, one failure does not stop the rest. The artifacts of a
@@ -545,7 +583,7 @@ func (e *Engine) runTasks(
 			result = e.Tasks.Run(ctx, task.Request{
 				Name: nt.Name, Task: nt.Task,
 				Dir: dir, SHA: req.SHA, Ref: req.Ref, Event: req.Event.String(),
-				Policy: policy,
+				Policy: policy, ServiceEnv: req.ServiceEnv,
 				// Tee: the operator watching a terminal sees it live, and the
 				// check body gets the same text without a second run.
 				Output: io.MultiWriter(&output, orDiscard(req.Output)),

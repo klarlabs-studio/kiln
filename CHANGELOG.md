@@ -28,6 +28,20 @@ All notable changes to kiln are documented here. The format follows
   than red, because a red check for something declared advisory is how a wall
   of red gets ignored.
 
+- **`services:` — containers the gate needs beside it.** The blocker the first
+  migration found: skene and vorhut both use Actions service containers, so
+  neither could leave. An image, an environment and a readiness probe; the gate
+  and every task get `KILN_SERVICE_<NAME>_HOST/PORT`.
+
+  The host port is allocated by docker and read back rather than fixed. A box
+  runs many repositories, and two pipelines both binding 5432 would collide in
+  a way that reads as a flaky test. Loopback only, since a test database should
+  not be reachable from the network. Readiness is polled before the gate
+  starts, because a gate that begins before postgres accepts connections fails
+  in a way nobody debugs twice. Teardown is guaranteed — after the tasks, on
+  failure, on cancellation, and a service that fails to start takes down the
+  ones already up before returning.
+
   **`keep:` on a task** copies declared globs out of the worktree before it is
   destroyed, into `.kiln/runs/<run-id>/<task>/` — the local answer to 22
   upload-artifact uses. Kept on failure too, especially on failure: the log

@@ -39,6 +39,10 @@ type Request struct {
 	// Output, when set, receives the gate's live stdout/stderr so an operator
 	// watching `kiln run` sees progress rather than a long silence.
 	Output io.Writer
+	// ServiceEnv carries the addresses of the run's service containers. The
+	// gate is usually what needs them — a test suite talking to the database
+	// beside it — so they have to survive the environment scrubbing below.
+	ServiceEnv []string
 }
 
 // Prover gates a commit.
@@ -106,7 +110,7 @@ func (w *Warden) Prove(ctx context.Context, req Request) error {
 }
 
 func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
-	env := w.env(req.Policy)
+	env := w.env(req)
 
 	if _, err := w.Runner.Run(ctx, execx.Cmd{
 		Name: w.WardenBin,
@@ -170,16 +174,24 @@ func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
 // concrete meaning of the fork row in the isolation matrix: the code about to
 // execute was authored by whoever opened the pull request, so the environment
 // it executes in must not contain a registry password to steal.
-func (w *Warden) env(policy isolation.Policy) []string {
-	if policy.Secrets {
-		return nil
+func (w *Warden) env(req Request) []string {
+	if req.Policy.Secrets {
+		if len(req.ServiceEnv) == 0 {
+			return nil
+		}
+		// Non-nil replaces the whole environment, so an inherited one has to
+		// be rebuilt explicitly once there is anything to add to it.
+		return append(os.Environ(), req.ServiceEnv...)
 	}
-	return append(execx.Scrub(os.Environ()),
+	scrubbed := append(execx.Scrub(os.Environ()),
 		// Mark the isolation so a repo's own checks can behave accordingly —
 		// skipping an integration test that needs a credential, say — instead
 		// of failing confusingly on a variable that is not there.
 		"KILN_ISOLATED=1",
 	)
+	// Service addresses are not secrets — they are ephemeral loopback ports
+	// on this box — and a fork's tests need the database as much as anyone's.
+	return append(scrubbed, req.ServiceEnv...)
 }
 
 // Func adapts a function to the Prover interface, for tests and for the dry

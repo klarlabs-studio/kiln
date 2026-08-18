@@ -1,6 +1,6 @@
 {
   "project_id": "kiln",
-  "version": 7,
+  "version": 11,
   "task_states": {
     "task-core-foundation": {
       "status": "pending",
@@ -16,8 +16,14 @@
       "elapsed_minutes": 2
     },
     "task-migrate-one-private-repository-off-actions-end-to-end": {
-      "status": "pending",
+      "status": "done",
       "path": "",
+      "owner": "Felix Geelhaar",
+      "evidence": [
+        "klarlabs-studio/rollops-studio#12 — config prepared and verified locally (6-step gate, 3m17s, coverage retained). Cutover (box + branch protection + workflow deletion) is the operator's step. Gaps found: no service containers, no cross-platform matrix, no fresh VM per job."
+      ],
+      "started_at": "2026-08-18T22:45:37.742359+02:00",
+      "completed_at": "2026-08-18T22:45:37.758189+02:00",
       "elapsed_minutes": 0
     },
     "task-open-a-pull-request-from-a-task": {
@@ -29,17 +35,18 @@
       "elapsed_minutes": 0
     },
     "task-retain-a-task-s-output-files": {
-      "status": "in_progress",
+      "status": "done",
       "path": "",
       "owner": "Felix Geelhaar",
       "started_at": "2026-08-18T22:24:42.677861+02:00",
-      "elapsed_minutes": 0
+      "completed_at": "2026-08-18T22:29:00.735257+02:00",
+      "elapsed_minutes": 4
     },
     "task-upload-a-task-s-sarif-to-code-scanning": {
-      "status": "pending",
+      "status": "blocked",
       "path": "",
       "elapsed_minutes": 0
     }
   },
-  "updated_at": "2026-08-18T22:24:42.677861+02:00"
+  "updated_at": "2026-08-18T22:45:37.75819+02:00"
 }

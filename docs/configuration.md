@@ -203,6 +203,50 @@ a cosign key pair (`COSIGN_KEY` / `COSIGN_PASSWORD`) or an OIDC token from
 somewhere. `KILN_DRY=1` skips the signing step for this reason — the static
 `signs:` check still runs, and it is the guarantee.
 
+## `services`
+
+Containers the gate needs beside it — the database a test suite talks to, a
+fake API. This is the Actions `services:` equivalent, and it was the one thing
+standing between the first migrated repository and leaving Actions.
+
+```yaml
+services:
+  postgres:
+    image: postgres:16
+    port: 5432                    # the port *inside* the container
+    env:
+      POSTGRES_PASSWORD: test
+    ready: pg_isready -U postgres
+    ready_timeout: 60s
+```
+
+The gate and every task get the address:
+
+```
+KILN_SERVICE_POSTGRES_HOST=127.0.0.1
+KILN_SERVICE_POSTGRES_PORT=54190
+```
+
+**The host port is docker's choice, not yours.** A kiln box runs many
+repositories; two pipelines that both bound 5432 would collide, and the symptom
+would be a test failing for reasons unrelated to the commit. The published port
+is read back after the container starts and handed over in the environment. It
+binds loopback only — a test database should not be reachable from the network.
+
+**`ready` is polled until it succeeds**, inside the container, before the gate
+starts. Without it the gate begins the instant the container does, which is
+well before postgres accepts connections; `kiln doctor` warns about a service
+that has no probe.
+
+**Teardown is guaranteed** — after the tasks, on failure, on cancellation, and
+if a later service fails to start the earlier ones come down before the error
+is returned. A leaked container holds a port on a box that is about to try
+again on the next tick.
+
+Service addresses reach even a fork pull request's gate. They are ephemeral
+loopback ports rather than secrets, and a fork's tests need the database as
+much as anyone's.
+
 ## `tasks`
 
 The automation that is neither a check nor an artifact: uploading a scan

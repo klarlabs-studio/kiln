@@ -26,5 +26,9 @@ features:
       title: Migrate one private repository off Actions end to end
       description: 'The proof, and the thing that will find what the feature list missed. Pick one private repo, express its whole gate in `.warden.yaml` (today kiln''s own has vet/test/lint while Actions additionally runs the coverage gate, nox, build, examples, goreleaser check and govulncheck), point a kiln box at it with `kiln watch --every 1m`, require the Kiln checks in branch protection, and delete the workflow file. Write down what broke. Explicit non-goals: GitHub Pages deploys stay in Actions (a deployment belongs with RollOps), and npm publishing of public packages stays in Actions because npm provenance can only be minted from GitHub Actions or GitLab CI on cloud runners — though npm issues no provenance for private repositories at all, so private packages lose nothing by moving.'
       requirements: []
+    - id: service-containers-for-the-gate-and-tasks
+      title: Service containers for the gate and tasks
+      description: 'The concrete blocker found by the first migration: skene and vorhut both use Actions `services:` to run a database beside the job, and kiln has no equivalent, so neither can leave Actions. Add `services:` to .kiln.yaml — an image, environment, and a readiness command — started before the gate, torn down after the tasks whatever happens, including on cancellation and panic. Host ports are allocated dynamically and exported (KILN_SERVICE_<NAME>_HOST/PORT) rather than fixed: a box runs many repositories and two pipelines both wanting 5432 would collide in a way that looks like a flaky test. Readiness is waited for with a timeout, because a gate that starts before the database accepts connections fails in a way nobody debugs twice.'
+      requirements: []
 constraints: []
 version: 0.1.0

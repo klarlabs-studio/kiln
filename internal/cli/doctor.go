@@ -127,6 +127,25 @@ func (r *doctorReport) collect(ctx context.Context, deps *boot.Deps, sha, ref st
 		r.checkArtifacts(ctx, deps, sha, ref)
 	}
 
+	if len(deps.Pipeline.Services) > 0 {
+		r.section("services")
+		for _, name := range slices.Sorted(maps.Keys(deps.Pipeline.Services)) {
+			svc := deps.Pipeline.Services[name]
+			if svc.Port > 0 {
+				r.ok("%s from %s, port %d → KILN_SERVICE_%s_HOST/PORT",
+					name, svc.Image, svc.Port, strings.ToUpper(strings.ReplaceAll(name, "-", "_")))
+			} else {
+				r.ok("%s from %s (no port published)", name, svc.Image)
+			}
+			if svc.Ready == "" {
+				// Not an error, but it is the cause of the flake that follows:
+				// the gate starts the instant the container does, which is
+				// well before a database accepts connections.
+				r.warn("  %s has no ready: probe; the gate may start before it accepts connections", name)
+			}
+		}
+	}
+
 	if len(deps.Pipeline.Tasks) > 0 {
 		r.section("tasks")
 		r.checkTasks(deps)

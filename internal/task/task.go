@@ -47,6 +47,8 @@ type Request struct {
 	Policy isolation.Policy
 	// Output receives the command's stdout and stderr as it runs.
 	Output io.Writer
+	// ServiceEnv carries the addresses of the run's service containers.
+	ServiceEnv []string
 }
 
 // Result is what a task did.
@@ -110,7 +112,7 @@ func (t *Runner) Run(ctx context.Context, req Request) Result {
 		Name:   shell,
 		Args:   []string{"-euc", req.Task.Run},
 		Dir:    dir,
-		Env:    append(environ, t.env(req)...),
+		Env:    append(append(environ, req.ServiceEnv...), t.env(req)...),
 		Stdout: req.Output,
 		Stderr: req.Output,
 	}
