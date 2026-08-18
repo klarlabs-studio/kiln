@@ -233,6 +233,18 @@ func TestIsRepo(t *testing.T) {
 	}
 }
 
+// ownTemp gives the reaper tests a temp directory of their own.
+//
+// Reap sweeps os.TempDir(), and without this the suite would be rummaging
+// through the real one: on a developer's box that means a `go test ./...`
+// could delete the checkout of a kiln build running in another terminal, and
+// in CI it means these tests and the watch package's reaper are working the
+// same directory at the same time.
+func ownTemp(t *testing.T) {
+	t.Helper()
+	t.Setenv("TMPDIR", t.TempDir())
+}
+
 // abandoned fabricates the leavings of a killed run: a kiln temp directory
 // with a checkout inside it that git no longer knows about.
 func abandoned(t *testing.T, age time.Duration) string {
@@ -254,6 +266,7 @@ func abandoned(t *testing.T, age time.Duration) string {
 }
 
 func TestReapRemovesAnAbandonedTree(t *testing.T) {
+	ownTemp(t)
 	repo := gittest.New(t)
 	repo.Commit("first", "a.txt", "x\n")
 	stale := abandoned(t, 48*time.Hour)
@@ -272,6 +285,7 @@ func TestReapRemovesAnAbandonedTree(t *testing.T) {
 }
 
 func TestReapSparesARecentTree(t *testing.T) {
+	ownTemp(t)
 	repo := gittest.New(t)
 	repo.Commit("first", "a.txt", "x\n")
 	fresh := abandoned(t, time.Minute)
@@ -288,6 +302,7 @@ func TestReapSparesARecentTree(t *testing.T) {
 }
 
 func TestReapNeverTouchesALiveTree(t *testing.T) {
+	ownTemp(t)
 	repo := gittest.New(t)
 	sha := repo.Commit("first", "a.txt", "x\n")
 
@@ -315,7 +330,74 @@ func TestReapNeverTouchesALiveTree(t *testing.T) {
 	}
 }
 
+func TestReapCollectsWhatAKilledRunLeftRegistered(t *testing.T) {
+	ownTemp(t)
+	repo := gittest.New(t)
+	sha := repo.Commit("first", "a.txt", "x\n")
+
+	tree, err := Add(t.Context(), execx.NewSystem(), repo.Dir, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// A SIGKILL takes the process without running any cleanup, so the checkout
+	// and git's administrative entry both survive it — and the kernel drops
+	// the flock. Reproduce exactly that: no Close, no `worktree remove`.
+	if err := tree.owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	outer := strings.TrimSuffix(tree.Path, "/tree")
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(outer, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	// git still lists it — `worktree prune` only drops entries whose directory
+	// has gone. Trusting that listing alone would make the leavings of every
+	// killed run permanent, which is the one case the reaper exists for.
+	if _, err := os.Stat(outer); !os.IsNotExist(err) {
+		t.Error("a killed run's checkout survived because git still had it registered")
+	}
+}
+
+func TestReapSparesAnotherRepositorysLiveTree(t *testing.T) {
+	ownTemp(t)
+	mine := gittest.New(t)
+	mine.Commit("first", "a.txt", "x\n")
+
+	theirs := gittest.New(t)
+	sha := theirs.Commit("first", "b.txt", "y\n")
+	tree, err := Add(t.Context(), execx.NewSystem(), theirs.Dir, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tree.Close(context.Background()) }()
+
+	// git can only tell us about our own repository's worktrees, so a tree
+	// belonging to another checkout on the same box looks exactly like
+	// abandoned leavings. Backdate it past the cutoff: only the ownership lock
+	// can save it now.
+	outer := strings.TrimSuffix(tree.Path, "/tree")
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(outer, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), mine.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(tree.Path); err != nil {
+		t.Errorf("reaped another repository's live checkout: %v", err)
+	}
+}
+
 func TestReapIgnoresForeignDirectories(t *testing.T) {
+	ownTemp(t)
 	repo := gittest.New(t)
 	repo.Commit("first", "a.txt", "x\n")
 
@@ -340,6 +422,7 @@ func TestReapIgnoresForeignDirectories(t *testing.T) {
 }
 
 func TestReapPrunesGitsRecord(t *testing.T) {
+	ownTemp(t)
 	repo := gittest.New(t)
 	sha := repo.Commit("first", "a.txt", "x\n")
 

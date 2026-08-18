@@ -314,7 +314,9 @@ means fix the code, the other means look at the machine.
 
 **Abandoned worktrees are collected.** A run cleans up after itself, but not
 through SIGKILL or an OOM kill. Each tick reaps kiln-prefixed temp directories
-older than a day, skipping anything git still lists as live.
+older than a day, skipping any a live process still holds a lock on — the
+kernel drops that lock when a build dies, so the leavings become collectable
+without anything having to notice.
 
 **Docker disk is reclaimed.** Each tick keeps the last `keep:` sha-tagged
 builds of the images this pipeline publishes (default 10) and prunes build
