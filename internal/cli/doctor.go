@@ -231,7 +231,13 @@ func (r *doctorReport) checkPublishTools(deps *boot.Deps) {
 
 func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	if deps.ChecksEnabled() {
-		r.ok("GITHUB_TOKEN present: checks will be posted as %q and %q", "Kiln / Prove", "Kiln / Publish")
+		// Deliberately not promising check runs. The Checks API only accepts a
+		// GitHub App token; a personal access token gets a 403 and kiln falls
+		// back to commit statuses. Both work as required contexts, and saying
+		// "checks will be posted" flatly would be false half the time.
+		r.ok("GITHUB_TOKEN present: results post as %q, %q and one per task",
+			"Kiln / Prove", "Kiln / Publish")
+		r.note("a personal access token posts commit statuses; check runs need a GitHub App")
 	} else {
 		r.warn("no usable GITHUB_TOKEN: no checks, and every pull request is treated as a fork")
 	}

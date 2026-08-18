@@ -126,6 +126,21 @@ An unparsable value falls back to the default rather than removing the bound.
 A timeout exits 3, not 2: it is a machine problem, in the same bucket as a
 missing toolchain.
 
+## Checks, and what your token can post
+
+Kiln reports each phase and each task under a name branch protection can
+require: `Kiln / Prove`, `Kiln / Publish`, `Kiln / <task>`.
+
+**Which API carries them depends on the token.** Check runs — the rich kind,
+with a body — can only be created by a **GitHub App**. Inside Actions that is
+invisible, because `GITHUB_TOKEN` there is an app installation token. A
+personal access token gets `403 You must authenticate via a GitHub App`, so
+kiln falls back to commit statuses: same names, same gating power in branch
+protection, a one-line description instead of a body.
+
+If you want the richer output, register a GitHub App for your org, install it
+on the repositories kiln watches, and give kiln an installation token.
+
 ## Disk
 
 Each watch tick reaps worktrees left by killed runs — directories under the
