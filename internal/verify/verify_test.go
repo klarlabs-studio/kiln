@@ -400,3 +400,46 @@ func TestAnImageReferenceIsAccepted(t *testing.T) {
 		t.Error("an empty reference must be refused")
 	}
 }
+
+func TestAUsableProvenanceWinsOverAMalformedOne(t *testing.T) {
+	// A digest routinely carries several attestations, and a stale or
+	// malformed one must not mask the good one behind it. This exact shape —
+	// a statement nested inside a statement — is what kiln produced before it
+	// learned that cosign's --predicate wants the predicate body.
+	malformed := `{"_type":"https://in-toto.io/Statement/v0.1",` +
+		`"predicateType":"https://slsa.dev/provenance/v1","predicate":{"_type":"x","predicate":{}}}`
+	line, _ := json.Marshal(map[string]string{
+		"payload": base64.StdEncoding.EncodeToString([]byte(malformed)),
+	})
+
+	fake := execx.NewFake()
+	fake.On("cosign verify-attestation", execx.Response{
+		Stdout: string(line) + "\n" + envelope(t, statement(t, nil)),
+	})
+
+	report, err := New(fake).Verify(t.Context(), keyed())
+	if err != nil {
+		t.Fatalf("Verify: %v\n%s", err, report)
+	}
+	if report.Statement == nil || report.Statement.SourceCommit() != commit {
+		t.Errorf("picked the wrong attestation: %+v", report.Statement)
+	}
+}
+
+func TestTheOnlyAttestationIsReportedEvenIfWeak(t *testing.T) {
+	// Nothing better available: say what is actually there rather than
+	// claiming no provenance exists.
+	weak := statement(t, nil)
+	weak.Predicate.BuildDefinition.ResolvedDependencies = nil
+	fake := execx.NewFake()
+	fake.On("cosign verify-attestation", execx.Response{Stdout: envelope(t, weak)})
+
+	report, _ := New(fake).Verify(t.Context(), keyed())
+
+	if report.Statement == nil {
+		t.Fatal("dropped the only attestation there was")
+	}
+	if got := link(report, "source gate"); got.Status != Fail {
+		t.Errorf("source gate = %+v, want the missing commit reported", got)
+	}
+}

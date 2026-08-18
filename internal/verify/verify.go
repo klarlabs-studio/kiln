@@ -323,13 +323,19 @@ func describeTrust(opts Options) string {
 	return opts.Identity + " via " + opts.Issuer
 }
 
-// statementFromAttestations reads cosign's output.
+// statementFromAttestations reads cosign's output and picks the usable
+// provenance.
 //
 // cosign emits one JSON object per line, each a DSSE envelope whose payload is
-// the base64 statement. There may be several attestations on one digest, so
-// the first parsable SLSA provenance wins and the rest are ignored.
+// the base64 statement. A digest routinely carries several — an SBOM, a
+// rebuild's second provenance, one left by an older tool version — and taking
+// the first SLSA-typed one is not enough: a stale or malformed entry would
+// mask the good one sitting behind it. cosign has already established every
+// envelope was signed by a trusted key, so preferring one that actually names
+// a builder and a commit costs nothing and is what a reader wants.
 func statementFromAttestations(out string) (attest.Statement, error) {
 	var lastErr error
+	var fallback *attest.Statement
 	for line := range strings.SplitSeq(strings.TrimSpace(out), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -351,7 +357,18 @@ func statementFromAttestations(out string) (attest.Statement, error) {
 			lastErr = err
 			continue
 		}
-		return stmt, nil
+		if stmt.BuiltByKiln() && stmt.SourceCommit() != "" {
+			return stmt, nil
+		}
+		if fallback == nil {
+			// Keep it: if nothing better turns up, reporting what is actually
+			// there beats reporting nothing at all.
+			kept := stmt
+			fallback = &kept
+		}
+	}
+	if fallback != nil {
+		return *fallback, nil
 	}
 	if lastErr != nil {
 		return attest.Statement{}, fmt.Errorf("no readable slsa provenance in the attestation: %w", lastErr)

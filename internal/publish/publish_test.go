@@ -482,16 +482,18 @@ func TestImageProvenancePredicateRecordsTheChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stmt, err := attest.Parse(predicate)
-	if err != nil {
-		t.Fatalf("predicate is not a statement: %v", err)
+	// The file cosign reads is the predicate body, not a whole statement —
+	// cosign wraps it and supplies the subject itself.
+	var body attest.Provenance
+	if err := json.Unmarshal(predicate, &body); err != nil {
+		t.Fatalf("predicate body is not JSON: %v", err)
 	}
-	if stmt.SourceCommit() != head {
-		t.Errorf("SourceCommit = %q, want %q", stmt.SourceCommit(), head)
+	if got := sourceCommit(body); got != head {
+		t.Errorf("gitCommit = %q, want %q", got, head)
 	}
 	// The inherited verdict must travel with the artifact: a reader deciding
 	// how far to trust it needs to know the checks did not run here.
-	gate := stmt.Predicate.BuildDefinition.InternalParameters.SourceGate
+	gate := body.BuildDefinition.InternalParameters.SourceGate
 	if gate.Reproved {
 		t.Error("predicate claims the checks ran when they were inherited")
 	}
@@ -532,4 +534,14 @@ func TestDryRunClaimsNoAttestation(t *testing.T) {
 	if res.Attested {
 		t.Error("a rehearsal must not claim provenance it never published")
 	}
+}
+
+// sourceCommit reads the pinned commit out of a predicate body.
+func sourceCommit(p attest.Provenance) string {
+	for _, dep := range p.BuildDefinition.ResolvedDependencies {
+		if c := dep.Digest["gitCommit"]; c != "" {
+			return c
+		}
+	}
+	return ""
 }

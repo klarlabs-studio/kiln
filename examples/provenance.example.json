@@ -1,0 +1,56 @@
+{
+  "_type": "https://in-toto.io/Statement/v1",
+  "subject": [
+    {
+      "name": "ghcr.io/felixgeelhaar/glossa-api",
+      "digest": {
+        "sha256": "9f2c1e4a7b3d5086c1f9a2b4d6e8103b5c7d9e1f2a3b4c5d6e7f8091a2b3c4d5"
+      }
+    }
+  ],
+  "predicateType": "https://slsa.dev/provenance/v1",
+  "predicate": {
+    "buildDefinition": {
+      "buildType": "https://klarlabs.de/kiln/buildtype/v1",
+      "externalParameters": {
+        "repository": "git+https://github.com/felixgeelhaar/glossa",
+        "ref": "refs/tags/v0.2.0",
+        "event": "tag",
+        "artifact": "image",
+        "config": "Dockerfile"
+      },
+      "internalParameters": {
+        "isolated": false,
+        "sourceGate": {
+          "tool": "warden",
+          "verified": true,
+          "reproved": true,
+          "reason": "warden gate passed: vet, test, lint"
+        }
+      },
+      "resolvedDependencies": [
+        {
+          "uri": "git+https://github.com/felixgeelhaar/glossa@refs/tags/v0.2.0",
+          "digest": {
+            "gitCommit": "c3f7aca23fa4bfa8d65b3741f46c509713cd618e"
+          },
+          "name": "source"
+        }
+      ]
+    },
+    "runDetails": {
+      "builder": {
+        "id": "https://github.com/klarlabs-studio/kiln@v0.1.0",
+        "version": {
+          "cosign": "3.1.3",
+          "warden": "0.28.0"
+        }
+      },
+      "metadata": {
+        "invocationId": "run-20260818T060000Z-1a2b3c4d",
+        "startedOn": "2026-08-18T06:00:00Z",
+        "finishedOn": "2026-08-18T06:01:30Z"
+      }
+    }
+  }
+}

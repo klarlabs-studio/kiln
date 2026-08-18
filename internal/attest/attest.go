@@ -302,14 +302,36 @@ func orUnknown(s string) string {
 	return s
 }
 
-// JSON renders the statement as the file cosign reads. Indented because a
-// predicate is something people paste into issues and read in terminals, and
-// the bytes are not the thing being signed — cosign wraps them in a DSSE
-// envelope whose payload it canonicalises itself.
+// JSON renders the whole statement — the shape a *verifier* reads back out of
+// an attestation.
+//
+// This is not what goes into cosign's --predicate file. See PredicateJSON.
 func (s Statement) JSON() ([]byte, error) {
 	data, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {
 		return nil, fmt.Errorf("attest: encode statement: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+// PredicateJSON renders just the predicate body, which is what cosign's
+// --predicate flag wants.
+//
+// The distinction is easy to get wrong and silent when you do. `cosign attest`
+// builds the in-toto statement itself: it sets _type, sets predicateType from
+// --type, derives the subject from the artifact being attested, and drops the
+// file's entire contents in as the predicate. Hand it a complete statement and
+// you get a statement nested inside a statement — predicate.predicate.
+// buildDefinition — which still signs and still verifies, so nothing complains,
+// while every field a consumer reads by path is one level from where they look.
+//
+// Letting cosign derive the subject is the better arrangement anyway: the
+// subject then comes from the artifact cosign is actually attesting rather than
+// from a builder asserting what it thinks it built.
+func (s Statement) PredicateJSON() ([]byte, error) {
+	data, err := json.MarshalIndent(s.Predicate, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("attest: encode predicate: %w", err)
 	}
 	return append(data, '\n'), nil
 }

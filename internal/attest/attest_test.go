@@ -238,3 +238,31 @@ func TestTimesAreRFC3339UTC(t *testing.T) {
 		t.Errorf("finishedOn = %q, want empty", got)
 	}
 }
+
+func TestPredicateJSONIsTheBodyCosignWants(t *testing.T) {
+	raw, err := build(t, input()).PredicateJSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatal(err)
+	}
+
+	// cosign builds the statement itself and drops this file in as the
+	// predicate. Handing it a whole statement produces predicate.predicate.
+	// buildDefinition — which signs and verifies fine, so nothing complains,
+	// while every field a consumer reads by path is one level from where they
+	// look.
+	for _, absent := range []string{"_type", "predicateType", "subject", "predicate"} {
+		if _, found := body[absent]; found {
+			t.Errorf("the predicate body carries %q; cosign would nest the whole statement", absent)
+		}
+	}
+	for _, want := range []string{"buildDefinition", "runDetails"} {
+		if _, found := body[want]; !found {
+			t.Errorf("the predicate body is missing %q", want)
+		}
+	}
+}

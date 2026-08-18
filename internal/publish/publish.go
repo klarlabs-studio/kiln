@@ -231,7 +231,9 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 // writePredicate spills the statement to a file for cosign to read. cosign
 // takes a path, not stdin, so there is no way to avoid the temp file.
 func writePredicate(stmt attest.Statement) (path string, cleanup func(), err error) {
-	data, err := stmt.JSON()
+	// The predicate body, not the statement: cosign builds the statement
+	// around it and derives the subject from the artifact itself.
+	data, err := stmt.PredicateJSON()
 	if err != nil {
 		return "", func() {}, err
 	}

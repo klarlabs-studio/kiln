@@ -418,18 +418,15 @@ func TestProvenanceCoversTheChecksumManifest(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	stmt, err := attest.Parse(predicate)
-	if err != nil {
-		t.Fatalf("predicate is not a statement: %v", err)
+	var body attest.Provenance
+	if err := json.Unmarshal(predicate, &body); err != nil {
+		t.Fatalf("predicate body is not JSON: %v", err)
 	}
-	// The manifest names every archive by digest, so one statement covers the
-	// whole release the same way one signature does.
-	if stmt.Subject[0].Name != "checksums.txt" {
-		t.Errorf("subject = %q, want the checksum manifest", stmt.Subject[0].Name)
+	if got := sourceCommit(body); got != provenanceInput().SHA {
+		t.Errorf("gitCommit = %q", got)
 	}
-	if stmt.SourceCommit() != provenanceInput().SHA {
-		t.Errorf("SourceCommit = %q", stmt.SourceCommit())
-	}
+	// cosign derives the subject from the artifact it signs, so the manifest
+	// being the subject is asserted on the command rather than the predicate.
 	// cosign must sign the manifest itself, not the predicate file.
 	if signed := fake.Find("cosign attest-blob"); !strings.Contains(signed.String(), "checksums.txt") {
 		t.Errorf("attest-blob subject = %s", signed.String())
