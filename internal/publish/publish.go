@@ -258,10 +258,11 @@ func (d *Docker) attachSourceSummary(ctx context.Context, reference string, req 
 		return nil
 	}
 
-	vsa, err := attest.ParseVSA(req.SourceVSA)
+	envelope, vsa, err := attest.ParseEnvelope(req.SourceVSA)
 	if err != nil {
-		// Something was produced but is not a summary. Publishing it as one
-		// would put a claim in the registry that nobody can read.
+		// Something was produced but is not a signed summary. Attaching it
+		// would put a claim in the registry nobody can check, and signing it
+		// here would make it kiln's claim rather than warden's.
 		d.Log.Warn("skipping the source summary", "err", err)
 		return nil
 	}
@@ -271,37 +272,39 @@ func (d *Docker) attachSourceSummary(ctx context.Context, reference string, req 
 		// contradiction worth failing on rather than papering over.
 		return fmt.Errorf("publish: warden reports %q for this commit", vsa.Predicate.VerificationResult)
 	}
-
-	body, err := vsa.PredicateJSON()
-	if err != nil {
-		return err
+	if commit := vsa.SourceCommit(); commit != "" && req.SHA != "" && commit != req.SHA {
+		// The summary is about a different commit than the one being built.
+		// Attaching it would manufacture exactly the mismatch a consumer's
+		// join is there to catch.
+		return fmt.Errorf("publish: the source summary is for %s but this build is of %s",
+			shortSHA(commit), shortSHA(req.SHA))
 	}
-	path, cleanup, err := writeBytes(body)
+
+	path, cleanup, err := writeBytes(req.SourceVSA)
 	if err != nil {
 		return err
 	}
 	defer cleanup()
 
-	if err := d.withRetry(ctx, "cosign attest (source)", func(ctx context.Context) error {
+	// `attach`, not `attest`. attest would sign the payload with kiln's key and
+	// discard warden's signature, turning warden's claim into kiln's account of
+	// it. attach uploads the envelope byte for byte, so what a consumer
+	// verifies is the signature warden made.
+	if err := d.withRetry(ctx, "cosign attach attestation", func(ctx context.Context) error {
 		_, e := d.Runner.Run(ctx, execx.Cmd{
-			Name: d.Cosign,
-			Args: []string{
-				"attest", "--yes",
-				"--type", attest.VSAPredicateType,
-				"--predicate", path,
-				reference,
-			},
+			Name:   d.Cosign,
+			Args:   []string{"attach", "attestation", "--attestation", path, reference},
 			Dir:    req.RepoDir,
 			Stdout: req.Output, Stderr: req.Output,
 		})
 		return e
 	}); err != nil {
-		return fmt.Errorf("publish: cosign attest source summary: %w", err)
+		return fmt.Errorf("publish: cosign attach source summary: %w", err)
 	}
 
 	d.Log.Info("source summary attached",
 		"reference", reference, "verifier", vsa.Predicate.Verifier.ID,
-		"levels", vsa.Predicate.VerifiedLevels)
+		"signed_by", envelope.KeyID(), "levels", vsa.Predicate.VerifiedLevels)
 	return nil
 }
 

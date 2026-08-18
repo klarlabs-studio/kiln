@@ -168,9 +168,14 @@ const VSAPredicateType = "https://slsa.dev/verification_summary/v1"
 // publishable and its build provenance still stands, it simply travels without
 // the source half attached.
 func (w *Warden) SourceAttestation(ctx context.Context, repoDir, sha string) ([]byte, error) {
+	// --sign is what makes this worth carrying. Without it warden emits a bare
+	// statement that kiln would have to sign on warden's behalf, and a
+	// consumer reading that signature learns only that kiln says warden said
+	// something. Signed here, the claim reaches the artifact verifiable
+	// against warden's own public key.
 	res, err := w.Runner.Run(ctx, execx.Cmd{
 		Name: w.Binary,
-		Args: []string{"attest", "--commit", sha, "--predicate", "vsa"},
+		Args: []string{"attest", "--commit", sha, "--predicate", "vsa", "--sign"},
 		Dir:  repoDir,
 	})
 	if err != nil {

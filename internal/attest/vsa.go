@@ -1,6 +1,7 @@
 package attest
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -37,6 +38,63 @@ type VSA struct {
 	} `json:"policy"`
 	VerificationResult string   `json:"verificationResult"`
 	VerifiedLevels     []string `json:"verifiedLevels,omitempty"`
+}
+
+// Envelope is a signed DSSE envelope, as warden emits it.
+//
+// Kiln never opens this to re-sign it. It reads the payload only to sanity-
+// check what it is carrying — that the verdict passed and the commit matches —
+// and then attaches the envelope byte for byte, so the signature a consumer
+// checks is warden's rather than kiln's.
+type Envelope struct {
+	PayloadType string `json:"payloadType"`
+	Payload     string `json:"payload"`
+	Signatures  []struct {
+		KeyID string `json:"keyid"`
+		Sig   string `json:"sig"`
+	} `json:"signatures"`
+}
+
+// Signed reports whether the envelope actually carries a signature. An
+// envelope with none is a statement wearing a costume.
+func (e Envelope) Signed() bool {
+	return len(e.Signatures) > 0 && e.Signatures[0].Sig != ""
+}
+
+// KeyID names the key that signed it.
+func (e Envelope) KeyID() string {
+	if len(e.Signatures) == 0 {
+		return ""
+	}
+	return e.Signatures[0].KeyID
+}
+
+// ParseEnvelope reads a signed DSSE envelope and the statement inside it.
+//
+// Kiln refuses an unsigned one rather than signing it itself. Signing somebody
+// else's claim is exactly the substitution this whole arrangement exists to
+// avoid: the resulting attestation would be kiln's, and a reader could only
+// take kiln's word for warden's verdict.
+func ParseEnvelope(data []byte) (Envelope, VSAStatement, error) {
+	var e Envelope
+	if err := json.Unmarshal(data, &e); err != nil {
+		return Envelope{}, VSAStatement{}, fmt.Errorf("attest: parse envelope: %w", err)
+	}
+	if !e.Signed() {
+		return Envelope{}, VSAStatement{}, fmt.Errorf(
+			"attest: the source attestation is unsigned; kiln will not sign it on warden's behalf " +
+				"(warden attest needs --sign)")
+	}
+
+	payload, err := base64.StdEncoding.DecodeString(e.Payload)
+	if err != nil {
+		return Envelope{}, VSAStatement{}, fmt.Errorf("attest: envelope payload is not base64: %w", err)
+	}
+	stmt, err := ParseVSA(payload)
+	if err != nil {
+		return Envelope{}, VSAStatement{}, err
+	}
+	return e, stmt, nil
 }
 
 // ParseVSA reads a verification summary statement.

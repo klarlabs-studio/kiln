@@ -1,6 +1,7 @@
 package publish
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"os"
@@ -546,14 +547,34 @@ func sourceCommit(p attest.Provenance) string {
 	return ""
 }
 
-const wardenSummary = `{"_type":"https://in-toto.io/Statement/v1",
- "subject":[{"name":"git+commit","digest":{"gitCommit":"c3f7aca23fa4bfa8d65b3741f46c509713cd618e"}}],
- "predicateType":"https://slsa.dev/verification_summary/v1",
- "predicate":{"verifier":{"id":"https://warden.klarlabs.de"},
-  "timeVerified":"2026-08-17T21:26:51Z",
-  "resourceUri":"git+ssh://git@github.com/o/r.git@c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
-  "policy":{"uri":"git+ssh://git@github.com/o/r.git@c3f7aca#.warden.yaml"},
-  "verificationResult":"PASSED","verifiedLevels":["WARDEN_SOURCE_GATED"]}}`
+// signedSummary builds the envelope warden emits with --sign: the statement
+// base64'd inside, with a signature kiln must not replace.
+func signedSummary(commit, verdict string) []byte {
+	stmt := map[string]any{
+		"_type": "https://in-toto.io/Statement/v1",
+		"subject": []any{map[string]any{
+			"name": "git+commit", "digest": map[string]string{"gitCommit": commit},
+		}},
+		"predicateType": attest.VSAPredicateType,
+		"predicate": map[string]any{
+			"verifier":           map[string]any{"id": "https://warden.klarlabs.de"},
+			"timeVerified":       "2026-08-17T21:26:51Z",
+			"resourceUri":        "git+ssh://git@github.com/o/r.git@" + commit,
+			"policy":             map[string]any{"uri": "git+ssh://git@github.com/o/r.git@" + commit + "#.warden.yaml"},
+			"verificationResult": verdict,
+			"verifiedLevels":     []string{"WARDEN_SOURCE_GATED"},
+		},
+	}
+	payload, _ := json.Marshal(stmt)
+	env, _ := json.Marshal(map[string]any{
+		"payloadType": "application/vnd.in-toto+json",
+		"payload":     base64.StdEncoding.EncodeToString(payload),
+		"signatures": []any{map[string]string{
+			"keyid": "139e6eb9e2611c76", "sig": "d2FyZGVucy1vd24tc2lnbmF0dXJl",
+		}},
+	})
+	return env
+}
 
 func TestWardensSummaryTravelsWithTheArtifact(t *testing.T) {
 	repo := gittest.New(t)
@@ -566,27 +587,24 @@ func TestWardensSummaryTravelsWithTheArtifact(t *testing.T) {
 	if _, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
-		Provenance: prov, SourceVSA: []byte(wardenSummary),
+		Provenance: prov, SourceVSA: signedSummary(head, "PASSED"),
 	}); err != nil {
 		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
 	}
 
-	// Two attestations, not one with a field inside it: different claims by
-	// different authorities, so a consumer can require each on its own terms.
-	var buildAttest, sourceAttest int
-	for _, line := range fake.Lines() {
-		if !strings.HasPrefix(line, "cosign attest") {
-			continue
-		}
-		switch {
-		case strings.Contains(line, attest.VSAPredicateType):
-			sourceAttest++
-		case strings.Contains(line, attest.CosignType):
-			buildAttest++
-		}
+	// Two attestations by two authorities. Kiln SIGNS its own provenance and
+	// only ATTACHES warden's — attest would replace warden's signature with
+	// kiln's and turn warden's claim into kiln's account of it.
+	if !fake.Ran("cosign attest --yes --type " + attest.CosignType) {
+		t.Errorf("kiln did not sign its own provenance:\n%s", fake.Transcript())
 	}
-	if buildAttest != 1 || sourceAttest != 1 {
-		t.Errorf("build=%d source=%d, want one of each:\n%s", buildAttest, sourceAttest, fake.Transcript())
+	if !fake.Ran("cosign attach attestation") {
+		t.Errorf("warden's envelope was not attached:\n%s", fake.Transcript())
+	}
+	for _, line := range fake.Lines() {
+		if strings.HasPrefix(line, "cosign attest") && strings.Contains(line, attest.VSAPredicateType) {
+			t.Errorf("kiln re-signed warden's claim: %s", line)
+		}
 	}
 }
 
@@ -596,10 +614,10 @@ func TestTheSummaryIsCarriedVerbatimNotParaphrased(t *testing.T) {
 
 	fake := dockerFake(t)
 	var body []byte
-	fake.On("cosign attest --yes --type "+attest.VSAPredicateType,
+	fake.On("cosign attach attestation",
 		execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
 			for i, a := range c.Args {
-				if a == "--predicate" && i+1 < len(c.Args) {
+				if a == "--attestation" && i+1 < len(c.Args) {
 					body, _ = os.ReadFile(c.Args[i+1])
 				}
 			}
@@ -611,26 +629,78 @@ func TestTheSummaryIsCarriedVerbatimNotParaphrased(t *testing.T) {
 	if _, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
-		Provenance: prov, SourceVSA: []byte(wardenSummary),
+		Provenance: prov, SourceVSA: signedSummary(head, "PASSED"),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	var doc map[string]any
-	if err := json.Unmarshal(body, &doc); err != nil {
-		t.Fatalf("source predicate is not JSON: %v", err)
+	// Byte for byte: what reaches the registry must be the envelope warden
+	// signed, or the signature a consumer checks is not warden's.
+	want := signedSummary(head, "PASSED")
+	if string(body) != string(want) {
+		t.Errorf("the envelope was rewritten in transit:\nhave %s\nwant %s", body, want)
 	}
-	// Warden's own fields, not kiln's rendering of them. A consumer reads the
-	// verifier, the policy and the levels rather than a boolean kiln chose.
-	verifier, _ := doc["verifier"].(map[string]any)
-	if verifier == nil || verifier["id"] != "https://warden.klarlabs.de" {
-		t.Errorf("verifier lost: %v", doc)
+
+	var env map[string]any
+	if err := json.Unmarshal(body, &env); err != nil {
+		t.Fatalf("attached body is not JSON: %v", err)
 	}
-	if doc["verificationResult"] != "PASSED" {
-		t.Errorf("verdict lost: %v", doc)
+	sigs, _ := env["signatures"].([]any)
+	if len(sigs) == 0 {
+		t.Fatal("warden's signature did not survive")
 	}
-	if _, ok := doc["policy"]; !ok {
-		t.Errorf("policy uri lost: %v", doc)
+	if sig, _ := sigs[0].(map[string]any); sig["keyid"] != "139e6eb9e2611c76" {
+		t.Errorf("keyid = %v, want warden's fingerprint", sig["keyid"])
+	}
+}
+
+func TestAnUnsignedSummaryIsNotSignedOnWardensBehalf(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	bare := `{"predicateType":"` + attest.VSAPredicateType + `","predicate":{"verificationResult":"PASSED"}}`
+	prov := imageProvenance()
+	prov.SHA = head
+
+	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact:   cfg(config.TagSHA, config.TagLatest),
+		Provenance: prov, SourceVSA: []byte(bare),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Signing it here would make it kiln's claim — precisely the substitution
+	// the whole arrangement exists to avoid.
+	if fake.Ran("cosign attach attestation") {
+		t.Errorf("attached an unsigned summary:\n%s", fake.Transcript())
+	}
+	for _, line := range fake.Lines() {
+		if strings.Contains(line, attest.VSAPredicateType) {
+			t.Errorf("kiln signed warden's claim for it: %s", line)
+		}
+	}
+}
+
+func TestASummaryForADifferentCommitIsRefused(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	_, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
+		SourceVSA: signedSummary("0000000000000000000000000000000000000000", "PASSED"),
+	})
+
+	// Attaching it would manufacture the exact mismatch a consumer's join is
+	// there to catch.
+	if err == nil || !strings.Contains(err.Error(), "this build is of") {
+		t.Errorf("err = %v, want the commit mismatch refused at source", err)
 	}
 }
 
@@ -665,14 +735,13 @@ func TestAFailingSummaryIsRefused(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t)
 
-	failed := strings.Replace(wardenSummary, `"PASSED"`, `"FAILED"`, 1)
 	prov := imageProvenance()
 	prov.SHA = head
 
 	_, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
-		Provenance: prov, SourceVSA: []byte(failed),
+		Provenance: prov, SourceVSA: signedSummary(head, "FAILED"),
 	})
 
 	// Reaching publish means prove passed, so warden reporting FAILED here is
