@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/gittest"
@@ -229,5 +230,143 @@ func TestIsRepo(t *testing.T) {
 	}
 	if IsRepo(t.Context(), execx.NewSystem(), os.TempDir()) {
 		t.Error("IsRepo = true outside a repository")
+	}
+}
+
+// abandoned fabricates the leavings of a killed run: a kiln temp directory
+// with a checkout inside it that git no longer knows about.
+func abandoned(t *testing.T, age time.Duration) string {
+	t.Helper()
+	dir, err := os.MkdirTemp("", TempPrefix+"*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+
+	if err := os.MkdirAll(filepath.Join(dir, "tree"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	when := time.Now().Add(-age)
+	if err := os.Chtimes(dir, when, when); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+func TestReapRemovesAnAbandonedTree(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "a.txt", "x\n")
+	stale := abandoned(t, 48*time.Hour)
+
+	removed, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter)
+	if err != nil {
+		t.Fatalf("Reap: %v", err)
+	}
+
+	if removed < 1 {
+		t.Errorf("removed %d, want the stale tree collected", removed)
+	}
+	if _, err := os.Stat(stale); !os.IsNotExist(err) {
+		t.Error("the abandoned tree survived")
+	}
+}
+
+func TestReapSparesARecentTree(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "a.txt", "x\n")
+	fresh := abandoned(t, time.Minute)
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	// The reaper cannot ask a directory whether a build is using it, so age is
+	// the only evidence. A minute-old tree is very likely someone's build.
+	if _, err := os.Stat(fresh); err != nil {
+		t.Errorf("reaped a recent tree: %v", err)
+	}
+}
+
+func TestReapNeverTouchesALiveTree(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", "a.txt", "x\n")
+
+	tree, err := Add(t.Context(), execx.NewSystem(), repo.Dir, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tree.Close(context.Background()) }()
+
+	// Backdate it well past the cutoff: only the live-tree check can save it,
+	// which is the point. A long build must not have its checkout deleted
+	// underneath it.
+	outer := strings.TrimSuffix(tree.Path, "/tree")
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(outer, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := os.Stat(tree.Path); err != nil {
+		t.Errorf("reaped a worktree that is in use: %v", err)
+	}
+}
+
+func TestReapIgnoresForeignDirectories(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "a.txt", "x\n")
+
+	other, err := os.MkdirTemp("", "someone-elses-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = os.RemoveAll(other) }()
+	old := time.Now().Add(-72 * time.Hour)
+	if err := os.Chtimes(other, old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	// Keying off kiln's own prefix is what keeps a shared /tmp safe.
+	if _, err := os.Stat(other); err != nil {
+		t.Errorf("reaped a directory kiln did not create: %v", err)
+	}
+}
+
+func TestReapPrunesGitsRecord(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", "a.txt", "x\n")
+
+	tree, err := Add(t.Context(), execx.NewSystem(), repo.Dir, sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a SIGKILL: the directory goes, git's bookkeeping stays.
+	if err := os.RemoveAll(strings.TrimSuffix(tree.Path, "/tree")); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Reap(t.Context(), execx.NewSystem(), repo.Dir, ReapAfter); err != nil {
+		t.Fatal(err)
+	}
+
+	if out := repo.Git("worktree", "list"); strings.Contains(out, tree.Path) {
+		t.Errorf("git still lists a worktree that is gone:\n%s", out)
+	}
+}
+
+func TestReapStopsRatherThanGuessWhenGitIsUnreadable(t *testing.T) {
+	fake := execx.NewFake().On("git worktree list", execx.Response{ExitCode: 128, Stderr: "not a repository"})
+
+	// Without the live set, age alone is not safe: a very long build looks
+	// abandoned. Refusing beats deleting somebody's checkout.
+	if _, err := Reap(t.Context(), fake, t.TempDir(), ReapAfter); err == nil {
+		t.Error("Reap proceeded without knowing which trees are live")
 	}
 }

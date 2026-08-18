@@ -10,6 +10,7 @@ package envconfig
 import (
 	"os"
 	"strings"
+	"time"
 )
 
 // Defaults for the values an operator usually leaves alone.
@@ -20,6 +21,12 @@ const (
 	DefaultNox        = "nox"
 	DefaultGoreleaser = "goreleaser"
 	DefaultLogLevel   = "info"
+
+	// DefaultPhaseTimeout bounds one phase — the gate, or one artifact's
+	// publish. Generous, because a cold cross-compile of several targets is
+	// legitimately slow; finite, because a hung docker pull would otherwise
+	// pin a watcher until somebody noticed.
+	DefaultPhaseTimeout = 45 * time.Minute
 )
 
 // Env is the resolved operator environment for one process.
@@ -50,6 +57,10 @@ type Env struct {
 	Dir string
 	// LogLevel sets the bolt level (KILN_LOG_LEVEL).
 	LogLevel string
+	// PhaseTimeout bounds each phase (KILN_PHASE_TIMEOUT). Zero disables the
+	// bound, which an operator with a genuinely enormous build may want and
+	// should have to ask for.
+	PhaseTimeout time.Duration
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -71,7 +82,25 @@ func Load() Env {
 		WebhookSecret: os.Getenv("KILN_WEBHOOK_SECRET"),
 		Dir:           os.Getenv("KILN_DIR"),
 		LogLevel:      firstNonEmpty(os.Getenv("KILN_LOG_LEVEL"), DefaultLogLevel),
+		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
 	}
+}
+
+// duration parses a timeout, falling back to the default.
+//
+// "0" is honoured as "no bound" rather than treated as unset: an operator who
+// typed it meant it. Anything unparsable falls back, because a typo must not
+// silently remove a safety net.
+func duration(v string, fallback time.Duration) time.Duration {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d < 0 {
+		return fallback
+	}
+	return d
 }
 
 // truthy accepts the spellings an operator plausibly types. Anything else is

@@ -30,6 +30,7 @@ import (
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/worktree"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -103,6 +104,10 @@ func (r Result) Failures() int {
 // halt the pipeline by opening a PR that fails to check out.
 func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	log := w.logger()
+
+	if !dryRun {
+		w.reap(ctx)
+	}
 
 	if err := w.fetch(ctx); err != nil {
 		return Result{}, err
@@ -186,6 +191,26 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 			return nil
 		case <-ticker.C:
 		}
+	}
+}
+
+// reap collects worktrees abandoned by killed runs.
+//
+// Once per tick, under the lock, before any work: a box building all day for
+// months accumulates leavings from SIGKILLs and OOM kills that no run's own
+// cleanup could have handled, and nothing else ever collects them. The disk
+// fills quietly and the first symptom is an unrelated build failing.
+//
+// Never fatal. Housekeeping that could fail the tick would be the
+// housekeeping causing the outage it exists to prevent.
+func (w *Watcher) reap(ctx context.Context) {
+	removed, err := worktree.Reap(ctx, w.Runner, w.Dir, 0)
+	if err != nil {
+		w.logger().Warn("could not reap abandoned worktrees", "err", err)
+		return
+	}
+	if removed > 0 {
+		w.logger().Info("reaped abandoned worktrees", "removed", removed)
 	}
 }
 

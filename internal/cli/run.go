@@ -161,6 +161,10 @@ func classify(err error) error {
 	switch {
 	case err == nil:
 		return nil
+	case errors.Is(err, engine.ErrPhaseTimeout):
+		// A machine problem, not a code problem: the same bucket as a missing
+		// toolchain, so an operator alerting on 3 hears about it.
+		return wrapExit(ExitConfig, err)
 	case errors.Is(err, prove.ErrGateFailed):
 		return wrapExit(ExitFailed, err)
 	case errors.Is(err, prove.ErrToolMissing), errors.Is(err, publish.ErrToolMissing):

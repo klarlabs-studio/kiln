@@ -69,6 +69,13 @@ type Engine struct {
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
 	ToolVersions map[string]string
+	// PhaseTimeout bounds each phase separately. Zero means unbounded.
+	//
+	// Per phase rather than per run, because the phases fail differently: a
+	// gate that hangs and a registry that stops answering mid-push are
+	// separate incidents, and one budget covering both would let a slow gate
+	// eat the publish's headroom.
+	PhaseTimeout time.Duration
 }
 
 // New builds an engine, defaulting the optional collaborators so a caller that
@@ -131,6 +138,32 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	return r, nil
 }
 
+// ErrPhaseTimeout reports a phase that ran out of time.
+//
+// Distinct from a phase that failed, because the responses differ: a failing
+// gate means fix the code, a timing-out one means look at the machine. A run
+// that reported both the same way would send an operator to the wrong place.
+var ErrPhaseTimeout = errors.New("phase timed out")
+
+// withPhaseTimeout bounds one phase.
+func (e *Engine) withPhaseTimeout(ctx context.Context, phase string, fn func(context.Context) error) error {
+	if e.PhaseTimeout <= 0 {
+		return fn(ctx)
+	}
+
+	phaseCtx, cancel := context.WithTimeout(ctx, e.PhaseTimeout)
+	defer cancel()
+
+	err := fn(phaseCtx)
+	// The caller's own cancellation — Ctrl-C, a daemon shutdown — is not a
+	// timeout and must not be reported as one.
+	if errors.Is(phaseCtx.Err(), context.DeadlineExceeded) && ctx.Err() == nil {
+		return fmt.Errorf("%w: %s exceeded %s (raise KILN_PHASE_TIMEOUT, or find what is hanging): %w",
+			ErrPhaseTimeout, phase, e.PhaseTimeout, err)
+	}
+	return err
+}
+
 func validate(req Request) error {
 	if strings.TrimSpace(req.SHA) == "" {
 		return errors.New("engine: no commit to build")
@@ -171,12 +204,14 @@ func (e *Engine) doProve(
 	if verdict.Skip() {
 		r.Skipped = true
 	} else {
-		err = e.Prover.Prove(ctx, prove.Request{
-			RepoDir: req.Dir,
-			SHA:     req.SHA,
-			Policy:  policy,
-			Nox:     req.Pipeline.Prove.Nox,
-			Output:  req.Output,
+		err = e.withPhaseTimeout(ctx, "prove", func(ctx context.Context) error {
+			return e.Prover.Prove(ctx, prove.Request{
+				RepoDir: req.Dir,
+				SHA:     req.SHA,
+				Policy:  policy,
+				Nox:     req.Pipeline.Prove.Nox,
+				Output:  req.Output,
+			})
 		})
 	}
 
@@ -253,13 +288,21 @@ func (e *Engine) publishAll(
 			return produced, fmt.Errorf("engine: no publisher for artifact kind %q", artifact.Kind)
 		}
 
-		res, err := publisher.Publish(ctx, publish.Request{
-			RepoDir:    req.Dir,
-			SHA:        req.SHA,
-			Ref:        req.Ref,
-			Artifact:   artifact,
-			Provenance: prov,
-			Output:     req.Output,
+		var res publish.Result
+		// Each artifact gets its own budget. A release that cross-compiles
+		// four targets should not have its clock started by the image build
+		// that preceded it.
+		err := e.withPhaseTimeout(ctx, "publish "+string(artifact.Kind), func(ctx context.Context) error {
+			var pubErr error
+			res, pubErr = publisher.Publish(ctx, publish.Request{
+				RepoDir:    req.Dir,
+				SHA:        req.SHA,
+				Ref:        req.Ref,
+				Artifact:   artifact,
+				Provenance: prov,
+				Output:     req.Output,
+			})
+			return pubErr
 		})
 		if err != nil {
 			return produced, fmt.Errorf("publish[%d] (%s): %w", i, artifact.Kind, err)

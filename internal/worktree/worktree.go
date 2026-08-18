@@ -15,7 +15,9 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"go.klarlabs.de/kiln/internal/execx"
 )
@@ -42,7 +44,7 @@ func Add(ctx context.Context, r execx.Runner, repoDir, sha string) (*Tree, error
 		return nil, fmt.Errorf("worktree: no commit to check out")
 	}
 
-	dir, err := os.MkdirTemp("", "kiln-tree-*")
+	dir, err := os.MkdirTemp("", TempPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("worktree: create temp dir: %w", err)
 	}
@@ -148,4 +150,124 @@ func IsRepo(ctx context.Context, r execx.Runner, dir string) bool {
 		Name: "git", Args: []string{"rev-parse", "--is-inside-work-tree"}, Dir: dir,
 	})
 	return err == nil && res.Output() == "true"
+}
+
+// TempPrefix is the name every Kiln worktree directory starts with. Reaping
+// keys off it, so nothing outside Kiln's own leavings is ever a candidate.
+const TempPrefix = "kiln-tree-"
+
+// ReapAfter is how long an abandoned tree must have sat before it is removed.
+//
+// Generous on purpose. The reaper cannot ask a directory whether a build is
+// still using it, so age is the only evidence available, and it has to exceed
+// any build somebody might legitimately be running. Deleting a live checkout
+// mid-build would be a far worse failure than leaving a stale one an extra
+// day.
+const ReapAfter = 24 * time.Hour
+
+// Reap removes abandoned worktrees and prunes git's record of them.
+//
+// A run cleans up after itself, including on cancellation — but not through a
+// SIGKILL, an OOM kill or a power cut, and a box building all day for months
+// accumulates those. Nothing else ever collects them, so the disk fills
+// quietly and the first symptom is an unrelated build failing.
+//
+// Returns how many directories it removed. Errors are reported but never
+// fatal: failing a build because housekeeping did not work would be the
+// housekeeping causing the outage it exists to prevent.
+func Reap(ctx context.Context, r execx.Runner, repoDir string, olderThan time.Duration) (int, error) {
+	if olderThan <= 0 {
+		olderThan = ReapAfter
+	}
+
+	// git first: it knows which of its own worktrees are gone and will drop
+	// the administrative entries, which is what stops `git worktree list`
+	// filling with ghosts.
+	if _, err := r.Run(ctx, execx.Cmd{
+		Name: "git", Args: []string{"worktree", "prune"}, Dir: repoDir,
+	}); err != nil {
+		return 0, fmt.Errorf("worktree: prune: %w", err)
+	}
+
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		return 0, fmt.Errorf("worktree: read temp dir: %w", err)
+	}
+
+	live, err := liveTrees(ctx, r, repoDir)
+	if err != nil {
+		// Without the live set the age check alone is not enough to be safe,
+		// because a very long build would look abandoned. Stop rather than
+		// guess.
+		return 0, err
+	}
+
+	cutoff := time.Now().Add(-olderThan)
+	removed := 0
+	var firstErr error
+
+	for _, e := range entries {
+		if !e.IsDir() || !strings.HasPrefix(e.Name(), TempPrefix) {
+			continue
+		}
+		path := filepath.Join(os.TempDir(), e.Name())
+		if live[resolve(filepath.Join(path, "tree"))] {
+			// Another kiln — or this one — is building in it right now.
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		if err := os.RemoveAll(path); err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("worktree: remove %s: %w", path, err)
+			}
+			continue
+		}
+		removed++
+	}
+	return removed, firstErr
+}
+
+// liveTrees lists the worktrees git currently has registered for this
+// repository, so the reaper never removes one in use.
+//
+// This only covers trees belonging to *this* repository. A tree from another
+// checkout on the same box is protected by the age cutoff alone, which is why
+// that cutoff is a day rather than an hour.
+func liveTrees(ctx context.Context, r execx.Runner, repoDir string) (map[string]bool, error) {
+	res, err := r.Run(ctx, execx.Cmd{
+		Name: "git", Args: []string{"worktree", "list", "--porcelain"}, Dir: repoDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("worktree: list: %w", err)
+	}
+
+	live := map[string]bool{}
+	for line := range strings.SplitSeq(res.Stdout, "\n") {
+		if path, ok := strings.CutPrefix(strings.TrimSpace(line), "worktree "); ok {
+			live[resolve(path)] = true
+		}
+	}
+	return live, nil
+}
+
+// resolve canonicalises a path so the two sides of the live-tree comparison
+// can actually match.
+//
+// This is not defensive tidying. On macOS os.TempDir() is /var/folders/…,
+// which is a symlink to /private/var/folders/…, and git reports the resolved
+// form — so a naive string compare finds no live trees and the reaper deletes
+// the checkout of a build that is still running. A symlinked /tmp does the
+// same on Linux.
+//
+// An unresolvable path falls back to the input: it is about to be compared
+// against a live set that will not contain it, and the age cutoff still
+// applies.
+func resolve(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	return path
 }

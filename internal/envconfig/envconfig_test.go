@@ -3,6 +3,7 @@ package envconfig
 import (
 	"reflect"
 	"testing"
+	"time"
 )
 
 func TestLoadDefaults(t *testing.T) {
@@ -72,6 +73,43 @@ func TestTruthySpellings(t *testing.T) {
 	for _, v := range off {
 		if truthy(v) {
 			t.Errorf("truthy(%q) = true, want false", v)
+		}
+	}
+}
+
+func TestPhaseTimeoutDefaults(t *testing.T) {
+	t.Setenv("KILN_PHASE_TIMEOUT", "")
+
+	if got := Load().PhaseTimeout; got != DefaultPhaseTimeout {
+		t.Errorf("PhaseTimeout = %v, want %v", got, DefaultPhaseTimeout)
+	}
+}
+
+func TestPhaseTimeoutIsParsed(t *testing.T) {
+	t.Setenv("KILN_PHASE_TIMEOUT", "90m")
+
+	if got := Load().PhaseTimeout; got != 90*time.Minute {
+		t.Errorf("PhaseTimeout = %v", got)
+	}
+}
+
+func TestZeroPhaseTimeoutIsHonoured(t *testing.T) {
+	t.Setenv("KILN_PHASE_TIMEOUT", "0")
+
+	// An operator who typed 0 meant "no bound", not "give me the default".
+	if got := Load().PhaseTimeout; got != 0 {
+		t.Errorf("PhaseTimeout = %v, want 0", got)
+	}
+}
+
+func TestAnUnparsablePhaseTimeoutKeepsTheSafetyNet(t *testing.T) {
+	for _, bad := range []string{"soon", "45", "-5m"} {
+		t.Setenv("KILN_PHASE_TIMEOUT", bad)
+
+		// A typo must not silently remove the bound; that is how a watcher
+		// ends up wedged with nobody knowing why.
+		if got := Load().PhaseTimeout; got != DefaultPhaseTimeout {
+			t.Errorf("KILN_PHASE_TIMEOUT=%q gave %v, want the default", bad, got)
 		}
 	}
 }

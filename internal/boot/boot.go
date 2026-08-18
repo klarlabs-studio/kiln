@@ -130,6 +130,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		Publisher:        buildPublisher(env, runner, log),
 		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
 		ToolVersions:     toolVersions(ctx, runner, env),
+		PhaseTimeout:     env.PhaseTimeout,
 		Provenance:       provenance.NewWarden(runner, env.Warden, env.TrustedKeys),
 		Checks:           deps.Checks,
 		Store:            deps.Store,

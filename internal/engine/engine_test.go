@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
@@ -638,5 +639,92 @@ func TestMissingReleasePublisherIsAFailure(t *testing.T) {
 	// one artifact where two were configured.
 	if err == nil || !strings.Contains(err.Error(), "no publisher") {
 		t.Errorf("err = %v, want a missing-publisher failure", err)
+	}
+}
+
+func TestAHangingPhaseTimesOut(t *testing.T) {
+	h := newHarness(t)
+	h.engine.PhaseTimeout = 80 * time.Millisecond
+	h.engine.Prover = prove.Func(func(ctx context.Context, _ prove.Request) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	got, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+
+	if !errors.Is(err, ErrPhaseTimeout) {
+		t.Fatalf("err = %v, want ErrPhaseTimeout", err)
+	}
+	// A failing gate means fix the code; a hanging one means look at the
+	// machine. Reporting both the same way sends an operator to the wrong
+	// place.
+	if errors.Is(err, prove.ErrGateFailed) {
+		t.Error("a timeout must not read as a gate rejection")
+	}
+	if !strings.Contains(err.Error(), "KILN_PHASE_TIMEOUT") {
+		t.Errorf("error should name the knob: %v", err)
+	}
+	if got.Phase != run.PhaseFailed {
+		t.Errorf("Phase = %s", got.Phase)
+	}
+}
+
+func TestEachArtifactGetsItsOwnBudget(t *testing.T) {
+	h := newHarness(t)
+	h.engine.PhaseTimeout = 400 * time.Millisecond
+	r := req(t, isolation.EventTag, false, "refs/tags/v1.4.0")
+	r.Pipeline = releasePipeline(t)
+
+	// Both publishers take most of a budget. With one clock for the whole
+	// phase the second would be starved; with one each, both finish.
+	slow := func(_ context.Context, _ publish.Request) (publish.Result, error) {
+		time.Sleep(250 * time.Millisecond)
+		return publish.Result{Kind: config.KindImage, Digest: digest, Signed: true}, nil
+	}
+	h.engine.Publisher = publish.Func(slow)
+	h.engine.ReleasePublisher = publish.Func(func(_ context.Context, _ publish.Request) (publish.Result, error) {
+		time.Sleep(250 * time.Millisecond)
+		return publish.Result{Kind: config.KindBinaries, Digest: "sha256:b", Signed: true}, nil
+	})
+
+	got, err := h.engine.Execute(t.Context(), r)
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(got.Artifacts) != 2 {
+		t.Errorf("artifacts = %d, want both to fit their own budget", len(got.Artifacts))
+	}
+}
+
+func TestZeroTimeoutMeansUnbounded(t *testing.T) {
+	h := newHarness(t)
+	h.engine.PhaseTimeout = 0
+	h.engine.Prover = prove.Func(func(_ context.Context, _ prove.Request) error {
+		time.Sleep(120 * time.Millisecond)
+		return nil
+	})
+
+	// An operator with a genuinely enormous build can opt out, and has to ask.
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Errorf("Execute: %v", err)
+	}
+}
+
+func TestCallerCancellationIsNotATimeout(t *testing.T) {
+	h := newHarness(t)
+	h.engine.PhaseTimeout = time.Hour
+	ctx, cancel := context.WithCancel(t.Context())
+	h.engine.Prover = prove.Func(func(ctx context.Context, _ prove.Request) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	})
+
+	_, err := h.engine.Execute(ctx, req(t, isolation.EventPush, false, "refs/heads/main"))
+
+	// Ctrl-C and a daemon shutdown are not the machine hanging, and must not
+	// be reported as one.
+	if errors.Is(err, ErrPhaseTimeout) {
+		t.Errorf("cancellation reported as a timeout: %v", err)
 	}
 }
