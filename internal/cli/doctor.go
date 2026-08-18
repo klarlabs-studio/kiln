@@ -4,14 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/policy"
 	"go.klarlabs.de/kiln/internal/publish"
+	"go.klarlabs.de/kiln/internal/task"
 )
 
 // runDoctor validates without executing.
@@ -121,6 +125,11 @@ func (r *doctorReport) collect(ctx context.Context, deps *boot.Deps, sha, ref st
 	if len(deps.Pipeline.Publish) > 0 {
 		r.section("artifacts")
 		r.checkArtifacts(ctx, deps, sha, ref)
+	}
+
+	if len(deps.Pipeline.Tasks) > 0 {
+		r.section("tasks")
+		r.checkTasks(deps)
 	}
 }
 
@@ -256,6 +265,29 @@ func (r *doctorReport) checkRegistries(deps *boot.Deps) {
 			// doctor that cries wolf is a doctor nobody reads.
 			r.note("could not tell whether %s has credentials; docker's config says nothing either way", registry)
 		}
+	}
+}
+
+// checkTasks lists what will run and when.
+//
+// A task routed to an event the pipeline ignores is the quiet failure this
+// section exists to catch: it parses, it validates, and it never runs, and
+// nothing anywhere would have said so.
+func (r *doctorReport) checkTasks(deps *boot.Deps) {
+	for _, name := range slices.Sorted(maps.Keys(deps.Pipeline.Tasks)) {
+		t := deps.Pipeline.Tasks[name]
+		r.ok("%s", task.Describe(name, t))
+
+		for _, event := range t.On {
+			if event == config.ScheduleEvent {
+				continue
+			}
+			if len(deps.Pipeline.Steps(event)) == 0 {
+				r.warn("  tasks.%s runs on %s, which this pipeline routes to nothing",
+					name, event)
+			}
+		}
+		r.ok("  posts check %q", checks.TaskName(name))
 	}
 }
 

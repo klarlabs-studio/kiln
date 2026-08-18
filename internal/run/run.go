@@ -24,6 +24,7 @@ const (
 	PhaseIsolating  Phase = "isolating"
 	PhaseProving    Phase = "proving"
 	PhasePublishing Phase = "publishing"
+	PhaseTasks      Phase = "tasks"
 	PhaseSucceeded  Phase = "succeeded"
 	PhaseFailed     Phase = "failed"
 )
@@ -64,12 +65,29 @@ type Run struct {
 	Digest string   `json:"digest,omitempty"`
 	Tags   []string `json:"tags,omitempty"`
 
+	// Tasks are the automations this run executed, in the order they ran.
+	Tasks []Task `json:"tasks,omitempty"`
+
 	// Error is the failure message, empty on success. It is a string rather
 	// than an error so the record round-trips through JSON unchanged.
 	Error string `json:"error,omitempty"`
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
+}
+
+// Task is one automation the run executed.
+//
+// Recorded separately from Artifacts, and deliberately with no digest or
+// signature field: a task produces nothing anyone verifies later, and giving
+// its record the same shape as an artifact's would invite exactly that
+// confusion.
+type Task struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
+	// Tolerated records that the task failed and the pipeline accepted it.
+	Tolerated bool   `json:"tolerated,omitempty"`
+	Duration  string `json:"duration,omitempty"`
 }
 
 // Artifact is one thing a run published.

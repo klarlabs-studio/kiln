@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -71,7 +72,60 @@ type Pipeline struct {
 	// RollOps deploys, and the release binaries a human downloads. A third kind
 	// later is one more list entry rather than one more top-level key.
 	Publish []Artifact `yaml:"publish"`
-	Watch   Watch      `yaml:"watch"`
+	// Tasks are the automation that is not a check and not an artifact —
+	// uploading a scan result, opening a remediation pull request, refreshing
+	// a docs site. Everything a pipeline does that is neither "decide whether
+	// this commit is good" nor "produce something signed".
+	//
+	// Deliberately a separate language from `.warden.yaml`, and deliberately
+	// weaker: a task cannot mint provenance. Whatever it does, the signed
+	// artifacts of a run are exactly what `publish:` produced, so growing this
+	// surface can never dilute the claim kiln exists to make.
+	Tasks map[string]Task `yaml:"tasks"`
+	Watch Watch           `yaml:"watch"`
+}
+
+// Task is one named automation.
+type Task struct {
+	// On routes the task to events. `schedule` is kiln's own: it fires from a
+	// watch tick rather than from a commit.
+	On []string `yaml:"on"`
+	// Every is the interval for a scheduled task.
+	Every Duration `yaml:"every,omitempty"`
+	// Run is the command, executed by `sh -c` in the checked-out worktree.
+	// Multi-line is one script, not a list of steps: a task that half-ran is
+	// the failure mode of every step runner, and a shell already has `set -e`.
+	Run string `yaml:"run"`
+	// Workdir is relative to the worktree root.
+	Workdir string `yaml:"workdir,omitempty"`
+	// AllowFailure records the task's result without failing the run. For
+	// something advisory — a nightly report — a red run trains people to
+	// ignore red runs.
+	AllowFailure bool `yaml:"allow_failure,omitempty"`
+}
+
+// ScheduleEvent is the pseudo-event a scheduled task routes to.
+const ScheduleEvent = "schedule"
+
+// TasksFor returns the tasks routed to an event, in a stable order.
+//
+// Sorted by name because a map has none, and a run whose task order changed
+// between ticks would make its own log unreadable.
+func (p Pipeline) TasksFor(event string) []NamedTask {
+	out := make([]NamedTask, 0, len(p.Tasks))
+	for name, t := range p.Tasks {
+		if slices.Contains(t.On, event) {
+			out = append(out, NamedTask{Name: name, Task: t})
+		}
+	}
+	slices.SortFunc(out, func(a, b NamedTask) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
+
+// NamedTask pairs a task with the name it was written under.
+type NamedTask struct {
+	Name string
+	Task Task
 }
 
 // On routes events to phases. An absent `tag` list inherits `push`, because a
@@ -146,6 +200,34 @@ type Watch struct {
 	PullRequests *bool  `yaml:"pull_requests"`
 	Tags         *bool  `yaml:"tags"`
 }
+
+// Duration is a YAML-friendly time.Duration.
+//
+// A bare number is refused rather than guessed at. `every: 30` could mean
+// seconds, minutes or hours depending on what the author had in mind, and a
+// scheduler that picks one of those silently will pick the wrong one on
+// somebody's production box.
+type Duration time.Duration
+
+// UnmarshalYAML parses "24h", "15m", "90s".
+func (d *Duration) UnmarshalYAML(node *yaml.Node) error {
+	var raw string
+	if err := node.Decode(&raw); err != nil {
+		return fmt.Errorf("every: want a duration string like \"24h\", got %q", node.Value)
+	}
+	parsed, err := time.ParseDuration(strings.TrimSpace(raw))
+	if err != nil {
+		return fmt.Errorf("every: %q is not a duration (want something like \"24h\" or \"15m\")", raw)
+	}
+	if parsed <= 0 {
+		return fmt.Errorf("every: %q is not a positive interval", raw)
+	}
+	*d = Duration(parsed)
+	return nil
+}
+
+// Std returns the standard-library duration.
+func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Default is the pipeline used when a repository has no `.kiln.yaml`: prove
 // every event, publish nothing.
@@ -375,6 +457,9 @@ func (p Pipeline) validate() error {
 	if p.WantsPublish() && len(p.Publish) == 0 {
 		return errors.New("an event routes to publish but the publish: list is empty")
 	}
+	if err := p.validateTasks(); err != nil {
+		return err
+	}
 	for i, a := range p.Publish {
 		if err := a.validate(i); err != nil {
 			return err
@@ -386,6 +471,56 @@ func (p Pipeline) validate() error {
 // validateNoDuplicateImages catches two entries publishing the same image.
 // They would race each other onto the same moving tag, and which one won would
 // depend on ordering nobody wrote down.
+// validateTasks refuses a task that would silently never run.
+//
+// Every rule here exists because the alternative is a task that looks
+// configured and does nothing — the worst outcome for automation, since the
+// absence of a result is indistinguishable from a result of "nothing to do".
+func (p Pipeline) validateTasks() error {
+	for name, t := range p.Tasks {
+		where := fmt.Sprintf("tasks.%s", name)
+		if strings.TrimSpace(name) == "" {
+			return errors.New("tasks: a task needs a name")
+		}
+		if strings.ContainsAny(name, " \t/") {
+			return fmt.Errorf("%s: a task name is used as a check name and a log field; "+
+				"keep it to letters, digits, dashes and underscores", where)
+		}
+		if strings.TrimSpace(t.Run) == "" {
+			return fmt.Errorf("%s.run is required: a task with no command is not a task", where)
+		}
+		if len(t.On) == 0 {
+			return fmt.Errorf("%s.on is required (pull_request, push, tag or schedule): "+
+				"a task routed to nothing would never run and nothing would say so", where)
+		}
+
+		scheduled := false
+		for _, event := range t.On {
+			switch event {
+			case "pull_request", "push", "tag":
+			case ScheduleEvent:
+				scheduled = true
+			default:
+				return fmt.Errorf("%s.on: unknown event %q (want pull_request, push, tag or schedule)",
+					where, event)
+			}
+		}
+
+		switch {
+		case scheduled && t.Every.Std() <= 0:
+			return fmt.Errorf(`%s is scheduled but has no interval: add every: "24h"`, where)
+		case !scheduled && t.Every.Std() > 0:
+			return fmt.Errorf("%s has every: but is not routed to schedule — the interval would be ignored", where)
+		}
+		if filepath.IsAbs(t.Workdir) || strings.Contains(t.Workdir, "..") {
+			// The worktree is the boundary. A task reaching outside it is
+			// reaching into whatever else the box builds.
+			return fmt.Errorf("%s.workdir must stay inside the worktree, got %q", where, t.Workdir)
+		}
+	}
+	return nil
+}
+
 func (p Pipeline) validateNoDuplicateImages() error {
 	seen := make(map[string]int, len(p.Publish))
 	for i, a := range p.Publish {

@@ -435,7 +435,7 @@ Each tick recomputes the full set of interesting refs and drops the ones a **suc
 
 ## Boundaries
 
-Kiln has no apply, canary, drift or rollback, and will not grow them. It does not implement an Actions runner protocol. It does not read a second check language. OSS is single-tenant and self-hosted; named workspaces, billing and hosted workers belong in Studio.
+Kiln has no apply, canary, drift or rollback, and will not grow them. It does not implement an Actions runner protocol. It does not read a second check language — `tasks:` is automation, not checks, and **a task cannot mint provenance**: the signed artifacts of a run are exactly what `publish:` produced. OSS is single-tenant and self-hosted; named workspaces, billing and hosted workers belong in Studio.
 
 Out of this MVP: UI/dashboard, named workspaces, billing, hosted workers, macOS runners, SQLite, gRPC. (in-toto/SLSA export was on this list and has since shipped — see [The provenance chain](#the-provenance-chain).)
 

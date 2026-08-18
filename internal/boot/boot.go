@@ -27,6 +27,7 @@ import (
 	"go.klarlabs.de/kiln/internal/provenance"
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/task"
 	"go.klarlabs.de/kiln/internal/worktree"
 )
 
@@ -137,6 +138,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		PhaseTimeout:     env.PhaseTimeout,
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
+		Tasks:            task.New(runner),
 		Checks:           deps.Checks,
 		Store:            deps.Store,
 		Log:              log,

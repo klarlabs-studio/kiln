@@ -203,6 +203,69 @@ a cosign key pair (`COSIGN_KEY` / `COSIGN_PASSWORD`) or an OIDC token from
 somewhere. `KILN_DRY=1` skips the signing step for this reason — the static
 `signs:` check still runs, and it is the guarantee.
 
+## `tasks`
+
+The automation that is neither a check nor an artifact: uploading a scan
+result, opening a remediation pull request, refreshing a docs site.
+
+```yaml
+tasks:
+  sarif:
+    on: [push, pull_request]
+    run: |
+      nox scan --format sarif --output nox.sarif
+      gh api repos/$GITHUB_REPOSITORY/code-scanning/sarifs -f commit_sha=$KILN_SHA ...
+
+  remediate:
+    on: [schedule]
+    every: 24h
+    run: nox remediate --open-pr
+    allow_failure: true
+
+  docs:
+    on: [push]
+    workdir: site
+    run: make build && rsync -a public/ /srv/www/
+```
+
+| Field | Meaning |
+|---|---|
+| `on` | `pull_request`, `push`, `tag`, `schedule` — required |
+| `every` | interval for `schedule`, as a duration string (`24h`, `15m`) |
+| `run` | the command, executed by `sh -euc` |
+| `workdir` | relative to the worktree root |
+| `allow_failure` | record the failure, do not fail the run |
+
+Each task posts its own GitHub Check, named `Kiln / <task>`, so branch
+protection can require one and a red check names the thing that broke.
+
+**A task cannot mint provenance.** That is the line this feature does not
+cross: the signed artifacts of a run are exactly what `publish:` produced, and
+no amount of task surface can add to them or make an unsigned thing look
+signed. A task's blast radius is a check that goes red and whatever the command
+itself did.
+
+Tasks run **after** publish, in a disposable worktree pinned to the commit —
+never the operator's working copy, for the same reason the gate and the build
+are not. Most tasks are about a build that happened; the ones that are not lose
+nothing by waiting, and an automation failure never stops an artifact that was
+otherwise ready to ship.
+
+One failure does not stop the others. Artifacts are a set — a release whose
+image built and whose binaries did not is incoherent — but tasks are
+independent errands, and refusing to upload a scan because a docs build broke
+would only hide the second problem behind the first.
+
+`KILN_SHA`, `KILN_REF`, `KILN_EVENT` and `KILN_TASK` are exported. They are
+named `KILN_` rather than `GITHUB_` on purpose: a task reading `GITHUB_SHA`
+would keep working if somebody moved it back into Actions and silently mean
+something different — the merge commit rather than the head.
+
+**On an untrusted head the environment is scrubbed**, exactly as it is for the
+gate. A task runs repository-authored commands, so a fork pull request that
+could read the environment would put every secret on the box one pull request
+away.
+
 ## `watch`
 
 `remote` and `ref` name the branch a tick follows. `pull_requests` and `tags`

@@ -28,7 +28,9 @@ import (
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/task"
 	"go.klarlabs.de/kiln/internal/version"
+	"go.klarlabs.de/kiln/internal/worktree"
 )
 
 // Request is what a surface asks for.
@@ -76,8 +78,11 @@ type Engine struct {
 	// Nil publishes build provenance alone.
 	SourceAttester SourceAttester
 	Checks         checks.Reporter
-	Store          store.Store
-	Log            obs.Logger
+	// Tasks runs the pipeline's automation. Nil disables tasks entirely, which
+	// is what a caller that only wants prove-and-publish gets by default.
+	Tasks *task.Runner
+	Store store.Store
+	Log   obs.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
@@ -139,6 +144,17 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	}
 
 	if err := e.doPublish(ctx, req, r, policy, gate, log); err != nil {
+		r.Fail(err)
+		e.persist(r, log)
+		return r, err
+	}
+
+	// Tasks run last, after the artifact exists. Most of them are about a
+	// build that happened — uploading its scan, announcing its release — and
+	// the ones that are not lose nothing by waiting. Running them before
+	// publish would also mean an automation failure could stop an artifact
+	// that was otherwise ready to ship.
+	if err := e.doTasks(ctx, req, r, policy, log); err != nil {
 		r.Fail(err)
 		e.persist(r, log)
 		return r, err
@@ -416,6 +432,112 @@ func (e *Engine) report(ctx context.Context, fn func() error, log obs.Logger, na
 // persist saves the run, logging rather than failing on a storage error. The
 // ledger is runtime bookkeeping; git is the desired state. Losing a write
 // costs a duplicate build on the next tick, never correctness.
+// doTasks runs every task routed to this event.
+//
+// Unlike publish, one failure does not stop the rest. The artifacts of a
+// commit are a set and a half-published release is incoherent; tasks are
+// independent errands, and refusing to upload a scan because a docs build
+// broke would just hide the second problem behind the first. Every task
+// reports its own check, and the run fails if any intolerable one did.
+func (e *Engine) doTasks(
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger,
+) error {
+	if e.Tasks == nil {
+		return nil
+	}
+	wanted := req.Pipeline.TasksFor(req.Event.String())
+	if len(wanted) == 0 {
+		return nil
+	}
+
+	r.Phase = run.PhaseTasks
+	e.persist(r, log)
+
+	// One disposable checkout for the whole set, pinned to the commit.
+	//
+	// Not the operator's working copy, for the same reason prove and publish
+	// are not: a task runs repository-authored commands, and an uncommitted
+	// edit sitting in that checkout would silently become part of what the
+	// task saw — or, for a task that writes, part of what the operator finds
+	// afterwards. One tree for all tasks rather than one each: they belong to
+	// the same commit, and a task that leaves a file behind for the next one
+	// is a legitimate thing to want.
+	// The task runner's own execer, rather than a second one on the engine:
+	// there is exactly one subprocess seam in this path and duplicating it
+	// would mean a test could stub one and not the other.
+	return worktree.With(ctx, e.Tasks.Exec, req.Dir, req.SHA, func(dir string) error {
+		return e.runTasks(ctx, req, r, policy, wanted, dir, log)
+	})
+}
+
+// runTasks executes the routed tasks inside an already-prepared worktree.
+func (e *Engine) runTasks(
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
+	wanted []config.NamedTask, dir string, log obs.Logger,
+) error {
+	var failed []string
+	for _, nt := range wanted {
+		e.report(ctx, func() error {
+			return e.Checks.Start(ctx, checks.TaskName(nt.Name), req.SHA)
+		}, log, checks.TaskName(nt.Name))
+
+		var output strings.Builder
+		result := task.Result{}
+		err := e.withPhaseTimeout(ctx, "task "+nt.Name, func(ctx context.Context) error {
+			result = e.Tasks.Run(ctx, task.Request{
+				Name: nt.Name, Task: nt.Task,
+				Dir: dir, SHA: req.SHA, Ref: req.Ref, Event: req.Event.String(),
+				Policy: policy,
+				// Tee: the operator watching a terminal sees it live, and the
+				// check body gets the same text without a second run.
+				Output: io.MultiWriter(&output, orDiscard(req.Output)),
+			})
+			return result.Err
+		})
+		// A timeout is the phase's error, not the command's, and it must reach
+		// the check body — otherwise a task killed at the deadline reports
+		// only whatever it had printed before it hung.
+		if err != nil && result.Err == nil {
+			result.Err = err
+			result.Tolerated = nt.Task.AllowFailure
+		}
+
+		conclusion, title, summary := checks.TaskSummary(result.Err, result.Tolerated, output.String())
+		e.report(ctx, func() error {
+			return e.Checks.Complete(ctx, checks.TaskName(nt.Name), req.SHA, conclusion, title, summary)
+		}, log, checks.TaskName(nt.Name))
+
+		r.Tasks = append(r.Tasks, run.Task{
+			Name: nt.Name, OK: result.OK(), Tolerated: result.Tolerated,
+			Duration: result.Duration.String(),
+		})
+
+		switch {
+		case result.Err == nil:
+			log.Info("task passed", "task", nt.Name, "duration", result.Duration.String())
+		case result.Tolerated:
+			log.Warn("task failed, tolerated", "task", nt.Name, "err", result.Err)
+		default:
+			log.Error("task failed", "task", nt.Name, "err", result.Err)
+			failed = append(failed, nt.Name)
+		}
+	}
+
+	if len(failed) > 0 {
+		return fmt.Errorf("%w: %s", task.ErrTaskFailed, strings.Join(failed, ", "))
+	}
+	return nil
+}
+
+// orDiscard keeps io.MultiWriter from panicking on a nil writer, which is what
+// a caller with no terminal passes.
+func orDiscard(w io.Writer) io.Writer {
+	if w == nil {
+		return io.Discard
+	}
+	return w
+}
+
 func (e *Engine) persist(r *run.Run, log obs.Logger) {
 	if err := e.Store.Save(r); err != nil {
 		log.Warn("could not persist run", "err", err)

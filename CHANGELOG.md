@@ -8,6 +8,30 @@ All notable changes to kiln are documented here. The format follows
 
 ### Added
 
+- **`tasks:` — the automation a pipeline needs that is neither a check nor an
+  artifact.** Named commands routed by event (`pull_request`, `push`, `tag`,
+  `schedule`), each posting its own `Kiln / <task>` check so branch protection
+  can require one and a red check names the thing that broke.
+
+  The line this does not cross: **a task cannot mint provenance.** The signed
+  artifacts of a run are exactly what `publish:` produced, so growing this
+  surface can never dilute the claim kiln exists to make. `.warden.yaml`
+  remains the only check language; this is automation, and it is deliberately
+  the weakest of the three things a pipeline does.
+
+  Tasks run after publish, in a disposable worktree pinned to the commit —
+  never the operator's working copy — with the environment scrubbed on an
+  untrusted head, exactly as the gate runs. One failure does not stop the
+  others: artifacts are a set, tasks are independent errands, and hiding the
+  second problem behind the first helps nobody. `allow_failure` records a
+  failure without failing the run, and concludes the check *neutral* rather
+  than red, because a red check for something declared advisory is how a wall
+  of red gets ignored.
+
+  Commands run under `sh -euc`: `-e` so a script that fails halfway fails
+  rather than reporting the status of its last echo, `-u` so a typo'd variable
+  is an error instead of an empty string deleting the wrong directory.
+
 - **`kiln verify --policy` — verification you can adopt without adopting
   kiln.** Producing provenance means changing how you build; checking it does
   not. The policy file declares whose signature counts, which builders are
