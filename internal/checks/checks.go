@@ -90,6 +90,37 @@ type GitHub struct {
 	// concluded, because nothing finished.
 	mu   sync.Mutex
 	runs map[string]int64
+	// statuses records that the Checks API refused this token, so the rest of
+	// the process posts commit statuses without asking again.
+	statuses bool
+}
+
+// statusesOnly reports whether this process has already learned that the token
+// cannot create check runs.
+func (g *GitHub) statusesOnly() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.statuses
+}
+
+func (g *GitHub) useStatuses() {
+	g.mu.Lock()
+	g.statuses = true
+	g.mu.Unlock()
+}
+
+// statusState maps a check conclusion onto the four a commit status has.
+//
+// Neutral and skipped become success rather than failure: both mean "this did
+// not go wrong", and a required context that reads failure would block a merge
+// for something the pipeline deliberately did not do.
+func statusState(c Conclusion) string {
+	switch c {
+	case Failure:
+		return "failure"
+	default:
+		return "success"
+	}
 }
 
 // NewGitHub builds a reporter.
@@ -104,7 +135,21 @@ func (g *GitHub) Start(ctx context.Context, name, sha string) error {
 	if !g.Client.Enabled() {
 		return nil
 	}
+	if g.statusesOnly() {
+		return g.Client.CreateStatus(ctx, sha, "pending", name, "running")
+	}
+
 	run, err := g.Client.CreateCheckRun(ctx, name, sha)
+	if errors.Is(err, github.ErrNeedsGitHubApp) {
+		// The Checks API only accepts a GitHub App. A personal access token
+		// gets one 403 and then this reporter switches to commit statuses for
+		// the rest of the process — branch protection accepts either as a
+		// required context, so the name still gates a merge.
+		g.useStatuses()
+		g.Log.Info("posting commit statuses instead of check runs",
+			"why", "the checks api requires a github app; this token is not one")
+		return g.Client.CreateStatus(ctx, sha, "pending", name, "running")
+	}
 	if err != nil {
 		return fmt.Errorf("checks: open %q: %w", name, err)
 	}
@@ -120,6 +165,10 @@ func (g *GitHub) Complete(ctx context.Context, name, sha string, c Conclusion, t
 		return nil
 	}
 
+	if g.statusesOnly() {
+		return g.Client.CreateStatus(ctx, sha, statusState(c), name, title)
+	}
+
 	g.mu.Lock()
 	id, ok := g.runs[key(name, sha)]
 	g.mu.Unlock()
@@ -129,6 +178,10 @@ func (g *GitHub) Complete(ctx context.Context, name, sha string, c Conclusion, t
 		// beginning of the run. Opening a check just to conclude it is better
 		// than losing the verdict entirely.
 		created, err := g.Client.CreateCheckRun(ctx, name, sha)
+		if errors.Is(err, github.ErrNeedsGitHubApp) {
+			g.useStatuses()
+			return g.Client.CreateStatus(ctx, sha, statusState(c), name, title)
+		}
 		if err != nil {
 			return fmt.Errorf("checks: reopen %q to conclude it: %w", name, err)
 		}

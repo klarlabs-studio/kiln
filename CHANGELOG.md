@@ -6,6 +6,21 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Kiln can post results outside GitHub Actions at all.** The Checks API
+  refuses anything that is not a GitHub App —
+  `403 You must authenticate via a GitHub App` — and inside Actions this is
+  invisible, because the `GITHUB_TOKEN` there *is* an app installation token.
+  The first time kiln ran against a repository from a box, every check silently
+  failed to post, which made the whole "require the Kiln checks in branch
+  protection" story impossible with a personal access token.
+
+  Kiln now falls back to commit statuses on that specific 403, once per
+  process. Branch protection accepts either as a required context, so the name
+  still gates a merge; the body is plainer. `kiln doctor` no longer promises
+  check runs it may not be able to create.
+
 ### Added
 
 - **`tasks:` — the automation a pipeline needs that is neither a check nor an

@@ -154,7 +154,18 @@ func (c *Client) CreateCheckRun(ctx context.Context, name, sha string) (CheckRun
 	}
 	var out CheckRun
 	err := c.do(ctx, http.MethodPost, c.path("check-runs"), payload, &out)
+	if err != nil && isAppOnly(err) {
+		// Distinguished from any other 403 because the caller's response is
+		// different: not "fix your permissions" but "this token can never do
+		// this, use statuses instead".
+		return out, fmt.Errorf("%w: %w", ErrNeedsGitHubApp, err)
+	}
 	return out, err
+}
+
+// isAppOnly recognises GitHub refusing a non-App token on the Checks API.
+func isAppOnly(err error) bool {
+	return strings.Contains(err.Error(), "must authenticate via a GitHub App")
 }
 
 // CompleteCheckRun closes a check run with a conclusion and a summary.
@@ -253,6 +264,43 @@ func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
 		})
 	}
 	return out, nil
+}
+
+// ErrNeedsGitHubApp reports the Checks API refusing a personal access token.
+//
+// Check runs can only be created by a GitHub App. Inside Actions this is
+// invisible, because the GITHUB_TOKEN there *is* an app installation token —
+// which is exactly why it surfaces the first time kiln runs somewhere else.
+var ErrNeedsGitHubApp = errors.New("the checks api requires a github app")
+
+// CreateStatus posts a commit status.
+//
+// The older sibling of check runs, and the one a personal access token is
+// allowed to write. Branch protection accepts either as a required context, so
+// for kiln's purpose — a name that can gate a merge — a status does the job
+// with a plainer body.
+func (c *Client) CreateStatus(ctx context.Context, sha, state, context, description string) error {
+	payload := map[string]any{
+		"state":       state,
+		"context":     context,
+		"description": truncateDescription(description),
+	}
+	path := fmt.Sprintf("/repos/%s/%s/statuses/%s", c.Repo.Owner, c.Repo.Name, sha)
+	if err := c.do(ctx, http.MethodPost, path, payload, nil); err != nil {
+		return fmt.Errorf("github: post status %q: %w", context, err)
+	}
+	return nil
+}
+
+// truncateDescription keeps within GitHub's 140-character limit, which it
+// enforces by rejecting the request rather than trimming.
+func truncateDescription(s string) string {
+	s = strings.TrimSpace(strings.SplitN(s, "\n", 2)[0])
+	const max = 140
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
 }
 
 // OpenPullRequest creates a pull request, or returns the open one that already
