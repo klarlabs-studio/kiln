@@ -6,6 +6,49 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`kiln verify --policy` — verification you can adopt without adopting
+  kiln.** Producing provenance means changing how you build; checking it does
+  not. The policy file declares whose signature counts, which builders are
+  acceptable and whose source verdict is required, so the rules live in a
+  reviewable file in the consumer's repository rather than in whatever flags
+  somebody typed into a pipeline step. A flag that contradicts the policy is a
+  usage error, and a misspelled field is a load error rather than a rule that
+  quietly checks nothing.
+
+  `provenance.builders` is what makes it general: a GitHub Actions workflow
+  identity is as valid a builder as kiln's own, so an artifact kiln never
+  touched verifies with the same command and the same report.
+
+- **The source verdict is verified from the artifact, against the gate's own
+  key.** With `source.keys`, kiln checks warden's DSSE envelope with ed25519
+  directly — cosign fetches it, cosign does not judge it, because
+  `verify-attestation` would check the signature of whoever *attached* the
+  summary rather than the gate that made it. No clone of the repository and no
+  `warden` binary on the verifying machine. Every configured key is tried
+  rather than the one the envelope names: a DSSE `keyid` is
+  attacker-controlled metadata, useful for picking a key out of a roster and
+  worthless as an authorisation.
+
+- **`kiln doctor` checks registry credentials before a build, not after.**
+  `image:` has always accepted any registry — Docker Hub, ECR, Harbor, one on
+  your own box — but the push is the last thing a publish does, so a missing
+  `docker login` surfaced only after the gate had run and the image had been
+  built, and repeated every tick on an unattended box. Doctor now reads
+  docker's own configuration and says so up front.
+
+  Docker Hub in particular: docker records it as `https://index.docker.io/v1/`
+  and always has, so a check looking up "docker.io" would report a missing
+  login that is right there. A credential store or helper counts as present —
+  holding credentials outside that file is its entire job — and an
+  unreadable or absent config is reported as *unknown* rather than missing,
+  because a CI runner may inject credentials in a way this cannot see.
+
+- **`kiln verify --json`** emits the report for a job that has to act on which
+  link broke. The exit code is unchanged and the message goes to stderr, so
+  stdout stays parseable.
+
 ### Fixed
 
 - **A `go install`ed kiln knows what it is.** Installing from the module path

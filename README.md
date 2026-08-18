@@ -227,6 +227,54 @@ cosign verify-blob-attestation --key cosign.pub \
   --bundle provenance.intoto.jsonl checksums.txt
 ```
 
+### Verifying without kiln
+
+Producing provenance means changing how you build. **Checking it does not** —
+and `kiln verify --policy` is deliberately usable by somebody who runs kiln
+nowhere, against artifacts kiln did not build:
+
+```bash
+kiln verify --policy policy.yaml ghcr.io/you/app@sha256:…
+```
+
+```yaml
+apiVersion: kiln.klarlabs.de/v1
+kind: VerificationPolicy
+signature:
+  identity: https://github.com/you/app/.github/workflows/release.yml@refs/tags/v1.4.0
+  issuer: https://token.actions.githubusercontent.com
+provenance:
+  builders: [https://github.com/actions/runner]   # or kiln, or both
+source:
+  keys: ["<base64 ed25519, as `warden key show` prints it>"]
+  gates: [https://warden.klarlabs.de]
+  levels: [WARDEN_SOURCE_SIGNED]
+  required: true
+```
+
+Three things make this worth having over a shell script full of cosign flags:
+
+**The rules are in your repository, in a diff.** A policy exists so the check
+does not depend on what somebody typed into a pipeline step, so a flag that
+contradicts the file is a usage error rather than a silent override. A
+misspelled key is a load error, not a rule that quietly checks nothing.
+
+**The source verdict is checked against the gate's own signature, read off the
+artifact.** No clone, no `warden` binary, no trust in whoever attached it —
+cosign fetches the envelope, ed25519 settles it. `verify-attestation` would
+check the signature of whoever *attached* the summary, which is exactly the one
+that does not matter. Every configured key is tried rather than the one the
+envelope names, because a DSSE `keyid` is attacker-controlled metadata.
+
+**The commit join is enforced.** Two verified claims about two different
+commits are not a chain: without it, a summary for a well-gated commit could
+ride on an artifact built from an ungated one and both signatures would check
+out.
+
+`--json` emits the report for a job that has to act on which link broke; the
+exit code is unchanged and the message goes to stderr, so stdout stays
+parseable. Full example: [`examples/policy.example.yaml`](examples/policy.example.yaml).
+
 ---
 
 ## One run
@@ -246,6 +294,12 @@ A skipped re-prove is recorded in the attestation as `sourceGate.reproved: false
 ## Publish contract
 
 ### Images
+
+`image:` is any registry — GHCR, Docker Hub (`docker.io/you/app`, or just
+`you/app`), ECR, Harbor, one on your own box. Kiln never logs in: it uses the
+credentials docker and cosign already have, and `kiln doctor` says before the
+build whether the registries in your pipeline have any. See
+[`docs/configuration.md`](docs/configuration.md#image--any-registry-not-just-ghcr).
 
 Every successful image publish produces an **immutable sha tag plus at least one moving tag**.
 
@@ -294,7 +348,7 @@ Same engine, four ways in.
 | `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
-| `kiln verify <ref>` | Walk a published artifact's whole provenance chain |
+| `kiln verify <ref>` | Walk a published artifact's whole provenance chain. `--policy` for artifacts kiln did not build; `--json` for a gate |
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 

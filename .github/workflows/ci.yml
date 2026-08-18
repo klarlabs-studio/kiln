@@ -39,6 +39,10 @@ jobs:
   examples:
     name: Examples
     runs-on: ubuntu-latest
+    # A bound, because the default is six hours. Nothing here legitimately
+    # takes ten minutes, and a job that hangs on a network read otherwise burns
+    # a runner until somebody notices.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
@@ -54,10 +58,17 @@ jobs:
       # A pipeline in the docs that no longer parses is worse than no example.
       # --config-only keeps this honest without installing docker, cosign and
       # nox on a linter runner.
-      - name: Validate shipped pipelines
+      # Two kinds of example, two validators. A pipeline in the docs that no
+      # longer parses is worse than no example — and so is a verification
+      # policy, which is the file a *consumer* copies.
+      - name: Validate shipped examples
         run: |
           go build -o bin/kiln ./cmd/kiln
-          for f in examples/*.yaml .kiln.yaml; do
-            echo "== $f"
+          for f in examples/*policy*.yaml; do
+            echo "== $f (policy)"
+            ./bin/kiln doctor --policy "$f"
+          done
+          for f in examples/pipeline*.yaml .kiln.yaml; do
+            echo "== $f (pipeline)"
             ./bin/kiln doctor --config-only --pipeline "$f"
           done

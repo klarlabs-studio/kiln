@@ -10,6 +10,7 @@ import (
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
+	"go.klarlabs.de/kiln/internal/policy"
 	"go.klarlabs.de/kiln/internal/publish"
 )
 
@@ -30,8 +31,17 @@ func runDoctor(ctx context.Context, args []string, io IO) error {
 	// linter job, a reviewer's laptop. Checking the schema there should not
 	// require installing docker, cosign and nox first.
 	configOnly := fs.Bool("config-only", false, "validate the pipeline and tag plan; skip toolchain and credentials")
+	policyPath := fs.String("policy", "", "validate a verification policy instead, and print what it would require")
 	if err := fs.Parse(args); err != nil {
 		return wrapExit(ExitUsage, err)
+	}
+
+	// A verification policy is checked on machines that have no pipeline at
+	// all — a consumer's repository, where kiln verifies artifacts somebody
+	// else built. Requiring a .kiln.yaml to sit beside it would make the
+	// policy unreviewable exactly where it matters most.
+	if *policyPath != "" {
+		return checkPolicy(io, *policyPath)
 	}
 
 	deps, err := boot.Build(ctx, boot.Options{Dir: *dir, PipelinePath: *pipelinePath})
@@ -67,6 +77,13 @@ func (r *doctorReport) ok(format string, args ...any) {
 // token on a laptop, no trusted keys on a box that never skips.
 func (r *doctorReport) warn(format string, args ...any) {
 	fmt.Fprintf(&r.b, "  warn  %s\n", fmt.Sprintf(format, args...))
+}
+
+// note is for something kiln could not establish either way. It is not a
+// warning: reporting an unknown as a problem is how a doctor teaches people to
+// skim past its output.
+func (r *doctorReport) note(format string, args ...any) {
+	fmt.Fprintf(&r.b, "  ?     %s\n", fmt.Sprintf(format, args...))
 }
 
 // fail is for something that will break a real run.
@@ -191,6 +208,8 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 		r.warn("no usable GITHUB_TOKEN: no checks, and every pull request is treated as a fork")
 	}
 
+	r.checkRegistries(deps)
+
 	if len(deps.Env.TrustedKeys) == 0 {
 		// Not a failure: a box that always re-proves is correct, just slower.
 		r.warn("no KILN_TRUSTED_KEYS: every run re-proves, because kiln only skips for a note " +
@@ -198,6 +217,45 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	} else {
 		r.ok("%d trusted signing key(s) pinned: a matching warden note may skip the re-prove",
 			len(deps.Env.TrustedKeys))
+	}
+}
+
+// checkRegistries reports whether the box can authenticate to the registries
+// this pipeline pushes to.
+//
+// The push is the last thing a publish does, so a missing login is discovered
+// after the gate has run and the image has been built — the most expensive
+// possible moment to learn it, and on an unattended box one that repeats every
+// tick. This reads docker's own configuration and says so up front.
+//
+// It deliberately does not contact the registry. Whether the credentials are
+// *valid* is a question only the registry can answer, and asking it here would
+// turn `kiln doctor` into something that needs the network and a rate-limit
+// budget to run.
+func (r *doctorReport) checkRegistries(deps *boot.Deps) {
+	seen := map[string]bool{}
+	for _, a := range deps.Pipeline.Publish {
+		if a.Kind != config.KindImage || a.Image == "" {
+			continue
+		}
+		registry := publish.RegistryOf(a.Image)
+		if seen[registry] {
+			continue
+		}
+		seen[registry] = true
+
+		switch publish.CheckRegistryCredentials(registry) {
+		case publish.CredentialsPresent:
+			r.ok("docker credentials for %s", registry)
+		case publish.CredentialsMissing:
+			r.warn("no docker credentials for %s: `docker login %s` before publishing, "+
+				"or the push will fail after the build", registry, registry)
+		case publish.CredentialsUnknown:
+			// A CI runner may be injecting credentials in a way this cannot
+			// see. Saying "not logged in" there would be a false alarm, and a
+			// doctor that cries wolf is a doctor nobody reads.
+			r.note("could not tell whether %s has credentials; docker's config says nothing either way", registry)
+		}
 	}
 }
 
@@ -261,4 +319,22 @@ func resolveCommit(ctx context.Context, deps *boot.Deps, commitish string) (stri
 		return "", err
 	}
 	return res.Output(), nil
+}
+
+// checkPolicy loads a verification policy and prints what it would require.
+//
+// "It parses" is the smaller half. The value is the list: a policy author can
+// see that the rule they thought they wrote is the rule that will run, which
+// is the failure a silently-ignored field would otherwise cause at the worst
+// possible time.
+func checkPolicy(io IO, path string) error {
+	p, err := policy.Load(path)
+	if err != nil {
+		return wrapExit(ExitConfig, err)
+	}
+	io.print(path + " requires:\n")
+	for _, c := range p.Checks() {
+		io.print("  - " + c + "\n")
+	}
+	return nil
 }

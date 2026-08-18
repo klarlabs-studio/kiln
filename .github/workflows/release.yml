@@ -11,6 +11,13 @@ on:
   push:
     tags: ['v*']
 
+# A tag must produce exactly one release run. Two racing runs upload the same
+# asset names, and both fail with 422 already_exists — after the GitHub Release
+# already exists, which is the expensive half to undo.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 permissions:
   contents: write
   # Keyless cosign. Fulcio issues a short-lived certificate against this
@@ -21,6 +28,10 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    # Generous next to CI's ten minutes: this cross-compiles four archives and
+    # catalogues an SBOM for each. Still a bound, because a release wedged on a
+    # registry read is worse than a release that failed.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

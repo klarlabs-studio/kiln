@@ -58,6 +58,9 @@ type Report struct {
 	Links     []Link
 	// Statement is the parsed provenance, when one was found.
 	Statement *attest.Statement
+	// SourceRequired records that the policy demanded a source verdict, so
+	// OK() can treat an unestablished one as a break rather than a caveat.
+	SourceRequired bool
 }
 
 // essentialLinks are the ones that must be positively established, not merely
@@ -79,11 +82,22 @@ func (r Report) OK() bool {
 		if l.Status == Fail {
 			return false
 		}
-		if l.Status == Unknown && slices.Contains(essentialLinks, l.Name) {
+		if l.Status == Unknown && slices.Contains(r.essential(), l.Name) {
 			return false
 		}
 	}
 	return true
+}
+
+// essential is the link set this report had to establish. A policy with
+// source.required promotes the source gate into it, which is the difference
+// between "we would like the commit to have been gated" and "we do not deploy
+// commits that were not".
+func (r Report) essential() []string {
+	if r.SourceRequired {
+		return append(slices.Clone(essentialLinks), "source gate")
+	}
+	return essentialLinks
 }
 
 // Complete reports whether the chain was fully established — no link left
@@ -126,6 +140,33 @@ type Options struct {
 	TrustedKeys []string
 	// WardenBin is the gate binary.
 	WardenBin string
+
+	// AllowedBuilders are the SLSA builder IDs this verification accepts. A
+	// trailing @ matches any version.
+	//
+	// Empty means "kiln only", which is the right default for `kiln verify`
+	// with no policy and the wrong one for a consumer checking somebody else's
+	// artifact — hence the field. Verifying a GitHub Actions build with the
+	// same command and the same report is what makes this tool adoptable by
+	// people who will never run kiln.
+	AllowedBuilders []string
+
+	// SourceKeys are the gate's own public keys, base64 ed25519.
+	//
+	// With these the source verdict is checked against the signature the gate
+	// made, read off the artifact itself — no clone, no warden binary, no
+	// trust in the builder that carried it. Without them the walk falls back
+	// to reading the note out of a local clone, which is strictly weaker and
+	// needs a machine that has one.
+	SourceKeys []string
+	// AllowedGates are verifier IDs whose summary is acceptable. Empty accepts
+	// any, and says so rather than implying a check happened.
+	AllowedGates []string
+	// RequiredLevels the summary must claim, e.g. WARDEN_SOURCE_SIGNED.
+	RequiredLevels []string
+	// SourceRequired turns an unestablished source verdict from a caveat into
+	// a failure.
+	SourceRequired bool
 }
 
 // Verifier walks the chain.
@@ -144,7 +185,7 @@ var ErrIncomplete = errors.New("provenance chain incomplete")
 // link failed; the report is populated either way, because a caller needs to
 // see which link broke.
 func (v *Verifier) Verify(ctx context.Context, opts Options) (Report, error) {
-	report := Report{Reference: opts.Reference}
+	report := Report{Reference: opts.Reference, SourceRequired: opts.SourceRequired}
 
 	if err := checkReferenceShape(opts.Reference); err != nil {
 		report.Links = append(report.Links, Link{"reference", Fail, err.Error()})
@@ -164,7 +205,7 @@ func (v *Verifier) Verify(ctx context.Context, opts Options) (Report, error) {
 	report.Links = append(report.Links, link)
 	if stmt != nil {
 		report.Statement = stmt
-		report.Links = append(report.Links, checkBuilder(*stmt))
+		report.Links = append(report.Links, checkBuilder(*stmt, opts.AllowedBuilders))
 		report.Links = append(report.Links, v.checkSource(ctx, opts, *stmt))
 	}
 
@@ -241,13 +282,46 @@ func (v *Verifier) checkProvenance(ctx context.Context, opts Options) (*attest.S
 // attestation; it did not check what the attestation says. Anyone with that
 // key can attest anything, so a reader about to trust kiln-specific fields —
 // the source gate in particular — must first confirm kiln wrote them.
-func checkBuilder(stmt attest.Statement) Link {
-	if !stmt.BuiltByKiln() {
-		return Link{"builder", Fail, fmt.Sprintf(
-			"attested by %q, which is not kiln — its sourceGate claim means nothing here",
-			stmt.Predicate.RunDetails.Builder.ID)}
+func checkBuilder(stmt attest.Statement, allowed []string) Link {
+	id := stmt.Predicate.RunDetails.Builder.ID
+
+	if len(allowed) == 0 {
+		// No policy: this is `kiln verify` on what is presumed to be kiln's
+		// own output, and the kiln-specific fields below are only meaningful
+		// if kiln wrote them.
+		if !stmt.BuiltByKiln() {
+			return Link{"builder", Fail, fmt.Sprintf(
+				"attested by %q, which is not kiln — its sourceGate claim means nothing here. "+
+					"Name it in provenance.builders to accept it", id)}
+		}
+		return Link{"builder", Pass, id}
 	}
-	return Link{"builder", Pass, stmt.Predicate.RunDetails.Builder.ID}
+
+	if !builderAllowed(id, allowed) {
+		return Link{"builder", Fail, fmt.Sprintf(
+			"built by %s, which the policy does not allow", orNone(id))}
+	}
+	return Link{"builder", Pass, id}
+}
+
+// builderAllowed matches a builder ID against the policy's roster.
+//
+// A trailing @ is a version wildcard: "…/kiln@" accepts "…/kiln@v0.1.0". It is
+// a prefix match and nothing cleverer on purpose — a regex here would be a
+// place for a policy author to write something that accidentally matches a
+// builder they have never heard of.
+func builderAllowed(id string, allowed []string) bool {
+	for _, want := range allowed {
+		switch {
+		case strings.HasSuffix(want, "@"):
+			if strings.HasPrefix(id, want) {
+				return true
+			}
+		case id == want:
+			return true
+		}
+	}
+	return false
 }
 
 // checkSource walks back to Warden's note on the commit the provenance names.
@@ -258,6 +332,14 @@ func (v *Verifier) checkSource(ctx context.Context, opts Options, stmt attest.St
 	commit := stmt.SourceCommit()
 	if commit == "" {
 		return Link{"source gate", Fail, "the provenance names no commit"}
+	}
+
+	// The gate's own signed summary, if the policy says whose signature counts.
+	// This is the strongest form of the check and the only one that works from
+	// anywhere: the verdict travels on the artifact, signed by the gate, so
+	// neither a clone nor the gate's binary has to exist on this machine.
+	if len(opts.SourceKeys) > 0 {
+		return v.checkCarriedSummary(ctx, opts, commit)
 	}
 
 	gate := stmt.Predicate.BuildDefinition.InternalParameters.SourceGate
@@ -296,6 +378,100 @@ func (v *Verifier) checkSource(ctx context.Context, opts Options, stmt attest.St
 		detail += "; checks were inherited, not re-run"
 	}
 	return Link{"source gate", Pass, detail}
+}
+
+// checkCarriedSummary verifies the source verdict the artifact carries.
+//
+// cosign downloads it; cosign does not judge it. `verify-attestation` would
+// check the signature of whoever *attached* the envelope — the build platform
+// — and that is precisely the signature that does not matter. The claim is the
+// gate's, so it stands or falls on the gate's key.
+//
+// Every configured key is tried rather than the one the envelope names. A DSSE
+// keyid is attacker-controlled metadata: fine for selecting a key from a
+// roster, worthless as an authorisation.
+func (v *Verifier) checkCarriedSummary(ctx context.Context, opts Options, builtFrom string) Link {
+	res, err := v.Runner.Run(ctx, execx.Cmd{
+		Name: v.Cosign,
+		Args: []string{"download", "attestation", opts.Reference},
+		Dir:  opts.RepoDir,
+	})
+	if err != nil {
+		return Link{"source gate", Fail, "no source summary on this artifact: " + condense(err)}
+	}
+
+	var lastDetail string
+	for line := range strings.SplitSeq(strings.TrimSpace(res.Stdout), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "{") {
+			continue
+		}
+		envelope, summary, err := attest.ParseEnvelope([]byte(line))
+		if err != nil {
+			// Some other attestation on the same artifact — the build
+			// provenance, an SBOM. Not a failure; just not this.
+			continue
+		}
+		keyID, ok := envelope.VerifiedBy(opts.SourceKeys)
+		if !ok {
+			lastDetail = "the source summary is not signed by any pinned gate key"
+			continue
+		}
+		if detail, ok := acceptSummary(summary, keyID, builtFrom, opts); ok {
+			return Link{"source gate", Pass, detail}
+		} else {
+			lastDetail = detail
+		}
+	}
+
+	if lastDetail == "" {
+		lastDetail = "this artifact carries no source summary"
+	}
+	return Link{"source gate", Fail, lastDetail}
+}
+
+// acceptSummary applies the policy to an authenticated summary.
+func acceptSummary(s attest.VSAStatement, keyID, builtFrom string, opts Options) (string, bool) {
+	verifier := s.Predicate.Verifier.ID
+	if len(opts.AllowedGates) > 0 && !slices.Contains(opts.AllowedGates, verifier) {
+		return fmt.Sprintf("gated by %s, which the policy does not allow", orNone(verifier)), false
+	}
+	if !s.Passed() {
+		return fmt.Sprintf("the source gate reported %q", orNone(s.Predicate.VerificationResult)), false
+	}
+	for _, want := range opts.RequiredLevels {
+		if !hasLevel(s.Predicate.VerifiedLevels, want) {
+			return fmt.Sprintf("the source gate did not reach %s (got %v)",
+				want, s.Predicate.VerifiedLevels), false
+		}
+	}
+
+	// The join. Two verified claims about two different commits are not a
+	// chain: without this, a summary for a well-gated commit could ride on an
+	// artifact built from an ungated one, and both signatures would check out.
+	commit := s.SourceCommit()
+	if commit == "" {
+		return "the source summary names no commit", false
+	}
+	if commit != builtFrom {
+		return fmt.Sprintf("the source summary is for %s but the artifact was built from %s",
+			short(commit), short(builtFrom)), false
+	}
+
+	detail := fmt.Sprintf("%s at %s, signed by %s", orNone(verifier), short(commit), orNone(keyID))
+	if len(opts.AllowedGates) == 0 {
+		detail += " (no allowed-gate policy set)"
+	}
+	return detail, true
+}
+
+func hasLevel(levels []string, want string) bool {
+	for _, l := range levels {
+		if strings.EqualFold(l, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // verifyArgs builds the identity flags shared by both cosign verifications.
