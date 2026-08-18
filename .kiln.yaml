@@ -26,6 +26,8 @@ publish:
     platforms: [linux/amd64]
     dockerfile: Dockerfile
     context: .
+    # sha-tagged builds kept on the build box. Older ones are a re-pull away.
+    keep: 10
 
   - kind: binaries
     from: goreleaser

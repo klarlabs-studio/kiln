@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -28,6 +29,7 @@ import (
 	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/obs"
+	"go.klarlabs.de/kiln/internal/prune"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
 	"go.klarlabs.de/kiln/internal/worktree"
@@ -67,6 +69,10 @@ type Watcher struct {
 	BranchesOnly bool
 	// FetchAttempts bounds the per-fetch retry. Zero uses the default.
 	FetchAttempts int
+	// Pruner reclaims docker disk each tick. Nil disables it.
+	Pruner *prune.Pruner
+	// BuildCacheMaxAge is passed through to the pruner.
+	BuildCacheMaxAge time.Duration
 }
 
 // Result summarises one tick.
@@ -107,6 +113,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 
 	if !dryRun {
 		w.reap(ctx)
+		w.prune(ctx)
 	}
 
 	if err := w.fetch(ctx); err != nil {
@@ -211,6 +218,47 @@ func (w *Watcher) reap(ctx context.Context) {
 	}
 	if removed > 0 {
 		w.logger().Info("reaped abandoned worktrees", "removed", removed)
+	}
+}
+
+// prune reclaims the disk docker holds.
+//
+// Beside the worktree reaper and for the same reason, but the numbers are
+// lopsided: checkouts are megabytes and docker is usually gigabytes of images
+// on top of several more of build cache. Collecting one without the other
+// reclaims the smaller half.
+//
+// Never fatal, and never wider than what this pipeline publishes.
+func (w *Watcher) prune(ctx context.Context) {
+	if w.Pruner == nil {
+		return
+	}
+
+	images := w.Pipeline.PrunableImages()
+	repos := make([]string, 0, len(images))
+	keep := 0
+	for image, n := range images {
+		repos = append(repos, image)
+		// One retention across the sweep; per-image limits differing would be
+		// a refinement nobody has asked for.
+		if n > keep {
+			keep = n
+		}
+	}
+	sort.Strings(repos)
+
+	res, err := w.Pruner.Prune(ctx, prune.Options{
+		Repos:            repos,
+		Keep:             keep,
+		BuildCacheMaxAge: w.BuildCacheMaxAge,
+	})
+	if err != nil {
+		w.logger().Warn("could not prune", "err", err)
+		return
+	}
+	if len(res.Removed) > 0 || res.CacheFreed != "" {
+		w.logger().Info("pruned",
+			"images", len(res.Removed), "kept", res.Kept, "cache", res.CacheFreed)
 	}
 }
 

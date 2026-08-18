@@ -79,6 +79,7 @@ Usage:
   kiln poll [--once | --every D]        watch, restricted to the tracked branch
   kiln status [run-id]                  show the latest run, or a named one
   kiln verify <ref> [--key k]           check a published artifact's whole chain
+  kiln prune [--dry-run]                reclaim local docker disk for this pipeline
   kiln mcp serve                        MCP server over stdio
 
 Run flags:
@@ -135,6 +136,8 @@ func Main(ctx context.Context, args []string, io IO) int {
 		return report(io, runStatus(ctx, rest, io))
 	case "verify":
 		return report(io, runVerify(ctx, rest, io))
+	case "prune":
+		return report(io, runPrune(ctx, rest, io))
 	case "mcp":
 		return report(io, runMCP(ctx, rest, io))
 

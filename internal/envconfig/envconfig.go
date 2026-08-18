@@ -11,6 +11,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"go.klarlabs.de/kiln/internal/prune"
 )
 
 // Defaults for the values an operator usually leaves alone.
@@ -61,6 +63,13 @@ type Env struct {
 	// bound, which an operator with a genuinely enormous build may want and
 	// should have to ask for.
 	PhaseTimeout time.Duration
+	// BuildCacheMaxAge prunes docker build cache older than this
+	// (KILN_BUILD_CACHE_MAX_AGE). Zero leaves the cache alone.
+	//
+	// A machine-level setting rather than a pipeline one: the daemon's cache
+	// is shared by every repository on the box, so it cannot sensibly be
+	// configured per repository.
+	BuildCacheMaxAge time.Duration
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -83,6 +92,8 @@ func Load() Env {
 		Dir:           os.Getenv("KILN_DIR"),
 		LogLevel:      firstNonEmpty(os.Getenv("KILN_LOG_LEVEL"), DefaultLogLevel),
 		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
+		BuildCacheMaxAge: duration(
+			os.Getenv("KILN_BUILD_CACHE_MAX_AGE"), prune.DefaultBuildCacheMaxAge),
 	}
 }
 

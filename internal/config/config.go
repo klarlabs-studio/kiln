@@ -21,6 +21,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	"go.klarlabs.de/kiln/internal/prune"
 )
 
 // FileName is the pipeline file Kiln looks for at the repository root.
@@ -127,6 +129,13 @@ type Artifact struct {
 	// Sign applies to both kinds. Kiln signs the image digest, or the release
 	// checksum manifest.
 	Sign string `yaml:"sign"`
+
+	// Keep is how many of this image's sha-tagged builds stay on the build
+	// box. Nil takes the default; 0 disables local pruning for this image.
+	//
+	// A pointer because "unset" and "never prune" are different answers and an
+	// operator who wrote 0 meant the second one.
+	Keep *int `yaml:"keep"`
 }
 
 // Watch configures unattended discovery. PullRequests and Tags are pointers so
@@ -296,6 +305,9 @@ func (a *Artifact) applyDefaults() {
 
 	switch a.Kind {
 	case KindImage:
+		if a.Keep == nil {
+			a.Keep = intPtr(prune.DefaultKeep)
+		}
 		if len(a.Tags) == 0 {
 			a.Tags = []Tag{TagSHA, TagLatest}
 		}
@@ -486,6 +498,7 @@ func (a Artifact) validateImage(where string) error {
 
 func (a Artifact) validateBinaries(where string) error {
 	for field, set := range map[string]bool{
+		"keep":       a.Keep != nil,
 		"image":      a.Image != "",
 		"tags":       len(a.Tags) > 0,
 		"platforms":  len(a.Platforms) > 0,
@@ -570,4 +583,23 @@ func (a Artifact) TagKinds() []Tag {
 	return out
 }
 
+// PrunableImages lists the image repositories this pipeline publishes, with
+// how many builds of each to retain locally.
+func (p Pipeline) PrunableImages() map[string]int {
+	out := map[string]int{}
+	for _, a := range p.Publish {
+		if a.Kind != KindImage || a.Image == "" {
+			continue
+		}
+		keep := prune.DefaultKeep
+		if a.Keep != nil {
+			keep = *a.Keep
+		}
+		out[a.Image] = keep
+	}
+	return out
+}
+
 func boolPtr(b bool) *bool { return &b }
+
+func intPtr(i int) *int { return &i }

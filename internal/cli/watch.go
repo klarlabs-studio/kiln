@@ -12,6 +12,7 @@ import (
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/poll"
+	"go.klarlabs.de/kiln/internal/prune"
 	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/watch"
 )
@@ -65,17 +66,7 @@ func runWatch(ctx context.Context, args []string, io IO, branchesOnly bool) erro
 		return wrapExit(ExitConfig, err)
 	}
 
-	watcher := &watch.Watcher{
-		Engine:       deps.Engine,
-		Store:        deps.Store,
-		Runner:       deps.Runner,
-		GitHub:       deps.GitHub,
-		Log:          deps.Log,
-		Dir:          deps.Dir,
-		Pipeline:     deps.Pipeline,
-		Repo:         repoName(deps),
-		BranchesOnly: branchesOnly,
-	}
+	watcher := newWatcher(deps, branchesOnly)
 
 	if *every != "" {
 		interval, err := parseInterval(*every)
@@ -238,11 +229,7 @@ func watchOne(ctx context.Context, io IO, dir string, opts watchOptions) error {
 		return err
 	}
 
-	watcher := &watch.Watcher{
-		Engine: deps.Engine, Store: deps.Store, Runner: deps.Runner,
-		GitHub: deps.GitHub, Log: deps.Log, Dir: deps.Dir,
-		Pipeline: deps.Pipeline, Repo: repoName(deps), BranchesOnly: opts.branchesOnly,
-	}
+	watcher := newWatcher(deps, opts.branchesOnly)
 
 	if opts.dryRun {
 		return finishTick(ctx, watcher, io, opts.branchesOnly, true)
@@ -253,6 +240,24 @@ func watchOne(ctx context.Context, io IO, dir string, opts watchOptions) error {
 			return nil
 		},
 		func() error { return finishTick(ctx, watcher, io, opts.branchesOnly, false) })
+}
+
+// newWatcher builds a watcher from the assembled graph, so the single-repo and
+// fleet paths cannot drift in what they wire.
+func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
+	return &watch.Watcher{
+		Engine:           deps.Engine,
+		Store:            deps.Store,
+		Runner:           deps.Runner,
+		GitHub:           deps.GitHub,
+		Log:              deps.Log,
+		Dir:              deps.Dir,
+		Pipeline:         deps.Pipeline,
+		Repo:             repoName(deps),
+		BranchesOnly:     branchesOnly,
+		Pruner:           prune.New(deps.Runner, deps.Log),
+		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
+	}
 }
 
 func finishTick(ctx context.Context, w *watch.Watcher, io IO, branchesOnly, dryRun bool) error {

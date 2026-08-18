@@ -123,6 +123,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_DIR` | Repository directory for kilnd |
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
+| `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ---
@@ -258,6 +259,7 @@ Same engine, four ways in.
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
 | `kiln verify <ref>` | Walk a published artifact's whole provenance chain |
+| `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 
 Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
@@ -313,6 +315,13 @@ means fix the code, the other means look at the machine.
 **Abandoned worktrees are collected.** A run cleans up after itself, but not
 through SIGKILL or an OOM kill. Each tick reaps kiln-prefixed temp directories
 older than a day, skipping anything git still lists as live.
+
+**Docker disk is reclaimed.** Each tick keeps the last `keep:` sha-tagged
+builds of the images this pipeline publishes (default 10) and prunes build
+cache older than `KILN_BUILD_CACHE_MAX_AGE` (default 168h) — usually the
+larger reclaim of the two. It never touches a moving tag, never a repository
+kiln does not publish, and **never a registry**: a local image is a re-pull
+away, a deleted registry digest is a rollback RollOps can no longer perform.
 
 ```cron
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1

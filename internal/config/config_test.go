@@ -479,3 +479,53 @@ publish:
 		t.Errorf("a monorepo publishing two images must be allowed: %+v", p.Publish)
 	}
 }
+
+func TestKeepDefaultsAndIsHonoured(t *testing.T) {
+	p := parse(t, minimal)
+	if got := p.Publish[0].Keep; got == nil || *got != 10 {
+		t.Errorf("Keep = %v, want the default", got)
+	}
+
+	explicit := parse(t, strings.Replace(minimal,
+		"    tags: [sha, latest]", "    tags: [sha, latest]\n    keep: 3", 1))
+	if got := explicit.Publish[0].Keep; got == nil || *got != 3 {
+		t.Errorf("Keep = %v, want 3", got)
+	}
+}
+
+func TestKeepZeroDisablesPruning(t *testing.T) {
+	p := parse(t, strings.Replace(minimal,
+		"    tags: [sha, latest]", "    tags: [sha, latest]\n    keep: 0", 1))
+
+	// An operator who wrote 0 meant "never prune this image", not "give me
+	// the default" — which is why it is a pointer.
+	if got := p.PrunableImages()["ghcr.io/klarlabs-studio/kiln"]; got != 0 {
+		t.Errorf("keep = %d, want 0 to survive", got)
+	}
+}
+
+func TestKeepOnBinariesIsRejected(t *testing.T) {
+	doc := `
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on: {tag: [prove, publish]}
+publish:
+  - kind: binaries
+    keep: 5
+`
+	if err := parseErr(t, doc); !strings.Contains(err.Error(), "would be ignored") {
+		t.Errorf("want a misplaced-field rejection, got %v", err)
+	}
+}
+
+func TestPrunableImagesListsOnlyImages(t *testing.T) {
+	p := parse(t, bothKinds)
+
+	got := p.PrunableImages()
+	if len(got) != 1 {
+		t.Fatalf("PrunableImages = %v, want just the image", got)
+	}
+	if _, ok := got["ghcr.io/klarlabs-studio/kiln"]; !ok {
+		t.Errorf("PrunableImages = %v", got)
+	}
+}

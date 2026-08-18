@@ -38,6 +38,9 @@ publish:
     platforms: [linux/amd64]
     dockerfile: Dockerfile
     context: .
+    # How many sha-tagged builds stay on the build box. The registry keeps the
+    # rest, so an older one is a re-pull rather than a loss. 0 never prunes.
+    keep: 10
 
   # The CLI archives a human downloads. goreleaser cross-compiles, archives,
   # writes checksums and creates the GitHub Release; kiln supplies the proven

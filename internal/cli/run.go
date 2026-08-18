@@ -58,10 +58,7 @@ func runRun(ctx context.Context, args []string, io IO) error {
 	// A one-shot run was asked for explicitly, so a busy repository is a
 	// refusal rather than a shrug: the operator wants to know their command
 	// did not happen.
-	return withRepoLock(deps.Dir, "kiln run --sha "+run.ShortSHA(resolved),
-		func(h lock.Holder) error {
-			return failWith(ExitBusy, "%v: %s", lock.ErrBusy, h)
-		},
+	return withRepoLock(deps.Dir, "kiln run --sha "+run.ShortSHA(resolved), busyRefusal,
 		func() error {
 			return executeRun(ctx, deps, io, parsedEvent, resolved,
 				resolveFork(ctx, deps, parsedEvent, *fork, *pr),
@@ -87,6 +84,12 @@ func executeRun(
 
 	printRun(io, r)
 	return classify(execErr)
+}
+
+// busyRefusal is the shared "somebody else has it" answer for the commands
+// that were asked for explicitly and must not silently do nothing.
+func busyRefusal(h lock.Holder) error {
+	return failWith(ExitBusy, "%v: %s", lock.ErrBusy, h)
 }
 
 // resolveFork decides the fork flag.

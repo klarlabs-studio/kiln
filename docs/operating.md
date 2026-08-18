@@ -133,8 +133,51 @@ temp dir carrying kiln's prefix, older than 24 hours, that git does not list as
 live. Nothing else collects them, and a box building all day for months
 otherwise fills up quietly.
 
-The ledger self-caps at 500 runs. Docker images are **not** pruned: what is
-safe to delete from a registry cache is an operator's call, not kiln's.
+The ledger self-caps at 500 runs.
+
+Each tick also prunes what docker holds, which on a busy box is the larger
+number by some way — images are gigabytes and build cache is usually several
+times that again. `docker system df` will tell you the split on yours.
+
+**Local only.** A deleted local image is a re-pull away because the registry
+holds the durable copy, and that recoverability is the whole reason this can
+run unattended. Kiln never deletes from a registry and offers no flag for it:
+that is unrecoverable, and it would break the rollback RollOps exists to
+perform. Registry retention belongs in your package settings, with a window
+wider than your longest plausible rollback.
+
+Within "local", three rules keep it narrow:
+
+- only repositories the pipeline publishes — never `docker image prune -a`,
+  which would take every unused image on a shared daemon
+- only the immutable `sha-` tags kiln generates
+- never the image a moving tag currently points at, even under a sha tag,
+  since the same image usually carries both
+
+```yaml
+publish:
+  - kind: image
+    image: ghcr.io/owner/name
+    keep: 10        # sha-tagged builds retained locally; 0 never prunes
+```
+
+Build cache is a property of the box rather than of a pipeline, so it is an
+environment setting: `KILN_BUILD_CACHE_MAX_AGE`, default `168h`, `0` to leave
+it alone. It is the one thing here kiln did not create — the daemon's cache is
+shared with every other build on the machine — but it is derived, so the worst
+outcome of being wrong is somebody's next build being slower.
+
+```bash
+kiln prune --dry-run          # what would go
+kiln prune --keep 5           # override the pipeline
+kiln prune --cache-older-than 24h
+```
+
+Retention orders newest-first and breaks ties on the tag name. That tiebreak
+matters more than it looks: a reproducible image — anything `FROM scratch`, or
+built with `SOURCE_DATE_EPOCH` — reports 1970 as its creation time, so a whole
+repository can tie, and without a total order `--dry-run` would name one image
+while the real run removed another.
 
 ## The ledger
 
