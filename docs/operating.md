@@ -129,9 +129,19 @@ missing toolchain.
 ## Disk
 
 Each watch tick reaps worktrees left by killed runs — directories under the
-temp dir carrying kiln's prefix, older than 24 hours, that git does not list as
-live. Nothing else collects them, and a box building all day for months
-otherwise fills up quietly.
+temp dir carrying kiln's prefix, older than 24 hours, that nobody is building
+in. Nothing else collects them, and a box building all day for months otherwise
+fills up quietly.
+
+"Nobody is building in" is an `flock` a run holds on its own checkout for as
+long as it lives; the kernel drops it when the process dies, however it dies.
+That is what makes the reaper safe on a box running two pipelines out of two
+checkouts: git can only list the worktrees of the repository it was pointed at,
+so a neighbour's live tree looks exactly like abandoned leavings to it, and it
+would have deleted one mid-build after a day. It is also what makes the reaper
+work at all — `git worktree prune` only drops entries whose directory has gone,
+so a killed run leaves one registered, and a reaper trusting that listing would
+treat the very leavings it exists for as live forever.
 
 The ledger self-caps at 500 runs.
 

@@ -35,6 +35,12 @@ type fixture struct {
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
 
+	// A tick reaps abandoned worktrees out of os.TempDir(), so give the
+	// watcher a temp directory of its own. Otherwise these tests sweep the
+	// real one — the machine's actual kiln leavings, and whatever the worktree
+	// package's own reaper tests are doing at the same moment.
+	t.Setenv("TMPDIR", t.TempDir())
+
 	upstream := gittest.New(t)
 	upstream.Commit("first", "app.txt", "one\n")
 	local := upstream.Clone(t)

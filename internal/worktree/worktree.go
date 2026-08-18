@@ -13,6 +13,7 @@ package worktree
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/execx"
+	"go.klarlabs.de/kiln/internal/lock"
 )
 
 // Tree is a checked-out commit. Close removes it; callers must defer that.
@@ -31,6 +33,7 @@ type Tree struct {
 
 	repo   string
 	runner execx.Runner
+	owner  *lock.Lock
 	closed bool
 }
 
@@ -49,6 +52,12 @@ func Add(ctx context.Context, r execx.Runner, repoDir, sha string) (*Tree, error
 		return nil, fmt.Errorf("worktree: create temp dir: %w", err)
 	}
 
+	// Claim the directory before anything is checked out into it, so it is
+	// never reapable-looking for even an instant. Best-effort: off unix there
+	// is no flock, and a build box without one is still a build box — it just
+	// falls back to the age cutoff, which is what every kiln did before.
+	owner, _ := lock.TryAcquire(filepath.Join(dir, ownerFile), "worktree "+sha)
+
 	// git refuses to add a worktree onto an existing directory, so hand it a
 	// path that does not exist yet inside the temp dir we just made. The outer
 	// dir is what Close removes, which keeps cleanup a single RemoveAll.
@@ -59,11 +68,12 @@ func Add(ctx context.Context, r execx.Runner, repoDir, sha string) (*Tree, error
 		Args: []string{"worktree", "add", "--detach", "--force", target, sha},
 		Dir:  repoDir,
 	}); err != nil {
+		_ = owner.Release()
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("worktree: check out %s: %w", sha, err)
 	}
 
-	return &Tree{Path: target, SHA: sha, repo: repoDir, runner: r}, nil
+	return &Tree{Path: target, SHA: sha, repo: repoDir, runner: r, owner: owner}, nil
 }
 
 // Close removes the worktree and its temp directory. It is idempotent, and it
@@ -80,6 +90,10 @@ func (t *Tree) Close(ctx context.Context) error {
 		Args: []string{"worktree", "remove", "--force", t.Path},
 		Dir:  t.repo,
 	})
+	// Drop the ownership claim before the directory goes, so a reaper watching
+	// this path never sees a held lock on a tree that is already finished.
+	_ = t.owner.Release()
+
 	// Always remove the directory. If git already did, this is a no-op; if git
 	// failed, this is the part that actually matters.
 	rmErr := os.RemoveAll(strings.TrimSuffix(t.Path, "/tree"))
@@ -158,12 +172,61 @@ const TempPrefix = "kiln-tree-"
 
 // ReapAfter is how long an abandoned tree must have sat before it is removed.
 //
-// Generous on purpose. The reaper cannot ask a directory whether a build is
-// still using it, so age is the only evidence available, and it has to exceed
-// any build somebody might legitimately be running. Deleting a live checkout
-// mid-build would be a far worse failure than leaving a stale one an extra
-// day.
+// Generous on purpose. The ownership lock answers "is someone building in
+// here" directly, but only for trees a recent kiln made; for anything else age
+// is the only evidence, and it has to exceed any build somebody might
+// legitimately be running. Deleting a live checkout mid-build would be a far
+// worse failure than leaving a stale one an extra day.
 const ReapAfter = 24 * time.Hour
+
+// ownerFile is the flock a run holds on its own tree for as long as it is
+// building, inside the outer temp directory beside the checkout.
+//
+// It is what lets the reaper tell a build in progress from the leavings of a
+// killed one, and it works across repositories: the reaper can only see git's
+// registry for the repository it was pointed at, but it can try this lock on
+// anything. The kernel drops it when the process dies, however it dies, so
+// nothing has to be cleaned up by hand for a tree to become collectable.
+const ownerFile = "owner.lock"
+
+// ownership is what the reaper could establish about a candidate directory.
+type ownership int
+
+const (
+	// ownerUnknown: no claim to read. Either the tree predates the ownership
+	// file or this platform has no flock. Fall back to git's registry.
+	ownerUnknown ownership = iota
+	// ownerHeld: a live process is building in there right now.
+	ownerHeld
+	// ownerGone: there was an owner and it is not running any more.
+	ownerGone
+)
+
+// ownerOf reports what the ownership file says about a candidate directory.
+//
+// Taking the lock to find out that it is free is the only way to ask, so this
+// releases it immediately. That is safe because the answer it gives —
+// "whoever made this is gone" — cannot become false again: nothing but a fresh
+// Add ever claims one of these, and Add makes its own directory.
+func ownerOf(dir string) ownership {
+	path := filepath.Join(dir, ownerFile)
+	if _, err := os.Stat(path); err != nil {
+		return ownerUnknown
+	}
+
+	held, err := lock.TryAcquire(path, "reaper probe")
+	switch {
+	case err == nil:
+		_ = held.Release()
+		return ownerGone
+	case errors.Is(err, lock.ErrBusy):
+		return ownerHeld
+	default:
+		// No flock on this platform, or the file is unreadable. Either way we
+		// have learned nothing, and guessing here would delete live checkouts.
+		return ownerUnknown
+	}
+}
 
 // Reap removes abandoned worktrees and prunes git's record of them.
 //
@@ -211,10 +274,25 @@ func Reap(ctx context.Context, r execx.Runner, repoDir string, olderThan time.Du
 			continue
 		}
 		path := filepath.Join(os.TempDir(), e.Name())
-		if live[resolve(filepath.Join(path, "tree"))] {
-			// Another kiln — or this one — is building in it right now.
+
+		// Two sources of evidence, and the order matters. The ownership lock
+		// is direct and repository-blind, so it decides whenever it has an
+		// answer. git's registry is a fallback for trees that carry no lock:
+		// it cannot see other repositories' trees at all, and — because a
+		// killed run leaves its administrative entry behind — it reports the
+		// very leavings this reaper exists to collect as live.
+		switch ownerOf(path) {
+		case ownerHeld:
 			continue
+		case ownerGone:
+			// Provably nobody's. Age still decides, so this stays a
+			// housekeeping pass rather than something that races a build.
+		case ownerUnknown:
+			if live[resolve(filepath.Join(path, "tree"))] {
+				continue
+			}
 		}
+
 		info, err := e.Info()
 		if err != nil || info.ModTime().After(cutoff) {
 			continue
