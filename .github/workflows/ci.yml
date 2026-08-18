@@ -39,6 +39,10 @@ jobs:
   examples:
     name: Examples
     runs-on: ubuntu-latest
+    # A bound, because the default is six hours. Nothing here legitimately
+    # takes ten minutes, and a job that hangs on a network read otherwise burns
+    # a runner until somebody notices.
+    timeout-minutes: 10
     permissions:
       contents: read
     steps:
