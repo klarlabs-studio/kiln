@@ -126,6 +126,73 @@ An unparsable value falls back to the default rather than removing the bound.
 A timeout exits 3, not 2: it is a machine problem, in the same bucket as a
 missing toolchain.
 
+## Running kiln as a box
+
+Kiln is daemon-less: a tick is `kiln watch --once`, and something has to call
+it. Two shapes, both of which need one decision from you — **where the GitHub
+token lives**.
+
+### cron, on a machine you already have
+
+```cron
+*/5 * * * * cd /srv/repos/rollops-studio && \
+  GITHUB_TOKEN="$(cat /etc/kiln/token)" /usr/local/bin/kiln watch --once \
+  >> /var/log/kiln.log 2>&1
+```
+
+`--repos /srv/repos/*` watches a fleet from one entry. Overlap is handled: a
+tick that finds the repository locked exits 75 and says nothing, which is why
+a five-minute schedule over a twenty-minute build is safe.
+
+### a Kubernetes CronJob
+
+For a repository that only proves — no image to build — kiln needs no docker
+socket, which makes a CronJob the tidier home:
+
+```yaml
+apiVersion: batch/v1
+kind: CronJob
+metadata: { name: kiln-rollops-studio, namespace: klarlabs }
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid          # the repository lock would refuse anyway
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: kiln
+              image: ghcr.io/klarlabs-studio/kiln:v0.1.1
+              args: ["watch", "--once"]
+              workingDir: /workspace/repo
+              env:
+                - name: GITHUB_TOKEN
+                  valueFrom:
+                    secretKeyRef: { name: kiln-github, key: token }
+              volumeMounts:
+                - { name: repo, mountPath: /workspace }
+          volumes:
+            - name: repo
+              persistentVolumeClaim: { claimName: kiln-rollops-studio }
+```
+
+The clone is on a PVC rather than re-cloned each tick: kiln's already-built
+check reads the local ledger, and a fresh clone every five minutes would
+rebuild every commit it had already seen.
+
+### What the token needs
+
+`repo` scope for a private repository, plus the ability to write commit
+statuses. A fine-grained token wants **Contents: read** (**write** if a task
+opens pull requests), **Pull requests: write** for the same, and **Commit
+statuses: write**.
+
+Give kiln its own token rather than a personal one. It runs unattended and
+executes repository-authored commands; a credential that can be scoped to the
+repositories it watches, and revoked without locking anybody out of their own
+account, is worth the five minutes.
+
 ## Checks, and what your token can post
 
 Kiln reports each phase and each task under a name branch protection can
