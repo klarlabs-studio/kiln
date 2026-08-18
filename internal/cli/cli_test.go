@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -762,5 +763,125 @@ func TestReadOnlyCommandsIgnoreTheLock(t *testing.T) {
 	}
 	if _, _, code := capture(t, "status"); code == ExitBusy {
 		t.Error("status blocked on the lock")
+	}
+}
+
+// fleet builds n clones sharing an upstream, the shape a build box watching
+// several services actually has.
+func fleet(t *testing.T, n int) (root string, dirs []string) {
+	t.Helper()
+	root = t.TempDir()
+	for i := range n {
+		upstream := gittest.New(t)
+		upstream.Commit("first", "app.txt", "one\n")
+
+		dir := filepath.Join(root, "svc"+strconv.Itoa(i))
+		cmd := exec.Command("git", "clone", "-q", upstream.Dir, dir)
+		cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_SYSTEM=/dev/null")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("clone: %v\n%s", err, out)
+		}
+		dirs = append(dirs, dir)
+	}
+	for _, k := range []string{"GITHUB_TOKEN", "GH_TOKEN", "KILN_DB", "KILN_DIR"} {
+		t.Setenv(k, "")
+	}
+	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	t.Setenv("KILN_WARDEN", fakeBin(t, "warden-pass", "exit 0"))
+	return root, dirs
+}
+
+func TestWatchAFleetFromOneProcess(t *testing.T) {
+	root, dirs := fleet(t, 3)
+
+	out, _, code := capture(t, "watch", "--once", "--repos", filepath.Join(root, "svc*"))
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	for _, dir := range dirs {
+		if !strings.Contains(out, dir) {
+			t.Errorf("output does not mention %s:\n%s", dir, out)
+		}
+	}
+	if strings.Count(out, "built") != len(dirs) {
+		t.Errorf("expected every repository to build:\n%s", out)
+	}
+}
+
+func TestACommaSeparatedFleet(t *testing.T) {
+	_, dirs := fleet(t, 2)
+
+	out, _, code := capture(t, "watch", "--once", "--repos", strings.Join(dirs, ","))
+
+	if code != ExitOK {
+		t.Fatalf("code = %d\n%s", code, out)
+	}
+	if strings.Count(out, "==") != 2 {
+		t.Errorf("expected both repositories:\n%s", out)
+	}
+}
+
+func TestOneBadRepositoryDoesNotStopTheFleet(t *testing.T) {
+	root, dirs := fleet(t, 2)
+	// A directory that is not a repository at all — the realistic version is
+	// somebody's stray folder matching the glob.
+	broken := filepath.Join(root, "svc9")
+	if err := os.MkdirAll(broken, 0o750); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, code := capture(t, "watch", "--once", "--repos", filepath.Join(root, "svc*"))
+
+	// The point of a fleet in one process is that it is not a single point of
+	// failure.
+	if code != ExitFailed {
+		t.Errorf("code = %d, want the failure counted", code)
+	}
+	if strings.Count(out, "built") != len(dirs) {
+		t.Errorf("the healthy repositories should still have built:\n%s", out)
+	}
+	if !strings.Contains(out, "not a git repository") {
+		t.Errorf("output should say what was wrong:\n%s", out)
+	}
+}
+
+func TestFleetSkipsABusyRepository(t *testing.T) {
+	root, dirs := fleet(t, 2)
+	holdRepoLock(t, dirs[0])
+
+	out, _, code := capture(t, "watch", "--once", "--repos", filepath.Join(root, "svc*"))
+
+	if code != ExitOK {
+		t.Errorf("code = %d, a busy member is not a fleet failure\n%s", code, out)
+	}
+	if !strings.Contains(out, "busy") {
+		t.Errorf("output should name the busy repository:\n%s", out)
+	}
+	// Each repository has its own lock, so the others carry on.
+	if strings.Count(out, "built") != 1 {
+		t.Errorf("the unlocked repository should still have built:\n%s", out)
+	}
+}
+
+func TestReposAndDirAreMutuallyExclusive(t *testing.T) {
+	root, _ := fleet(t, 1)
+
+	_, errOut, code := capture(t, "watch", "--once", "--repos", root, "--dir", root)
+
+	if code != ExitUsage || !strings.Contains(errOut, "mutually exclusive") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestAGlobThatMatchesNothingIsAUsageError(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "watch", "--once", "--repos", filepath.Join(t.TempDir(), "nothing*"))
+
+	// Silently watching zero repositories is how somebody discovers a typo
+	// three weeks later.
+	if code != ExitUsage || !strings.Contains(errOut, "matched no directories") {
+		t.Errorf("code = %d, stderr = %q", code, errOut)
 	}
 }

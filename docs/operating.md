@@ -42,6 +42,20 @@ Or a process, if you would rather supervise one:
 kiln watch --every 5m
 ```
 
+One process can watch a fleet, which beats N cron entries when the boxes share
+a docker daemon:
+
+```bash
+kiln watch --every 5m --repos '/srv/*'
+kiln watch --once --repos /srv/api,/srv/worker
+```
+
+Repositories tick in sequence. The expensive parts of a tick already saturate
+a build box, so running four concurrently makes all four slower and the output
+unreadable. One repository failing does not stop the others — that is the
+whole reason to run a fleet from one process rather than accept a single point
+of failure.
+
 `--every` runs its first tick immediately — an operator starting a watcher
 wants to know now whether it works, not in five minutes.
 
@@ -80,9 +94,47 @@ Runs nothing, prints the job list. Safe even on a box with no gate installed.
 | 2 | the gate rejected the change, or a job failed |
 | 3 | configuration or toolchain — a broken machine |
 | 64 | usage |
+| 75 | another kiln holds this repository |
 
 2 and 3 are separated on purpose: 2 needs a developer to fix their code, 3
 needs an operator to fix a machine. Alert on 3.
+
+## Concurrency
+
+Kiln takes an exclusive `flock` per repository at `.kiln/lock`. It is advisory,
+held on an open descriptor, and released by the kernel when the process exits
+— including a SIGKILL — so a crashed build never leaves a repository wedged.
+
+| Caller | Busy repository |
+|---|---|
+| `kiln run` | refuses, exit 75, naming the holder |
+| `kiln watch` / `poll` | skips, exit 0 — overlap is expected under cron |
+| `kilnd` | waits, bounded by the build timeout |
+| `--dry-run`, `status`, `doctor`, `verify` | never takes the lock |
+
+`--every` locks per tick, not for the loop's lifetime, so a long-lived watcher
+does not shut out an operator's `kiln run` between ticks.
+
+If you need to know who holds it: `cat .kiln/lock`.
+
+## Timeouts
+
+`KILN_PHASE_TIMEOUT` (default `45m`) bounds the gate and each artifact's
+publish independently. Set `0` to disable it for a genuinely enormous build.
+An unparsable value falls back to the default rather than removing the bound.
+
+A timeout exits 3, not 2: it is a machine problem, in the same bucket as a
+missing toolchain.
+
+## Disk
+
+Each watch tick reaps worktrees left by killed runs — directories under the
+temp dir carrying kiln's prefix, older than 24 hours, that git does not list as
+live. Nothing else collects them, and a box building all day for months
+otherwise fills up quietly.
+
+The ledger self-caps at 500 runs. Docker images are **not** pruned: what is
+safe to delete from a registry cache is an operator's call, not kiln's.
 
 ## The ledger
 

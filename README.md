@@ -122,6 +122,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_WEBHOOK_SECRET` | GitHub webhook HMAC |
 | `KILN_DIR` | Repository directory for kilnd |
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
+| `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ---
@@ -253,12 +254,13 @@ Same engine, four ways in.
 | `kiln doctor` | Validate YAML, print the tag plan, check the toolchain. Runs nothing. |
 | `kiln run --sha S --event E` | One-shot build. `--sha HEAD` resolves via git. |
 | `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded |
+| `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
 | `kiln verify <ref>` | Walk a published artifact's whole provenance chain |
 | `kiln mcp serve` | Stdio MCP |
 
-Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage. Cron can tell "your code is wrong" from "this machine is broken".
+Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
 
 Ctrl-C cancels through `signal.NotifyContext`, so worktrees are cleaned up rather than leaked. Logs are bolt JSON on **stderr**.
 
@@ -292,6 +294,25 @@ Kiln posts Checks. There is no Kiln web app in OSS, and there does not need to b
 ---
 
 ## Unattended
+
+Three things make a box safe to leave alone for months.
+
+**One build at a time per repository.** Overlap is not an edge case under cron:
+a five-minute build on a one-minute schedule produces five kilns on one
+checkout, all deciding the head is unbuilt because none has finished writing a
+success yet. An exclusive `flock` per repository serialises them, and the
+kernel drops it if a process dies. What "busy" means depends on who asked —
+`kiln run` refuses (exit 75, naming the holder), `kiln watch` skips and exits
+0, `kilnd` waits. Read-only commands and `--dry-run` never take it.
+
+**Every phase is bounded.** `KILN_PHASE_TIMEOUT` (default 45m) caps the gate
+and each artifact's publish separately, so a docker pull that stops answering
+cannot pin a watcher. A timeout is reported distinctly from a failure: one
+means fix the code, the other means look at the machine.
+
+**Abandoned worktrees are collected.** A run cleans up after itself, but not
+through SIGKILL or an OOM kill. Each tick reaps kiln-prefixed temp directories
+older than a day, skipping anything git still lists as live.
 
 ```cron
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1

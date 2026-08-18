@@ -75,6 +75,7 @@ Usage:
   kiln doctor [--config-only]           validate configuration and toolchain; run nothing
   kiln run --sha S --event E [flags]    build one commit
   kiln watch [--once | --every D]       discover and build new refs
+  kiln watch --repos /srv/*             the same, across a fleet, from one process
   kiln poll [--once | --every D]        watch, restricted to the tracked branch
   kiln status [run-id]                  show the latest run, or a named one
   kiln verify <ref> [--key k]           check a published artifact's whole chain
