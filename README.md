@@ -42,7 +42,7 @@ CycloneDX SBOM per archive:
 
 ```bash
 cosign verify-blob \
-  --bundle checksums.txt.bundle --new-bundle-format \
+  --bundle checksums.txt.bundle \
   --certificate-identity \
     "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
