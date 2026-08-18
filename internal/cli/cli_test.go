@@ -483,6 +483,16 @@ func TestMCPRequiresTheServeSubcommand(t *testing.T) {
 	}
 }
 
+// stubTool puts a do-nothing executable of the given name on PATH.
+//
+// Any test whose subject branches on whether a binary exists must say which
+// answer it wants. Reading the developer's PATH instead is how a test passes
+// on a laptop with the whole toolchain installed and fails on a bare runner.
+func stubTool(t *testing.T, name string) {
+	t.Helper()
+	fakeBin(t, name, "exit 0")
+}
+
 // fakeBin writes an executable shell script and returns its name, adding its
 // directory to PATH. It stands in for warden so the CLI tests can exercise
 // both verdicts without installing anything.
@@ -599,6 +609,10 @@ func TestVerifyRequiresAReference(t *testing.T) {
 
 func TestVerifyRefusesAnUnpinnedKeylessCheck(t *testing.T) {
 	repoWith(t, "")
+	// verify short-circuits when cosign is absent, so a test about what it
+	// does *with* cosign has to supply one. Leaving this to the developer's
+	// PATH is how the last two CI failures happened.
+	stubTool(t, "cosign")
 
 	out, _, code := capture(t, "verify", "ghcr.io/x/y@sha256:aaa")
 
@@ -612,10 +626,10 @@ func TestVerifyRefusesAnUnpinnedKeylessCheck(t *testing.T) {
 	}
 }
 
-func TestVerifyReportsEveryLink(t *testing.T) {
+func TestVerifyWithoutCosignChecksNothing(t *testing.T) {
 	repoWith(t, "")
-	// No cosign is reachable under the test PATH, so this exercises the
-	// "nothing could be checked" path rather than a real verification.
+	// An empty PATH, asserted rather than assumed: this is the "nothing could
+	// be checked" path.
 	t.Setenv("PATH", t.TempDir())
 
 	out, _, code := capture(t, "verify", "ghcr.io/x/y@sha256:aaa", "--key", "cosign.pub")
