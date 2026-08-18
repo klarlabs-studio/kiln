@@ -53,6 +53,16 @@ type Request struct {
 	Output io.Writer
 }
 
+// SourceAttester produces the source gate's own attestation for a commit.
+//
+// Separate from Verifier because they answer different questions and a
+// deployment may want one without the other: Verifier decides whether kiln can
+// skip re-proving, this carries warden's verdict to whoever ends up holding
+// the artifact.
+type SourceAttester interface {
+	SourceAttestation(ctx context.Context, repoDir, sha string) ([]byte, error)
+}
+
 // Engine runs the phase sequence.
 type Engine struct {
 	Prover prove.Prover
@@ -62,9 +72,12 @@ type Engine struct {
 	Publisher        publish.Publisher
 	ReleasePublisher publish.Publisher
 	Provenance       provenance.Verifier
-	Checks           checks.Reporter
-	Store            store.Store
-	Log              obs.Logger
+	// SourceAttester carries warden's verification summary onto the artifact.
+	// Nil publishes build provenance alone.
+	SourceAttester SourceAttester
+	Checks         checks.Reporter
+	Store          store.Store
+	Log            obs.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
@@ -254,7 +267,8 @@ func (e *Engine) doPublish(
 	e.persist(r, log)
 	e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NamePublish, req.SHA) }, log, checks.NamePublish)
 
-	produced, err := e.publishAll(ctx, req, r, wanted, e.provenanceInput(req, r, policy, gate), log)
+	produced, err := e.publishAll(ctx, req, r, wanted,
+		e.provenanceInput(req, r, policy, gate), e.sourceSummary(ctx, req, log), log)
 
 	conclusion, title, summary := checks.PublishSummary(produced, err)
 	e.report(ctx, func() error {
@@ -278,7 +292,7 @@ func (e *Engine) doPublish(
 // before the failure is still recorded, so the operator can see how far it got.
 func (e *Engine) publishAll(
 	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact,
-	prov attest.Input, log obs.Logger,
+	prov attest.Input, sourceVSA []byte, log obs.Logger,
 ) ([]run.Artifact, error) {
 	produced := make([]run.Artifact, 0, len(artifacts))
 
@@ -300,6 +314,7 @@ func (e *Engine) publishAll(
 				Ref:        req.Ref,
 				Artifact:   artifact,
 				Provenance: prov,
+				SourceVSA:  sourceVSA,
 				Output:     req.Output,
 			})
 			return pubErr
@@ -325,6 +340,26 @@ func (e *Engine) publishAll(
 			"digest", res.Digest, "signed", res.Signed, "attested", res.Attested)
 	}
 	return produced, nil
+}
+
+// sourceSummary fetches warden's verdict for the commit, once per run.
+//
+// Best-effort. A repository still adopting warden, or a commit whose note has
+// not been written, publishes build provenance without the source half rather
+// than failing — refusing would make adoption all-or-nothing. The absence is
+// logged, because "no source summary attached" is something an operator
+// enforcing one downstream needs to be able to find out about here rather than
+// at deploy time.
+func (e *Engine) sourceSummary(ctx context.Context, req Request, log obs.Logger) []byte {
+	if e.SourceAttester == nil {
+		return nil
+	}
+	vsa, err := e.SourceAttester.SourceAttestation(ctx, req.Dir, req.SHA)
+	if err != nil {
+		log.Warn("no source summary to attach", "err", err)
+		return nil
+	}
+	return vsa
 }
 
 // provenanceInput assembles the run-level facts every artifact's attestation

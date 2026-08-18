@@ -49,6 +49,14 @@ type Request struct {
 	// subject once the digest exists, because the digest is the one field
 	// nobody knows until the artifact is built.
 	Provenance attest.Input
+	// SourceVSA is Warden's own verification summary for the commit, carried
+	// verbatim. Empty when the commit has no note.
+	//
+	// Kiln republishes it rather than summarising it: kiln reporting "the gate
+	// passed" asks a reader to trust kiln about warden, where the VSA names
+	// the verifier, the policy and the levels reached in a shape a generic
+	// SLSA consumer already reads.
+	SourceVSA []byte
 	// Output, when set, receives docker's live output. It is an io.Writer
 	// rather than an *os.File so a nil value stays a nil interface; a typed-nil
 	// *os.File would satisfy io.Writer and then panic on first write.
@@ -170,6 +178,9 @@ func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) 
 	if err := d.attest(ctx, plan.Image, digest, reference, req); err != nil {
 		return Result{}, err
 	}
+	if err := d.attachSourceSummary(ctx, reference, req); err != nil {
+		return Result{}, err
+	}
 
 	return Result{
 		Kind:      config.KindImage,
@@ -228,6 +239,72 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	return nil
 }
 
+// attachSourceSummary republishes Warden's verification summary against the
+// artifact.
+//
+// A second attestation rather than a field inside the first, because they are
+// different claims by different authorities: kiln's provenance says where the
+// artifact came from, warden's summary says the source was gated. Keeping them
+// separate lets a consumer require each on its own terms, and lets it check
+// that the commit warden verified is the commit kiln built — which is the join
+// that stops a gated commit's summary being attached to an artifact built from
+// an ungated one.
+//
+// Absent is not fatal. A repository still adopting warden publishes artifacts
+// with build provenance and no source summary; refusing would make adoption
+// all-or-nothing.
+func (d *Docker) attachSourceSummary(ctx context.Context, reference string, req Request) error {
+	if len(req.SourceVSA) == 0 {
+		return nil
+	}
+
+	vsa, err := attest.ParseVSA(req.SourceVSA)
+	if err != nil {
+		// Something was produced but is not a summary. Publishing it as one
+		// would put a claim in the registry that nobody can read.
+		d.Log.Warn("skipping the source summary", "err", err)
+		return nil
+	}
+	if !vsa.Passed() {
+		// Kiln does not publish a failing verdict as though it were a pass.
+		// Reaching here at all means prove succeeded, so this is a
+		// contradiction worth failing on rather than papering over.
+		return fmt.Errorf("publish: warden reports %q for this commit", vsa.Predicate.VerificationResult)
+	}
+
+	body, err := vsa.PredicateJSON()
+	if err != nil {
+		return err
+	}
+	path, cleanup, err := writeBytes(body)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	if err := d.withRetry(ctx, "cosign attest (source)", func(ctx context.Context) error {
+		_, e := d.Runner.Run(ctx, execx.Cmd{
+			Name: d.Cosign,
+			Args: []string{
+				"attest", "--yes",
+				"--type", attest.VSAPredicateType,
+				"--predicate", path,
+				reference,
+			},
+			Dir:    req.RepoDir,
+			Stdout: req.Output, Stderr: req.Output,
+		})
+		return e
+	}); err != nil {
+		return fmt.Errorf("publish: cosign attest source summary: %w", err)
+	}
+
+	d.Log.Info("source summary attached",
+		"reference", reference, "verifier", vsa.Predicate.Verifier.ID,
+		"levels", vsa.Predicate.VerifiedLevels)
+	return nil
+}
+
 // writePredicate spills the statement to a file for cosign to read. cosign
 // takes a path, not stdin, so there is no way to avoid the temp file.
 func writePredicate(stmt attest.Statement) (path string, cleanup func(), err error) {
@@ -237,7 +314,13 @@ func writePredicate(stmt attest.Statement) (path string, cleanup func(), err err
 	if err != nil {
 		return "", func() {}, err
 	}
-	f, err := os.CreateTemp("", "kiln-provenance-*.json")
+	return writeBytes(data)
+}
+
+// writeBytes spills a predicate body to a file for cosign to read. cosign
+// takes a path, not stdin, so there is no way to avoid the temp file.
+func writeBytes(data []byte) (path string, cleanup func(), err error) {
+	f, err := os.CreateTemp("", "kiln-predicate-*.json")
 	if err != nil {
 		return "", func() {}, fmt.Errorf("publish: create predicate file: %w", err)
 	}

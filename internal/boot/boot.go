@@ -125,13 +125,18 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	deps.GitHub = buildClient(env, deps.Repo, log)
 	deps.Checks = buildReporter(deps.GitHub, log)
 
+	// One warden binding serves both roles: deciding whether a re-prove can be
+	// skipped, and carrying warden's verdict onto the artifact.
+	wardenProvenance := provenance.NewWarden(runner, env.Warden, env.TrustedKeys)
+
 	deps.Engine = engine.New(engine.Engine{
 		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
 		Publisher:        buildPublisher(env, runner, log),
 		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
 		ToolVersions:     toolVersions(ctx, runner, env),
 		PhaseTimeout:     env.PhaseTimeout,
-		Provenance:       provenance.NewWarden(runner, env.Warden, env.TrustedKeys),
+		Provenance:       wardenProvenance,
+		SourceAttester:   wardenProvenance,
 		Checks:           deps.Checks,
 		Store:            deps.Store,
 		Log:              log,

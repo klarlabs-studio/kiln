@@ -545,3 +545,166 @@ func sourceCommit(p attest.Provenance) string {
 	}
 	return ""
 }
+
+const wardenSummary = `{"_type":"https://in-toto.io/Statement/v1",
+ "subject":[{"name":"git+commit","digest":{"gitCommit":"c3f7aca23fa4bfa8d65b3741f46c509713cd618e"}}],
+ "predicateType":"https://slsa.dev/verification_summary/v1",
+ "predicate":{"verifier":{"id":"https://warden.klarlabs.de"},
+  "timeVerified":"2026-08-17T21:26:51Z",
+  "resourceUri":"git+ssh://git@github.com/o/r.git@c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
+  "policy":{"uri":"git+ssh://git@github.com/o/r.git@c3f7aca#.warden.yaml"},
+  "verificationResult":"PASSED","verifiedLevels":["WARDEN_SOURCE_GATED"]}}`
+
+func TestWardensSummaryTravelsWithTheArtifact(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact:   cfg(config.TagSHA, config.TagLatest),
+		Provenance: prov, SourceVSA: []byte(wardenSummary),
+	}); err != nil {
+		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
+	}
+
+	// Two attestations, not one with a field inside it: different claims by
+	// different authorities, so a consumer can require each on its own terms.
+	var buildAttest, sourceAttest int
+	for _, line := range fake.Lines() {
+		if !strings.HasPrefix(line, "cosign attest") {
+			continue
+		}
+		switch {
+		case strings.Contains(line, attest.VSAPredicateType):
+			sourceAttest++
+		case strings.Contains(line, attest.CosignType):
+			buildAttest++
+		}
+	}
+	if buildAttest != 1 || sourceAttest != 1 {
+		t.Errorf("build=%d source=%d, want one of each:\n%s", buildAttest, sourceAttest, fake.Transcript())
+	}
+}
+
+func TestTheSummaryIsCarriedVerbatimNotParaphrased(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+
+	fake := dockerFake(t)
+	var body []byte
+	fake.On("cosign attest --yes --type "+attest.VSAPredicateType,
+		execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+			for i, a := range c.Args {
+				if a == "--predicate" && i+1 < len(c.Args) {
+					body, _ = os.ReadFile(c.Args[i+1])
+				}
+			}
+			return execx.Result{}, nil
+		}})
+
+	prov := imageProvenance()
+	prov.SHA = head
+	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact:   cfg(config.TagSHA, config.TagLatest),
+		Provenance: prov, SourceVSA: []byte(wardenSummary),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("source predicate is not JSON: %v", err)
+	}
+	// Warden's own fields, not kiln's rendering of them. A consumer reads the
+	// verifier, the policy and the levels rather than a boolean kiln chose.
+	verifier, _ := doc["verifier"].(map[string]any)
+	if verifier == nil || verifier["id"] != "https://warden.klarlabs.de" {
+		t.Errorf("verifier lost: %v", doc)
+	}
+	if doc["verificationResult"] != "PASSED" {
+		t.Errorf("verdict lost: %v", doc)
+	}
+	if _, ok := doc["policy"]; !ok {
+		t.Errorf("policy uri lost: %v", doc)
+	}
+}
+
+func TestNoSummaryStillPublishes(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	// A repository still adopting warden must not be unable to publish.
+	res, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !res.Attested {
+		t.Error("build provenance should still be attached")
+	}
+	for _, line := range fake.Lines() {
+		if strings.Contains(line, attest.VSAPredicateType) {
+			t.Errorf("attached a summary that did not exist: %s", line)
+		}
+	}
+}
+
+func TestAFailingSummaryIsRefused(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	failed := strings.Replace(wardenSummary, `"PASSED"`, `"FAILED"`, 1)
+	prov := imageProvenance()
+	prov.SHA = head
+
+	_, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact:   cfg(config.TagSHA, config.TagLatest),
+		Provenance: prov, SourceVSA: []byte(failed),
+	})
+
+	// Reaching publish means prove passed, so warden reporting FAILED here is
+	// a contradiction. Publishing it as though it were a pass would put a
+	// false claim in the registry.
+	if err == nil || !strings.Contains(err.Error(), "FAILED") {
+		t.Errorf("err = %v, want the contradiction surfaced", err)
+	}
+}
+
+func TestAnUnreadableSummaryDoesNotBlockTheBuild(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	prov := imageProvenance()
+	prov.SHA = head
+	res, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact:   cfg(config.TagSHA, config.TagLatest),
+		Provenance: prov, SourceVSA: []byte(`{"predicateType":"https://spdx.dev/Document"}`),
+	})
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if !res.Attested {
+		t.Error("build provenance should still be attached")
+	}
+	// Publishing it as a summary would put an unreadable claim in the registry.
+	for _, line := range fake.Lines() {
+		if strings.Contains(line, attest.VSAPredicateType) {
+			t.Errorf("published something that is not a summary: %s", line)
+		}
+	}
+}

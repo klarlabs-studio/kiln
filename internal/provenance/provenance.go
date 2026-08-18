@@ -149,6 +149,41 @@ func verdictHint(res execx.Result, code int) string {
 	}
 }
 
+// VSAPredicateType is the SLSA Verification Summary Attestation warden emits.
+// It is a standard type, so a consumer that has never heard of warden can
+// still read the verdict, the policy it was measured against, and when.
+const VSAPredicateType = "https://slsa.dev/verification_summary/v1"
+
+// SourceAttestation returns Warden's own verification summary for a commit.
+//
+// This exists because kiln paraphrasing warden is weaker than carrying what
+// warden said. Kiln can report "the gate passed" in its build provenance, but
+// that is kiln's word for somebody else's verdict: a reader has to trust kiln
+// about warden rather than warden about warden. Warden's VSA names the
+// verifier, the policy file, the levels reached and the time — in a standard
+// shape a generic SLSA consumer already understands.
+//
+// It is best-effort. A commit with no note, or a warden too old to emit a VSA,
+// yields nothing rather than failing the build: the artifact is still
+// publishable and its build provenance still stands, it simply travels without
+// the source half attached.
+func (w *Warden) SourceAttestation(ctx context.Context, repoDir, sha string) ([]byte, error) {
+	res, err := w.Runner.Run(ctx, execx.Cmd{
+		Name: w.Binary,
+		Args: []string{"attest", "--commit", sha, "--predicate", "vsa"},
+		Dir:  repoDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("provenance: warden attest: %w", err)
+	}
+
+	body := strings.TrimSpace(res.Stdout)
+	if body == "" || !strings.HasPrefix(body, "{") {
+		return nil, fmt.Errorf("provenance: warden produced no attestation for %s", shortSHA(sha))
+	}
+	return []byte(body), nil
+}
+
 // Always is a verifier that never skips. The engine uses it when the operator
 // has opted out, and tests use it to pin behaviour.
 type Always struct{ Reason string }
