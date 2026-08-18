@@ -10,6 +10,7 @@ import (
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/execx"
+	"go.klarlabs.de/kiln/internal/policy"
 	"go.klarlabs.de/kiln/internal/publish"
 )
 
@@ -30,8 +31,17 @@ func runDoctor(ctx context.Context, args []string, io IO) error {
 	// linter job, a reviewer's laptop. Checking the schema there should not
 	// require installing docker, cosign and nox first.
 	configOnly := fs.Bool("config-only", false, "validate the pipeline and tag plan; skip toolchain and credentials")
+	policyPath := fs.String("policy", "", "validate a verification policy instead, and print what it would require")
 	if err := fs.Parse(args); err != nil {
 		return wrapExit(ExitUsage, err)
+	}
+
+	// A verification policy is checked on machines that have no pipeline at
+	// all — a consumer's repository, where kiln verifies artifacts somebody
+	// else built. Requiring a .kiln.yaml to sit beside it would make the
+	// policy unreviewable exactly where it matters most.
+	if *policyPath != "" {
+		return checkPolicy(io, *policyPath)
 	}
 
 	deps, err := boot.Build(ctx, boot.Options{Dir: *dir, PipelinePath: *pipelinePath})
@@ -261,4 +271,22 @@ func resolveCommit(ctx context.Context, deps *boot.Deps, commitish string) (stri
 		return "", err
 	}
 	return res.Output(), nil
+}
+
+// checkPolicy loads a verification policy and prints what it would require.
+//
+// "It parses" is the smaller half. The value is the list: a policy author can
+// see that the rule they thought they wrote is the rule that will run, which
+// is the failure a silently-ignored field would otherwise cause at the worst
+// possible time.
+func checkPolicy(io IO, path string) error {
+	p, err := policy.Load(path)
+	if err != nil {
+		return wrapExit(ExitConfig, err)
+	}
+	io.print(path + " requires:\n")
+	for _, c := range p.Checks() {
+		io.print("  - " + c + "\n")
+	}
+	return nil
 }

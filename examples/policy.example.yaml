@@ -1,0 +1,53 @@
+# A verification policy: what has to be true before you accept an artifact.
+#
+# This file is the half of kiln that needs no kiln. Nothing here assumes the
+# artifact was built by kiln, or that you run kiln anywhere in your pipeline —
+# `kiln verify --policy` is a consumer-side check, and the rules live in your
+# repository where they can be reviewed like any other code.
+#
+#   kiln verify --policy policy.yaml ghcr.io/you/app@sha256:...
+#
+# Exit codes: 0 verified, 2 the policy was not satisfied, 3 configuration or
+# toolchain. Add --json when a job has to report which link broke.
+apiVersion: kiln.klarlabs.de/v1
+kind: VerificationPolicy
+
+# Whose signature on the artifact counts. A key, or a keyless identity — not
+# both, because a policy naming both does not say which one has to hold.
+signature:
+  # key: cosign.pub
+  identity: https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0
+  issuer: https://token.actions.githubusercontent.com
+
+# Who is allowed to have built it. A trailing @ accepts any version of that
+# builder.
+#
+# This is where an artifact kiln did not build gets verified by the same
+# command: a GitHub Actions workflow identity is as valid a builder here as
+# kiln's own.
+provenance:
+  builders:
+    - https://github.com/klarlabs-studio/kiln@
+    # - https://github.com/actions/runner
+
+# Whose verdict about the *commit* counts — a different authority from the one
+# above, and the reason this section exists separately. The build platform says
+# what it built; the source gate says whether that commit was allowed to be
+# built at all. A policy that pins only the builder is taking the builder's
+# word for the gate.
+#
+# The verdict is verified against these keys directly, off the artifact. No
+# clone of the repository, no gate binary on this machine, and no trust in
+# whoever attached it.
+source:
+  # base64 ed25519, as `warden key show` prints it
+  keys:
+    - REPLACE_WITH_YOUR_GATES_PUBLIC_KEY
+  gates:
+    - https://warden.klarlabs.de
+  levels:
+    - WARDEN_SOURCE_SIGNED
+  # Off by default: an artifact from a platform with no source gate is a normal
+  # thing to verify, and reporting it as broken teaches people to ignore the
+  # tool. On, an unestablished verdict is a failure rather than a caveat.
+  required: true
