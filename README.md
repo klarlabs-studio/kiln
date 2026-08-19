@@ -86,6 +86,7 @@ Kiln shells out to tools that must already be on the box:
 ```bash
 brew tap klarlabs-studio/tap && brew install --cask kiln
 cd your-repo
+kiln init           # write .kiln.yaml from what is already in the repository
 kiln login          # a GitHub token, stored in the OS keychain
 kiln box install    # a schedule that ticks this repository every 5 minutes
 ```
