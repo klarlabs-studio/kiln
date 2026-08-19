@@ -181,6 +181,12 @@ Overlap is handled: a tick that finds a repository locked exits 75 and says
 nothing, which is why a five-minute schedule over a twenty-minute build is
 safe.
 
+Failure is handled too, and it is the one that bites on a real box. A commit
+whose gate fails waits fifteen minutes before the next attempt, then thirty,
+then an hour, and stays hourly. Without that, an open pull request with a
+broken test is re-gated every tick for as long as it stays open — 205 failed
+runs in one afternoon, the first time this ran for real.
+
 ### What the token needs
 
 `kiln login` prints this and links a pre-filled form, so it is here only for
