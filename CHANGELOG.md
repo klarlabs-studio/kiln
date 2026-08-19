@@ -6,6 +6,11 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-08-19
+
+Everything in this release came from trying to move one real private repository
+off GitHub Actions, and most of it from the attempt failing.
+
 ### Added
 
 - **`kiln login` and `kiln box install` — two commands between installing kiln
@@ -222,5 +227,6 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.1...HEAD
+[0.1.1]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.1
 [0.1.0]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.0
