@@ -6,6 +6,19 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`kiln init`** writes `.kiln.yaml` from what is already in the repository: a
+  Dockerfile becomes an image artifact with the registry path derived from the
+  git remote, a `.goreleaser.yaml` becomes a binary release, and a repository
+  with neither gets a pipeline that proves and publishes nothing rather than an
+  invented artifact. It says what it inferred, refuses to overwrite without
+  `--force`, and names a missing `.warden.yaml` out loud — kiln runs no checks
+  of its own, so a pipeline without one proves nothing.
+
+  The generated file is parsed by kiln's own loader before it is written. A
+  generator that emits something its loader rejects is worse than no generator.
+
 ### Fixed
 
 - **A failing commit is no longer re-gated on every tick.** CI runs once per
