@@ -6,6 +6,21 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A failing commit is no longer re-gated on every tick.** CI runs once per
+  push; a watch loop runs every few minutes forever, and nothing in kiln
+  distinguished the two. The first real box produced **222 runs, 205 of them
+  failures** in an afternoon — re-running `go test -race` across thirteen open
+  pull requests every five minutes on a laptop, none of which was ever going
+  to pass without somebody pushing a fix.
+
+  A failed commit now waits before its next attempt: fifteen minutes, doubling
+  to an hour and staying there. Not "never again", because a failure is often
+  not about the commit — a registry down, a dependency yanked, a tool missing
+  from the box — and those get fixed without anybody pushing anything. A
+  genuine breakage settles into an hourly heartbeat instead of a spin.
+
 ## [0.1.1] - 2026-08-19
 
 Everything in this release came from trying to move one real private repository

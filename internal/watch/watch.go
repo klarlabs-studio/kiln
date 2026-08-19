@@ -141,10 +141,20 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 
 	result := Result{Discovered: jobs}
 	for _, job := range jobs {
-		if engine.AlreadyBuilt(w.Store, job.SHA, job.Ref) {
+		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
+		case engine.Built:
 			result.Skipped = append(result.Skipped, job)
 			log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
 			continue
+		case engine.Backoff:
+			// A failing commit is not retried every tick. Without this a pull
+			// request whose gate fails is re-gated forever, which on a real
+			// box meant 205 failed runs in an afternoon.
+			result.Skipped = append(result.Skipped, job)
+			log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
+				"wait", engine.DescribeBackoff(wait))
+			continue
+		case engine.Build:
 		}
 		if dryRun {
 			result.Executed = append(result.Executed, Outcome{Job: job})
@@ -398,6 +408,15 @@ func (w *Watcher) discover(ctx context.Context) ([]Job, error) {
 	return jobs, nil
 }
 
+// now is the clock, injectable so a test can state what "twenty minutes later"
+// means rather than sleep through it.
+func (w *Watcher) now() time.Time {
+	if w.Now != nil {
+		return w.Now()
+	}
+	return time.Now()
+}
+
 // runScheduled fires the scheduled tasks that are due.
 //
 // Never fatal to the tick. A remediation job that cannot run is a problem, but
@@ -413,14 +432,9 @@ func (w *Watcher) runScheduled(ctx context.Context) {
 		return
 	}
 
-	now := time.Now
-	if w.Now != nil {
-		now = w.Now
-	}
-
 	var fire []config.NamedTask
 	for _, nt := range due {
-		ready, err := w.Schedule.DueAt(nt.Name, nt.Task.Every.Std(), now())
+		ready, err := w.Schedule.DueAt(nt.Name, nt.Task.Every.Std(), w.now())
 		if err != nil {
 			log.Warn("could not read schedule state", "task", nt.Name, "err", err)
 			continue
@@ -443,7 +457,7 @@ func (w *Watcher) runScheduled(ctx context.Context) {
 	// process would otherwise re-fire on every restart until it stopped doing
 	// so — a loop with an audience, for anything that opens a pull request.
 	for _, nt := range fire {
-		if err := w.Schedule.Fired(nt.Name, now()); err != nil {
+		if err := w.Schedule.Fired(nt.Name, w.now()); err != nil {
 			log.Warn("could not record schedule state; skipping to avoid a repeat loop",
 				"task", nt.Name, "err", err)
 			return

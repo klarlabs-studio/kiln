@@ -143,7 +143,7 @@ func TestSecondTickSkipsAnAlreadyBuiltHead(t *testing.T) {
 	}
 }
 
-func TestAFailedRunIsRetriedOnTheNextTick(t *testing.T) {
+func TestAFailedRunBacksOffAndIsRetriedLater(t *testing.T) {
 	f := newFixture(t)
 	failing := *f.watcher.Engine
 	failing.Prover = prove.Func(func(context.Context, prove.Request) error {
@@ -159,10 +159,63 @@ func TestAFailedRunIsRetriedOnTheNextTick(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Only a *success* suppresses a rebuild; a transient failure must not
-	// wedge the ref forever.
+	// Not on the *next* tick. A watch loop runs every few minutes forever, so
+	// retrying immediately means re-gating a broken commit until somebody
+	// notices — measured on the first real box at 205 failed runs in an
+	// afternoon, re-running `go test -race` across thirteen pull requests.
+	if len(res.Executed) != 0 {
+		t.Errorf("a commit that just failed was retried immediately: %+v", res)
+	}
+	if len(res.Skipped) != 1 {
+		t.Errorf("skipped = %+v", res.Skipped)
+	}
+
+	// But it is retried. A failure is not always about the commit — a registry
+	// down, a dependency yanked, a tool the box was missing — and those get
+	// fixed without anybody pushing anything.
+	later := time.Now().Add(engine.RetryBase + time.Minute)
+	f.watcher.Now = func() time.Time { return later }
+
+	res, err = f.watcher.Once(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if len(res.Executed) != 1 {
-		t.Errorf("a failed head was not retried: %+v", res)
+		t.Errorf("a failed head was never retried: %+v", res)
+	}
+}
+
+func TestTheBackoffGrowsWithRepeatedFailures(t *testing.T) {
+	f := newFixture(t)
+	failing := *f.watcher.Engine
+	failing.Prover = prove.Func(func(context.Context, prove.Request) error {
+		return errors.New("gate failed")
+	})
+	f.watcher.Engine = &failing
+
+	start := time.Now()
+	// Two failures, spaced past the first delay so the second one happens.
+	f.watcher.Now = func() time.Time { return start }
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	second := start.Add(engine.RetryBase + time.Minute)
+	f.watcher.Now = func() time.Time { return second }
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Two failures means a 30-minute wait, measured from the last one. Twenty
+	// minutes is past what a flat 15-minute policy would have required and
+	// short of what a growing one does, which is exactly the difference this
+	// test is for.
+	f.watcher.Now = func() time.Time { return start.Add(20 * time.Minute) }
+	res, err := f.watcher.Once(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Executed) != 0 {
+		t.Errorf("the second failure did not lengthen the wait: %+v", res)
 	}
 }
 
