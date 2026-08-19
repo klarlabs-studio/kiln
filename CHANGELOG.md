@@ -6,6 +6,11 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-08-19
+
+Two things a box needs before it can be left alone: a pipeline you did not have
+to write, and a failure that does not spin.
+
 ### Added
 
 - **`kiln init`** writes `.kiln.yaml` from what is already in the repository: a
@@ -255,6 +260,7 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.2...HEAD
+[0.1.2]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.2
 [0.1.1]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.1
 [0.1.0]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.0
