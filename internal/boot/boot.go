@@ -18,6 +18,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/credstore"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/envconfig"
 	"go.klarlabs.de/kiln/internal/execx"
@@ -111,6 +112,21 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	pipeline, found, err := loadPipeline(dir, opts.PipelinePath)
 	if err != nil {
 		return nil, err
+	}
+
+	// A token from the environment wins — CI sets one, and an operator
+	// exporting GITHUB_TOKEN for one command means it. Otherwise the stored
+	// one, so a schedule needs no credential in its unit file and no token in
+	// plaintext next to it.
+	//
+	// Before deps is built, not after: Env is copied by value, and a token
+	// added afterwards would reach the API client while ChecksEnabled() — and
+	// therefore doctor, and the fork default — still read empty.
+	if env.Token == "" {
+		if token, kind, err := credstore.New(runner).Get(ctx); err == nil {
+			env.Token = token
+			log.Debug("using the stored github token", "from", string(kind))
+		}
 	}
 
 	deps := &Deps{

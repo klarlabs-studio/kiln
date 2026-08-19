@@ -84,6 +84,19 @@ Kiln shells out to tools that must already be on the box:
 ## Quick start
 
 ```bash
+brew tap klarlabs-studio/tap && brew install --cask kiln
+cd your-repo
+kiln login          # a GitHub token, stored in the OS keychain
+kiln box install    # a schedule that ticks this repository every 5 minutes
+```
+
+Your machine is now the build box. It uses the toolchain you already have —
+no runner image, no token in a cron line, no cluster. `kiln box uninstall`
+removes it.
+
+## In detail
+
+```bash
 cd your-repo
 
 # 1. Validate. Runs no gate, builds nothing, pushes nothing.

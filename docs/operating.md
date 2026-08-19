@@ -128,70 +128,67 @@ missing toolchain.
 
 ## Running kiln as a box
 
-Kiln is daemon-less: a tick is `kiln watch --once`, and something has to call
-it. Two shapes, both of which need one decision from you — **where the GitHub
-token lives**.
+A box is a machine that already has your toolchain on it. Usually the one you
+are typing on.
 
-### cron, on a machine you already have
-
-```cron
-*/5 * * * * cd /srv/repos/rollops-studio && \
-  GITHUB_TOKEN="$(cat /etc/kiln/token)" /usr/local/bin/kiln watch --once \
-  >> /var/log/kiln.log 2>&1
+```bash
+kiln login          # a token, stored in the OS keychain
+kiln box install    # a schedule that ticks this repository
 ```
 
-`--repos /srv/repos/*` watches a fleet from one entry. Overlap is handled: a
-tick that finds the repository locked exits 75 and says nothing, which is why
-a five-minute schedule over a twenty-minute build is safe.
+That is the whole thing. `box install` writes a launchd agent on macOS or a
+systemd user timer on Linux, loads it, and ticks immediately so you find out
+now rather than in five minutes. `kiln box status` says whether it is running
+and when it last ticked; `kiln box uninstall` removes it and leaves your ledger
+alone.
 
-### a Kubernetes CronJob
+No token in the unit file — kiln reads the one `kiln login` stored. No
+container image to maintain, because the schedule runs as you, with your PATH,
+using the same `warden`, `go` and `golangci-lint` you use by hand.
 
-For a repository that only proves — no image to build — kiln needs no docker
-socket, which makes a CronJob the tidier home:
+Two things the installer handles that are easy to get wrong on your own:
 
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata: { name: kiln-rollops-studio, namespace: klarlabs }
-spec:
-  schedule: "*/5 * * * *"
-  concurrencyPolicy: Forbid          # the repository lock would refuse anyway
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          restartPolicy: OnFailure
-          containers:
-            - name: kiln
-              image: ghcr.io/klarlabs-studio/kiln:v0.1.1
-              args: ["watch", "--once"]
-              workingDir: /workspace/repo
-              env:
-                - name: GITHUB_TOKEN
-                  valueFrom:
-                    secretKeyRef: { name: kiln-github, key: token }
-              volumeMounts:
-                - { name: repo, mountPath: /workspace }
-          volumes:
-            - name: repo
-              persistentVolumeClaim: { claimName: kiln-rollops-studio }
+- **PATH.** A launchd agent inherits `/usr/bin:/bin:/usr/sbin:/sbin` and
+  nothing else. The first box installed without pinning PATH found thirteen
+  commits and failed all thirteen with "warden is the source gate and kiln
+  cannot pass a commit without it". The unit carries the PATH you installed
+  with, so a tool installed somewhere new later needs `kiln box install` again.
+- **Keychain prompts.** A background job reading the login keychain pops a
+  dialog unless the reading binary is on the item's access list. `kiln login`
+  puts it there, so the tick does not hang behind a window nobody is looking
+  at.
+
+### Somewhere other than your laptop
+
+Same two commands on any machine you can log into — a VPS, a NAS, an old Mac
+mini. What matters is that the toolchain your gate invokes is installed there,
+not what the machine is.
+
+A Kubernetes CronJob is possible and is the *hard* path: k3s runs containerd,
+so there is no docker for `kind: image` builds, and you would be maintaining a
+container image carrying your whole toolchain — the thing GitHub's runner image
+was giving you for free. Worth it for a fleet; not worth it for a first box.
+
+### Watching several repositories
+
+One schedule per repository, or one that watches a directory:
+
+```bash
+kiln watch --repos /srv/repos/* --every 5m
 ```
 
-The clone is on a PVC rather than re-cloned each tick: kiln's already-built
-check reads the local ledger, and a fresh clone every five minutes would
-rebuild every commit it had already seen.
+Overlap is handled: a tick that finds a repository locked exits 75 and says
+nothing, which is why a five-minute schedule over a twenty-minute build is
+safe.
 
 ### What the token needs
 
-`repo` scope for a private repository, plus the ability to write commit
-statuses. A fine-grained token wants **Contents: read** (**write** if a task
-opens pull requests), **Pull requests: write** for the same, and **Commit
-statuses: write**.
-
-Give kiln its own token rather than a personal one. It runs unattended and
-executes repository-authored commands; a credential that can be scoped to the
-repositories it watches, and revoked without locking anybody out of their own
-account, is worth the five minutes.
+`kiln login` prints this and links a pre-filled form, so it is here only for
+reference: **Commit statuses: write**, **Contents: read** (write if a task
+opens pull requests), **Pull requests: write** for the same, **Metadata:
+read**. Scope it to the repositories kiln watches, and give kiln its own token
+rather than your personal one — it runs unattended and executes
+repository-authored commands.
 
 ## Checks, and what your token can post
 
