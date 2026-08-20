@@ -91,7 +91,9 @@ kiln login          # a GitHub token, stored in the OS keychain
 kiln box install    # a schedule that ticks this repository every 5 minutes
 ```
 
-Your machine is now the build box. It uses the toolchain you already have —
+Point it at a clone nothing else touches — a box in the tree you work in will
+occasionally gate a commit your editor or another agent just moved out from
+under it. Your machine is now the build box. It uses the toolchain you already have —
 no runner image, no token in a cron line, no cluster. `kiln box uninstall`
 removes it.
 

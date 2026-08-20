@@ -158,6 +158,30 @@ Two things the installer handles that are easy to get wrong on your own:
   puts it there, so the tick does not hang behind a window nobody is looking
   at.
 
+### Give the box its own clone
+
+Point the box at a checkout nothing else touches — `/srv/repos/<name>`, or
+anywhere outside the tree you work in:
+
+```bash
+git clone git@github.com:you/app /srv/repos/app
+cd /srv/repos/app && kiln init && kiln box install
+```
+
+Kiln itself is careful with a shared checkout: every phase runs in a detached
+worktree, and a repository lock keeps two ticks apart. What it cannot do is
+keep *other people* out. A working copy is a place where branches get checked
+out, merged branches get deleted and `git reset --hard origin/main` happens —
+by you, by your editor, or by an agent finishing a pull request. A tick that
+started before one of those and finished after it was gating a commit that is
+no longer what the branch means.
+
+Nothing is corrupted when that happens, because the tick works from its own
+worktree. What you get is a confusing run: a gate against a commit nobody is
+looking at any more, or a discovery pass that finds refs which moved a second
+later. On a dedicated clone the only thing moving refs is the fetch kiln does
+itself.
+
 ### Somewhere other than your laptop
 
 Same two commands on any machine you can log into — a VPS, a NAS, an old Mac
