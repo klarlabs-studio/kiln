@@ -6,6 +6,21 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kiln box install --every 10m` ignored the flag.** Go's flag package stops
+  parsing at the first non-flag argument, so anything written after the verb —
+  the natural way to write it — was silently dropped and the default applied.
+  The verb is now separated before parsing, so both orders work.
+
+### Added
+
+- **`kiln box install --branches-only`** runs `poll` rather than `watch`: the
+  tracked branch, no pull requests, no tags, and no GitHub token needed for
+  any of it. Pointing a fresh box at a repository with a dozen open pull
+  requests otherwise means gating all of them before it reaches the branch you
+  care about, which on a laptop is an afternoon of fans.
+
 ## [0.1.2] - 2026-08-19
 
 Two things a box needs before it can be left alone: a pipeline you did not have
