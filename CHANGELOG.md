@@ -6,6 +6,11 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-08-20
+
+Both entries came from installing a box on a real repository and watching what
+it did.
+
 ### Fixed
 
 - **`kiln box install --every 10m` ignored the flag.** Go's flag package stops
@@ -20,6 +25,14 @@ All notable changes to kiln are documented here. The format follows
   any of it. Pointing a fresh box at a repository with a dozen open pull
   requests otherwise means gating all of them before it reaches the branch you
   care about, which on a laptop is an afternoon of fans.
+
+### Changed
+
+- **The docs say to give the box its own clone.** Kiln is careful with a shared
+  checkout — a detached worktree per phase, a lock between ticks — but it
+  cannot keep other people out, and a working copy is where branches get
+  checked out and reset. A tick that overlaps one of those gates a commit
+  nobody is looking at any more.
 
 ## [0.1.2] - 2026-08-19
 
@@ -275,7 +288,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.3...HEAD
+[0.1.3]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.3
 [0.1.2]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.2
 [0.1.1]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.1
 [0.1.0]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.0
