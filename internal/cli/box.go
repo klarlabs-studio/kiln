@@ -24,17 +24,22 @@ func runBox(ctx context.Context, args []string, io IO) error {
 	fs := newFlagSet("box", io)
 	every := fs.Duration("every", 5*time.Minute, "how often to tick")
 	dir := fs.String("dir", "", "repository to watch (default: the working directory)")
-	if err := fs.Parse(args); err != nil {
+	branchesOnly := fs.Bool("branches-only", false,
+		"watch the tracked branch only, ignoring pull requests and tags")
+	// The action is pulled out before parsing, so `box install --every 10m`
+	// works. Go's flag package stops at the first non-flag argument, which
+	// meant every flag written after the verb — the natural way to write it —
+	// was silently ignored, defaults applied, and nothing said so.
+	action, rest := splitAction(args)
+	if err := fs.Parse(rest); err != nil {
 		return wrapExit(ExitUsage, err)
 	}
-
-	action := fs.Arg(0)
 	repo, err := boxDir(*dir)
 	if err != nil {
 		return wrapExit(ExitConfig, err)
 	}
 
-	agent, err := newAgent(repo, *every)
+	agent, err := newAgent(repo, *every, *branchesOnly)
 	if err != nil {
 		return wrapExit(ExitConfig, err)
 	}
@@ -49,6 +54,17 @@ func runBox(ctx context.Context, args []string, io IO) error {
 	default:
 		return failWith(ExitUsage, "usage: kiln box install|status|uninstall [--every 5m]")
 	}
+}
+
+// splitAction separates the verb from the flags, wherever the verb appears.
+func splitAction(args []string) (string, []string) {
+	for i, a := range args {
+		if strings.HasPrefix(a, "-") {
+			continue
+		}
+		return a, append(append([]string{}, args[:i]...), args[i+1:]...)
+	}
+	return "", args
 }
 
 func boxDir(dir string) (string, error) {
@@ -71,9 +87,25 @@ type agent struct {
 	label string
 	unit  string
 	goos  string
+	// branchesOnly runs `poll` rather than `watch`: the tracked branch, no
+	// pull requests, no tags, and no GitHub token needed for any of it.
+	branchesOnly bool
 }
 
-func newAgent(repo string, every time.Duration) (*agent, error) {
+// command is what the schedule runs.
+//
+// A first box usually wants the branch only. Pointing a fresh box at a
+// repository with a dozen open pull requests means gating all of them before
+// it gets to the branch you actually care about, and on a laptop that is an
+// afternoon of fans.
+func (a *agent) command() string {
+	if a.branchesOnly {
+		return "poll"
+	}
+	return "watch"
+}
+
+func newAgent(repo string, every time.Duration, branchesOnly bool) (*agent, error) {
 	if every < time.Minute {
 		// Below a minute the ticks overlap their own fetch and the repository
 		// lock spends the day refusing them.
@@ -89,7 +121,7 @@ func newAgent(repo string, every time.Duration) (*agent, error) {
 		return nil, err
 	}
 
-	a := &agent{repo: repo, every: every, exe: exe, goos: runtime.GOOS}
+	a := &agent{repo: repo, every: every, exe: exe, goos: runtime.GOOS, branchesOnly: branchesOnly}
 	a.label = "de.klarlabs.kiln." + sanitise(filepath.Base(repo))
 
 	home, err := os.UserHomeDir()
@@ -131,7 +163,11 @@ func (a *agent) install(ctx context.Context, io IO) error {
 		return wrapExit(ExitError, err)
 	}
 
-	io.print(fmt.Sprintf("watching %s every %s\n", a.repo, a.every))
+	scope := "every ref"
+	if a.branchesOnly {
+		scope = "the tracked branch only"
+	}
+	io.print(fmt.Sprintf("watching %s (%s) every %s\n", a.repo, scope, a.every))
 	io.print("  unit  " + a.unit + "\n")
 	io.print("  logs  " + a.logPath() + "\n\n")
 	io.print("It ticks as you, with your toolchain, and reads the token from `kiln login`.\n")
@@ -259,7 +295,7 @@ func (a *agent) plist() string {
   <key>ProgramArguments</key>
   <array>
     <string>%s</string>
-    <string>watch</string>
+    <string>%s</string>
     <string>--once</string>
   </array>
   <key>WorkingDirectory</key><string>%s</string>
@@ -272,7 +308,7 @@ func (a *agent) plist() string {
   <key>ProcessType</key><string>Background</string>
 </dict>
 </plist>
-`, a.label, a.exe, a.repo, a.path(), int(a.every.Seconds()), a.logPath(), a.logPath())
+`, a.label, a.exe, a.command(), a.repo, a.path(), int(a.every.Seconds()), a.logPath(), a.logPath())
 }
 
 func (a *agent) service() string {
@@ -283,10 +319,10 @@ Description=kiln tick for %s
 Type=oneshot
 WorkingDirectory=%s
 Environment=PATH=%s
-ExecStart=%s watch --once
+ExecStart=%s %s --once
 StandardOutput=append:%s
 StandardError=append:%s
-`, a.repo, a.repo, a.path(), a.exe, a.logPath(), a.logPath())
+`, a.repo, a.repo, a.path(), a.exe, a.command(), a.logPath(), a.logPath())
 }
 
 func (a *agent) timer() string {
