@@ -158,6 +158,55 @@ Two things the installer handles that are easy to get wrong on your own:
   puts it there, so the tick does not hang behind a window nobody is looking
   at.
 
+### Is a box worth it?
+
+Measure before you migrate. GitHub bills Actions per job-minute, and the
+question is not "how much does CI cost" but "how much of it is Linux minutes on
+private repositories", because that is the only part a box replaces. Public
+repositories are free and should stay where they are — the runners cost nothing
+and artifact attestations are free there too.
+
+```bash
+gh api "/orgs/<org>/settings/billing/usage?year=2026&month=8" |
+  jq -r '.usageItems[] | select(.product=="actions")
+         | [.netAmount, .quantity, .sku, .repositoryName] | @tsv' |
+  sort -rn | head
+```
+
+That gives net cost per repository per SKU. Three things to look for:
+
+**macOS and Windows minutes.** They bill at roughly ten and two times Linux. A
+bill dominated by them is not a bill a Linux box fixes.
+
+**Concentration.** CI spend is usually a handful of repositories. Migrating the
+top two is most of the saving and a fraction of the work.
+
+**Whether the minutes are waste.** Before moving anything, check that the
+repository cancels superseded runs (`concurrency` with
+`cancel-in-progress`) and does not trigger on both `push` and `pull_request`
+for the same commit. Moving waste onto your own hardware is still waste.
+
+Then price the other side honestly. A box is a fixed monthly cost and a serial
+one: Actions starts every job at once, a box runs them in sequence behind its
+lock, so feedback gets slower even when the machine is big enough. You also own
+the toolchain — every `npm ci`, database and browser your gates need has to be
+on that machine, and a gate that quietly stops running is worse than the bill.
+
+Per-workflow attribution, when you need to know which one to fix:
+
+```bash
+gh api "repos/<org>/<repo>/actions/workflows/<id>/runs?status=completed&per_page=5" \
+  --jq '.workflow_runs[].id' |
+while read run; do
+  gh api "repos/<org>/<repo>/actions/runs/$run/jobs" \
+    --jq '[.jobs[] | select(.completed_at != null)
+           | ((.completed_at|fromdate) - (.started_at|fromdate))] | add'
+done
+```
+
+Job durations rather than `/timing`, whose `billable` block reports zero on
+some plans.
+
 ### Give the box its own clone
 
 Point the box at a checkout nothing else touches — `/srv/repos/<name>`, or
