@@ -6,6 +6,10 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-08-22
+
+Putting kiln in front of a real fleet, and fixing what that exposed.
+
 ### Added
 
 - **`args:` on `kind: image` — one Dockerfile, several images.** A repository
