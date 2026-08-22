@@ -207,6 +207,10 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	if in.Config == "" {
 		in.Config = req.Artifact.Dockerfile
 	}
+	// Two images can share a commit and a Dockerfile and differ only by their
+	// build arguments; without recording them the attestations are identical
+	// while the images are not.
+	in.BuildArgs = req.Artifact.Args
 
 	stmt, err := attest.Build(in)
 	if err != nil {
@@ -346,6 +350,7 @@ func writeBytes(data []byte) (path string, cleanup func(), err error) {
 // per tag, then read the digest the registry assigned.
 func (d *Docker) classicBuildPush(ctx context.Context, req Request, plan Plan, dir string) (string, error) {
 	args := []string{"build", "--platform", plan.Platforms[0], "-f", plan.Dockerfile}
+	args = append(args, plan.BuildArgFlags()...)
 	for _, ref := range plan.Refs() {
 		args = append(args, "-t", ref)
 	}
@@ -391,6 +396,7 @@ func (d *Docker) buildxPush(ctx context.Context, req Request, plan Plan, dir str
 		"--metadata-file", metaPath,
 		"--push",
 	}
+	args = append(args, plan.BuildArgFlags()...)
 	for _, ref := range plan.Refs() {
 		args = append(args, "-t", ref)
 	}

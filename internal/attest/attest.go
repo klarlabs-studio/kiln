@@ -87,6 +87,14 @@ type ExternalParameters struct {
 	Artifact string `json:"artifact"`
 	// Config names the file that described the build.
 	Config string `json:"config,omitempty"`
+	// BuildArgs are the docker build arguments, when the artifact used any.
+	//
+	// They belong in externalParameters because they are caller-controlled
+	// inputs that change what the image contains: senat-api and senat-runtime
+	// are one commit and one Dockerfile differing only by BIN=, and without
+	// this their attestations would be identical while their contents are not.
+	// Anyone reproducing the build needs them.
+	BuildArgs map[string]string `json:"buildArgs,omitempty"`
 }
 
 // InternalParameters records what the platform decided, including the two
@@ -163,6 +171,10 @@ type Input struct {
 	// ArtifactKind is image or binaries; Config names the file that drove it.
 	ArtifactKind string
 	Config       string
+	// BuildArgs are the docker build arguments the image was built with, if
+	// any. Recorded so two images from one commit and one Dockerfile are
+	// distinguishable in their attestations.
+	BuildArgs map[string]string
 
 	// Isolated reports a credential-free build (a fork pull request).
 	Isolated bool
@@ -216,6 +228,7 @@ func Build(in Input) (Statement, error) {
 					Event:      in.Event,
 					Artifact:   in.ArtifactKind,
 					Config:     in.Config,
+					BuildArgs:  in.BuildArgs,
 				},
 				InternalParameters: InternalParameters{
 					Isolated: in.Isolated,

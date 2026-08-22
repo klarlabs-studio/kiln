@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/config"
@@ -25,9 +26,33 @@ type Plan struct {
 	// Dockerfile and Context are relative to the checked-out tree.
 	Dockerfile string
 	Context    string
+	// Args are the build arguments, as explicit key=value pairs.
+	Args map[string]string
 	// Notes records decisions worth telling the operator about — a semver tag
 	// that could not be derived, a tag character that had to be rewritten.
 	Notes []string
+}
+
+// BuildArgFlags renders the build arguments as docker flags, sorted by name.
+//
+// Sorted because the plan is shown to an operator and folded into provenance:
+// map iteration order would make two identical builds render differently and
+// produce different-looking attestations for the same inputs.
+func (p Plan) BuildArgFlags() []string {
+	if len(p.Args) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(p.Args))
+	for k := range p.Args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	out := make([]string, 0, 2*len(keys))
+	for _, k := range keys {
+		out = append(out, "--build-arg", k+"="+p.Args[k])
+	}
+	return out
 }
 
 // Refs returns every fully qualified reference, sha tag first.
@@ -47,6 +72,13 @@ func (p Plan) String() string {
 	}
 	fmt.Fprintf(&b, "  from %s (context %s) for %s\n",
 		p.Dockerfile, p.Context, strings.Join(p.Platforms, ","))
+	if flags := p.BuildArgFlags(); len(flags) > 0 {
+		pairs := make([]string, 0, len(flags)/2)
+		for i := 1; i < len(flags); i += 2 {
+			pairs = append(pairs, flags[i])
+		}
+		fmt.Fprintf(&b, "  args %s\n", strings.Join(pairs, " "))
+	}
 	for _, n := range p.Notes {
 		fmt.Fprintf(&b, "  note %s\n", n)
 	}
@@ -78,6 +110,7 @@ func BuildPlan(cfg config.Artifact, sha, ref string) (Plan, error) {
 		Platforms:  cfg.Platforms,
 		Dockerfile: cfg.Dockerfile,
 		Context:    cfg.Context,
+		Args:       cfg.Args,
 	}
 	if len(plan.Platforms) == 0 {
 		plan.Platforms = []string{"linux/amd64"}
