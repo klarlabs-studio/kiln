@@ -30,7 +30,14 @@ developer
 | **Warden** | Source gate. `.warden.yaml` is the only check language. Signed note on `refs/notes/warden`. |
 | **Kiln** | Remote re-prove (unless a trusted note lets it skip), `docker` build/push, `cosign` sign, GitHub Checks. |
 | **Nox** | Optional scanner Kiln may invoke. Not CI. |
-| **RollOps** | CD. `imagePolicy`, plan, apply, verify, rollback. Enforces cosign. Kiln never applies. |
+| **RollOps** | CD. `imagePolicy`, plan, apply, drift-verify, rollback. Kiln never applies. |
+
+> **Who checks the signature.** Kiln signs; something has to verify. RollOps does
+> not — its `verification:` setting is drift-detection depth (checksum stamp,
+> live diff, auto-reconcile), and its cosign code verifies *plugins*, not
+> deployed images. Until that changes, run `kiln verify` in the step before you
+> deploy, or at admission. This was measured against a live cluster: an unsigned
+> image deployed cleanly, which is the honest state of the chain today.
 
 Status: OSS MVP, MIT, module `go.klarlabs.de/kiln`, Go 1.25.
 
