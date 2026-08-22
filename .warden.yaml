@@ -5,7 +5,7 @@
 # these steps by shelling out to `warden run pre-push`.
 hooks: { pre_commit: true, pre_push: true }
 commands:
-  lint: "golangci-lint run ./..."
+  lint: "golangci-lint run --allow-parallel-runners ./..."
   test: "go test -race ./..."
   vet: "go vet ./..."
 steps:
