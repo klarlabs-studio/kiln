@@ -219,7 +219,7 @@ func (r *doctorReport) checkPublishTools(deps *boot.Deps) {
 
 	for _, tool := range []struct{ name, why string }{
 		{"docker", "builds the artifact"},
-		{"cosign", "signs the digest RollOps refuses to deploy unsigned"},
+		{"cosign", "signs the digest; verify it at deploy time — nothing downstream checks for you"},
 	} {
 		if _, err := deps.Runner.LookPath(tool.name); err != nil {
 			r.fail("%s not found: it %s (install it, or set KILN_DRY=1)", tool.name, tool.why)
