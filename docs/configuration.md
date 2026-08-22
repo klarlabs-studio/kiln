@@ -41,6 +41,8 @@ publish:                          # a LIST of artifacts
     platforms: [linux/amd64]
     dockerfile: Dockerfile
     context: .
+    args:                         # docker build arguments, optional
+      BIN: api
 
   - kind: binaries
     from: goreleaser              # only accepted value
@@ -174,6 +176,47 @@ daemon's image store, so buildx builds and pushes in a single step.
 
 `cosign`, always. Kiln signs the digest, never a tag: a tag is mutable, and a
 signature over one attests to whatever it points at when somebody checks.
+
+## `args` — one Dockerfile, several images
+
+A repository often builds more than one image from a single Dockerfile,
+differing only by a build argument. `args` is how you say that:
+
+```yaml
+publish:
+  - kind: image
+    image: ghcr.io/owner/senat-api
+    dockerfile: deploy/Dockerfile
+    tags: [sha, latest]
+    args: {BIN: api}
+  - kind: image
+    image: ghcr.io/owner/senat-runtime
+    dockerfile: deploy/Dockerfile
+    tags: [sha, latest]
+    args: {BIN: runtime}
+```
+
+A **map, not a list**, so an argument given twice is an error YAML catches for
+free.
+
+There is deliberately **no passthrough form** — no `args: [FOO]` meaning "take
+FOO from the environment". A build whose output depends on the box's
+environment is not reproducible from the commit, and reproducibility from the
+commit is the entire claim kiln makes about an artifact.
+
+The arguments are **recorded in the provenance**, under
+`buildDefinition.externalParameters.buildArgs`. They have to be: two images
+built from one commit and one Dockerfile are otherwise indistinguishable in
+their attestations while their contents differ. Anyone reproducing the build
+needs them, which is what `externalParameters` is for.
+
+Flags are rendered sorted by name, so the same inputs always produce the same
+command line and the same attestation.
+
+Build args belong to `kind: image`. On a `kind: binaries` entry they are a load
+error — goreleaser owns that build.
+
+---
 
 ## `kind: binaries`
 

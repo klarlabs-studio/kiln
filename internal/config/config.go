@@ -216,6 +216,19 @@ type Artifact struct {
 	Platforms  []string `yaml:"platforms"`
 	Dockerfile string   `yaml:"dockerfile"`
 	Context    string   `yaml:"context"`
+	// Args are docker build arguments, as explicit key=value pairs.
+	//
+	// A map rather than a list, because a build argument given twice is a
+	// mistake YAML can catch for free. There is deliberately no passthrough
+	// form (`--build-arg FOO` taking FOO from the environment): a build whose
+	// output depends on the box's environment is not reproducible from the
+	// commit, and reproducibility from the commit is the whole claim kiln
+	// makes about an artifact.
+	//
+	// They are recorded in the provenance, because two images built from one
+	// commit and one Dockerfile — senat-api and senat-runtime differ only by
+	// BIN= — are otherwise indistinguishable in their attestations.
+	Args map[string]string `yaml:"args"`
 
 	// Binaries fields. From names the tool, for the same reason prove.from
 	// does: the coupling is explicit in the file, and there is one value.
@@ -737,6 +750,7 @@ func (a Artifact) validateBinaries(where string) error {
 		"platforms":  len(a.Platforms) > 0,
 		"dockerfile": a.Dockerfile != "",
 		"context":    a.Context != "",
+		"args":       len(a.Args) > 0,
 	} {
 		if set {
 			return misplaced(where, field, KindBinaries)

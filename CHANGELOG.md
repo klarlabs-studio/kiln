@@ -6,6 +6,30 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`args:` on `kind: image` — one Dockerfile, several images.** A repository
+  routinely builds more than one image from a single Dockerfile, differing only
+  by a build argument. Kiln had no way to express that, which meant it could
+  not build the repository this was found in: senat-os produces six images, and
+  `senat-api`, `senat-runtime` and `senat-voiceprobe` are one Dockerfile
+  differing only by `BIN=`.
+
+  A map rather than a list, so an argument given twice is an error YAML catches
+  for free. No passthrough form (`--build-arg FOO` taking FOO from the
+  environment) on purpose: a build whose output depends on the box's
+  environment is not reproducible from the commit, and that reproducibility is
+  the whole claim kiln makes about an artifact.
+
+  The arguments are recorded in the provenance, at
+  `buildDefinition.externalParameters.buildArgs` — two images from one commit
+  and one Dockerfile would otherwise carry identical attestations while their
+  contents differ, and whoever reproduces the build needs them. Flags render
+  sorted, so the same inputs produce the same command line and the same
+  statement.
+
+  On a `kind: binaries` entry `args` is a load error; goreleaser owns that build.
+
 ## [0.1.3] - 2026-08-20
 
 Both entries came from installing a box on a real repository and watching what
