@@ -67,6 +67,9 @@ func (w *Warden) Prove(ctx context.Context, req ports.ProveRequest) error {
 	}
 
 	return worktree.With(ctx, w.Runner, req.RepoDir, req.SHA, func(dir string) error {
+		if err := materialize(req.RepoDir, dir, req.Materialize, req.Policy); err != nil {
+			return err
+		}
 		return w.runGate(ctx, req, dir)
 	})
 }

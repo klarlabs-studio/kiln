@@ -6,6 +6,33 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`prove.materialize`, so a box can gate a Node project at all.** A gate runs
+  in a disposable worktree and `node_modules` is gitignored, so it was in the
+  clone and never in the checkout. Every Node repository's gate failed with
+  `vitest: command not found` — while passing by hand in the clone, which
+  reads as flakiness rather than a missing file. Go repositories never noticed,
+  because their dependencies come from the module cache, which is global.
+
+  ```yaml
+  prove:
+    from: warden
+    materialize: [node_modules]
+  ```
+
+  Entries are hardlinked from the clone into the worktree before the gate
+  runs, never over a path the commit itself provides, and a named directory
+  that is absent is skipped rather than failing the run.
+
+  **A fork materialises nothing.** The list is read from the commit being
+  gated, so on a pull request its author wrote it; `materialize: [".env"]`
+  would otherwise hand a stranger whatever sits beside the operator's clone,
+  inside code kiln is about to execute. It is governed by the same bit as
+  registry and signing credentials, so a fork's gate fails with "could not
+  run" — which is the honest outcome, and means a Node repository still cannot
+  be gated on fork pull requests.
+
 ### Fixed
 
 - **`kiln box status` reported a healthy box while the schedule was dead.**
