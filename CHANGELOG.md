@@ -6,6 +6,28 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A box gated every pull request the repository had ever had.** Discovery
+  fetches `+refs/pull/*/head` and built every ref it found. GitHub never
+  deletes those refs, so they are not the open pull requests — they are the
+  complete history of them. Measured on the repositories here: vorhut had 99
+  such refs against 3 open pull requests, senat-os 390 against 2.
+
+  The first tick of a new box therefore re-gated hundreds of long-merged
+  commits at minutes apiece — on senat-os, about two days of work — and posted
+  a commit status on each one. Discovery now builds a pull ref only while its
+  pull request is still open, and says how many it skipped and why. Where
+  there is no token to ask with, a head already contained in the watched
+  branch has certainly been merged and is skipped on that evidence alone;
+  anything still unaccounted for is built, and still fails closed as a fork.
+
+  It shipped because every test created a pull ref and expected a job back,
+  which is exactly what an open pull request looks like. Nothing had ever
+  described the closed one. Found by installing a box on a real repository and
+  reading its first tick: it announced it was building `refs/pull/4/head`,
+  which had merged some time ago.
+
 ## [0.2.1] - 2026-08-23
 
 ### Fixed
