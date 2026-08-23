@@ -272,7 +272,22 @@ func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
 // on the next scheduled tick, in a log nobody is reading, into something said
 // at the moment it is pasted.
 func WhoAmI(ctx context.Context, token string) (string, error) {
-	c := &Client{Token: token, Repo: Repo{Owner: "x", Name: "y"}}
+	// NewClient, not a hand-built struct: a literal here left HTTP nil and
+	// BaseURL empty, and `kiln login` panicked on a nil-pointer dereference
+	// before it ever reached the API. Step two of the three-command quick
+	// start, on every path including the documented --with-token one.
+	//
+	// The repo is a placeholder — /user is not repository-scoped — but the
+	// constructor requires one, and giving it a real-looking pair is cheaper
+	// than a second constructor for the one call that needs no repo.
+	return whoAmIAt(ctx, token, DefaultBaseURL)
+}
+
+// whoAmIAt is WhoAmI with the API base injectable, so the constructor path —
+// the thing that was broken — is what the tests exercise.
+func whoAmIAt(ctx context.Context, token, baseURL string) (string, error) {
+	c := NewClient(token, Repo{Owner: "x", Name: "y"}, nil)
+	c.BaseURL = baseURL
 
 	var out struct {
 		Login string `json:"login"`
