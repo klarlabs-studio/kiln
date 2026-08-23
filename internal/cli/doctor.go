@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -227,6 +228,64 @@ func (r *doctorReport) checkPublishTools(deps *boot.Deps) {
 			r.ok("%s installed (%s)", tool.name, tool.why)
 		}
 	}
+
+	r.checkSigningMode(deps)
+}
+
+// checkSigningMode reports how publish will sign, and warns when the mode
+// cannot work unattended.
+//
+// This exists because both failure modes are hangs rather than errors. Keyless
+// with no ambient OIDC identity drops to the device flow and waits on a browser
+// nobody is in front of, until the code expires — which on a multi-image tag
+// means some images are signed and some are not, and the tag has to be
+// repaired by hand. An encrypted key file with no COSIGN_PASSWORD waits on a
+// prompt in the same way. Neither is visible until a release is already
+// half-published, so doctor is the right place to say it.
+func (r *doctorReport) checkSigningMode(deps *boot.Deps) {
+	key := deps.Env.CosignKey
+	if key == "" {
+		if id, ok := ambientOIDC(); ok {
+			r.ok("keyless signing: %s provides the identity cosign proves", id)
+			return
+		}
+		r.warn("keyless signing with no OIDC identity in the environment: cosign will fall back " +
+			"to the browser device flow and block until it expires — set KILN_COSIGN_KEY " +
+			"(a key file, env://VAR, k8s://ns/name, or a KMS URI) for an unattended box")
+		return
+	}
+
+	if scheme, _, ok := strings.Cut(key, "://"); ok {
+		r.ok("keyed signing: %s, so the private key never sits on this box", scheme+"://")
+		return
+	}
+	r.ok("keyed signing with the key file %s", key)
+	// LookupEnv, not Getenv: an unencrypted key is used by setting
+	// COSIGN_PASSWORD to the empty string, so "set and empty" is a valid
+	// configuration and only "unset" is the one that prompts.
+	if _, set := os.LookupEnv("COSIGN_PASSWORD"); !set {
+		r.warn("COSIGN_PASSWORD is unset: an encrypted key file makes cosign prompt for the " +
+			"passphrase, which an unattended run cannot answer (set it to an empty value for " +
+			"an unencrypted key)")
+	}
+}
+
+// ambientOIDC names the identity provider cosign would prove keylessly against,
+// if one is present. Absence is the interesting answer — it is what turns
+// keyless from correct into a hang.
+func ambientOIDC() (string, bool) {
+	for _, p := range []struct{ env, name string }{
+		{"ACTIONS_ID_TOKEN_REQUEST_URL", "GitHub Actions"},
+		{"SIGSTORE_ID_TOKEN", "SIGSTORE_ID_TOKEN"},
+		{"GITLAB_CI", "GitLab CI"},
+		{"BUILDKITE_AGENT_ACCESS_TOKEN", "Buildkite"},
+		{"GOOGLE_APPLICATION_CREDENTIALS", "Google workload identity"},
+	} {
+		if os.Getenv(p.env) != "" {
+			return p.name, true
+		}
+	}
+	return "", false
 }
 
 func (r *doctorReport) checkCredentials(deps *boot.Deps) {

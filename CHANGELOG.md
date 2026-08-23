@@ -6,6 +6,26 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`KILN_COSIGN_KEY` — keyed cosign signing.** Kiln passed it to cosign's
+  `--key` for the signature and the provenance attestation alike, so both
+  claims about an artifact are made by the same signer. Any form cosign
+  accepts: a key file, `env://VAR`, `k8s://ns/name`, or a KMS URI. Empty keeps
+  keyless, unchanged.
+
+  This is what makes a self-hosted builder work. Keyless needs an ambient OIDC
+  identity to prove; with none, cosign falls back to the browser device flow —
+  which is a hang, not an error. A real tag failed this way after 22 minutes,
+  publishing one of six images before the device code expired, and the tag had
+  to be repaired by hand.
+
+- **`kiln doctor` reports the signing mode**, and warns for the two
+  configurations that hang rather than fail: keyless with no OIDC identity in
+  the environment, and a key file with `COSIGN_PASSWORD` unset. Both are
+  invisible until a release is already half-published, which is why doctor is
+  the place to say it.
+
 ### Fixed
 
 - **A box gated every pull request the repository had ever had.** Discovery

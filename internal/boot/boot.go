@@ -254,7 +254,9 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publ
 	if env.Dry {
 		return publish.NewDry(log)
 	}
-	return publish.NewDocker(runner, log)
+	d := publish.NewDocker(runner, log)
+	d.SigningKey = env.CosignKey
+	return d
 }
 
 // buildReleasePublisher wires the binary-release path.
@@ -267,6 +269,7 @@ func buildReleasePublisher(
 ) publish.Publisher {
 	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
+	g.SigningKey = env.CosignKey
 	if env.Goreleaser != "" {
 		g.Binary = env.Goreleaser
 	}

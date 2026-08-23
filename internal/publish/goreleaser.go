@@ -50,6 +50,11 @@ type Goreleaser struct {
 	Uploader AssetUploader
 	// Dry stops short of uploading.
 	Dry bool
+	// SigningKey selects keyed signing for the provenance attestation
+	// (KILN_COSIGN_KEY), matching the image path. goreleaser signs the
+	// artifacts themselves from `.goreleaser.yaml`, so this covers only the
+	// attestation kiln attaches.
+	SigningKey string
 }
 
 // AssetUploader attaches a file to an existing release. It is an interface so
@@ -57,6 +62,15 @@ type Goreleaser struct {
 // be exercised without a network.
 type AssetUploader interface {
 	UploadReleaseAssetByTag(ctx context.Context, tag, name string, body []byte) error
+}
+
+// signingArgs prefixes a cosign signing invocation with the configured key,
+// exactly as the image publisher does.
+func (g *Goreleaser) signingArgs(args ...string) []string {
+	if g.SigningKey == "" {
+		return args
+	}
+	return append([]string{args[0], "--key", g.SigningKey}, args[1:]...)
 }
 
 // ProvenanceAsset is the file name the release provenance is attached under.
@@ -300,14 +314,14 @@ func (g *Goreleaser) attest(
 	bundle := filepath.Join(distDir, ProvenanceAsset)
 	if _, err := g.Runner.Run(ctx, execx.Cmd{
 		Name: g.Cosign,
-		Args: []string{
+		Args: g.signingArgs(
 			"attest-blob", "--yes",
 			"--type", attest.CosignType,
 			"--predicate", predicate,
 			"--new-bundle-format",
 			"--bundle", bundle,
 			filepath.Join(distDir, checksumFile),
-		},
+		),
 		Dir:    distDir,
 		Stdout: req.Output, Stderr: req.Output,
 	}); err != nil {

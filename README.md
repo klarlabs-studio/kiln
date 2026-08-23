@@ -174,6 +174,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_DRY=1` | Plan tags; call neither docker nor cosign |
 | `KILN_WARDEN` / `KILN_NOX` / `KILN_GORELEASER` | Binary names |
 | `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** |
+| `KILN_COSIGN_KEY` | Signing key for publish. Empty means keyless, which needs an ambient OIDC identity. Takes any form cosign's `--key` does: a path, `env://VAR`, `k8s://ns/name`, or a KMS URI. **Required on a self-hosted builder** — see [Signing](#signing). |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
 | `KILN_ADDR` | kilnd bind address (default `127.0.0.1:8088`) |
@@ -184,6 +185,39 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
+
+### Signing
+
+Kiln signs with cosign in one of two modes, and the choice is the operator's,
+not the pipeline's — so a `.kiln.yaml` on a fork cannot pick it.
+
+**Keyless** is the default. cosign mints an ephemeral key, proves an OIDC
+identity, and records the whole thing in the transparency log. Nothing to
+store, nothing to rotate. It is the right mode wherever an identity already
+exists to prove: a GitHub Actions runner, a pod with a workload identity.
+
+**Keyed** is `KILN_COSIGN_KEY`. Kiln passes it to cosign's `--key`, so it takes
+every form cosign does:
+
+```sh
+export KILN_COSIGN_KEY=/etc/kiln/cosign.key   # a key file, with COSIGN_PASSWORD
+export KILN_COSIGN_KEY=env://COSIGN_PRIVATE_KEY
+export KILN_COSIGN_KEY=k8s://kiln/cosign
+export KILN_COSIGN_KEY=awskms://alias/kiln    # the private key never touches the box
+```
+
+**A self-hosted builder needs the keyed mode.** With no identity to present,
+keyless cosign falls back to the browser device flow — and that is a hang, not
+an error: the publish sits there until the code expires several minutes later.
+On a tag that builds several images, the result is a tag where some images are
+signed and some are not, which has to be repaired by hand. `kiln doctor`
+reports the mode in effect and warns when it cannot work unattended.
+
+Generate a key pair with `cosign generate-key-pair`; keep `cosign.pub` for
+verification (`kiln verify --key cosign.pub`, and RollOps' apply-time check).
+An encrypted key needs `COSIGN_PASSWORD` in the environment — cosign otherwise
+prompts, which is the same hang in a different place. An unencrypted key needs
+`COSIGN_PASSWORD` **set and empty**, not left unset.
 
 ---
 
