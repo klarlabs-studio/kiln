@@ -102,7 +102,7 @@ func writeDist(dir string) error {
 func TestReleasePublishesEveryUploadableFile(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	res, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	res, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 	if err != nil {
@@ -133,7 +133,7 @@ func TestReleasePublishesEveryUploadableFile(t *testing.T) {
 func TestReleaseDigestIsTheChecksumManifest(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	res, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	res, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 	if err != nil {
@@ -150,7 +150,7 @@ func TestReleaseDigestIsTheChecksumManifest(t *testing.T) {
 func TestUnsignedReleaseConfigIsRefused(t *testing.T) {
 	repo, head, fake := releaseRepo(t, unsignedConfig)
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -170,7 +170,7 @@ func TestUnsignedReleaseConfigIsRefused(t *testing.T) {
 func TestReleaseNeedsATag(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main", Artifact: binariesArtifact(),
 	})
 
@@ -186,7 +186,7 @@ func TestReleaseNeedsATag(t *testing.T) {
 func TestReleaseNeedsAToken(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -204,7 +204,7 @@ func TestMissingGoreleaserIsAToolFailure(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 	fake.Absent("goreleaser")
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -217,7 +217,7 @@ func TestMissingCosignIsAToolFailure(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 	fake.Absent("cosign")
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -229,7 +229,7 @@ func TestMissingCosignIsAToolFailure(t *testing.T) {
 func TestDryReleaseBuildsButDoesNotUpload(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	res, err := NewGoreleaser(fake, obs.Discard(), "", true).Publish(t.Context(), Request{
+	res, err := NewGoreleaser(fake, obs.Discard(), "", true).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 	if err != nil {
@@ -255,7 +255,7 @@ func TestReleaseRunsFromAPinnedWorktree(t *testing.T) {
 	// A dirty checkout must not reach the release archives.
 	repo.Write("main.go", "package main // uncommitted\n")
 
-	if _, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	if _, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	}); err != nil {
 		t.Fatal(err)
@@ -284,7 +284,7 @@ func TestReleaseWithoutAChecksumManifestIsRefused(t *testing.T) {
 		return execx.Result{}, os.WriteFile(filepath.Join(dist, "artifacts.json"), raw, 0o600)
 	}})
 
-	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -309,7 +309,7 @@ func TestReleaseHonoursACustomConfigPath(t *testing.T) {
 	art := binariesArtifact()
 	art.Config = "build/release.yaml"
 
-	if _, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), Request{
+	if _, err := NewGoreleaser(fake, obs.Discard(), "tok", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: art,
 	}); err != nil {
 		t.Fatalf("Publish: %v\n%s", err, fake.Transcript())
@@ -323,7 +323,7 @@ func TestReleaseHonoursACustomConfigPath(t *testing.T) {
 func TestReleaseGetsTheTokenInItsEnvironment(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
-	if _, err := NewGoreleaser(fake, obs.Discard(), "ghp_secret", false).Publish(t.Context(), Request{
+	if _, err := NewGoreleaser(fake, obs.Discard(), "ghp_secret", false).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	}); err != nil {
 		t.Fatal(err)
@@ -339,7 +339,7 @@ func TestADryReleaseStillRefusesAnUnsignableConfig(t *testing.T) {
 
 	// The dry run skips the signing step, so the static check is the only
 	// thing standing between an unsignable config and a surprise at tag time.
-	_, err := NewGoreleaser(fake, obs.Discard(), "", true).Publish(t.Context(), Request{
+	_, err := NewGoreleaser(fake, obs.Discard(), "", true).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	})
 
@@ -379,7 +379,7 @@ func TestReleaseAttachesProvenance(t *testing.T) {
 		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte(`{"dsseEnvelope":{}}`), 0o600)
 	}})
 
-	res, err := g.Publish(t.Context(), Request{
+	res, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
 		Artifact: binariesArtifact(), Provenance: provenanceInput(),
 	})
@@ -412,7 +412,7 @@ func TestProvenanceCoversTheChecksumManifest(t *testing.T) {
 		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte("{}"), 0o600)
 	}})
 
-	if _, err := g.Publish(t.Context(), Request{
+	if _, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
 		Artifact: binariesArtifact(), Provenance: provenanceInput(),
 	}); err != nil {
@@ -442,7 +442,7 @@ func TestAFailedUploadFailsTheRelease(t *testing.T) {
 		return execx.Result{}, os.WriteFile(bundlePath(c.Args), []byte("{}"), 0o600)
 	}})
 
-	_, err := g.Publish(t.Context(), Request{
+	_, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
 		Artifact: binariesArtifact(), Provenance: provenanceInput(),
 	})
@@ -460,7 +460,7 @@ func TestNoUploaderMeansNoAttestation(t *testing.T) {
 
 	// Without a forge client there is no release to attach to. Failing would
 	// make a tokenless run impossible; claiming attestation would be a lie.
-	res, err := g.Publish(t.Context(), Request{
+	res, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
 		Artifact: binariesArtifact(), Provenance: provenanceInput(),
 	})
@@ -480,7 +480,7 @@ func TestDryReleaseDoesNotAttest(t *testing.T) {
 	g := NewGoreleaser(fake, obs.Discard(), "", true)
 	g.Uploader = &recordingUploader{}
 
-	res, err := g.Publish(t.Context(), Request{
+	res, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0",
 		Artifact: binariesArtifact(), Provenance: provenanceInput(),
 	})

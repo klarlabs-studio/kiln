@@ -13,7 +13,6 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
@@ -36,9 +35,9 @@ type harness struct {
 	pubErr      error
 	releaseErr  error
 	lastProve   ports.ProveRequest
-	lastPub     publish.Request
-	lastRelease publish.Request
-	verdict     provenance.Result
+	lastPub     ports.PublishRequest
+	lastRelease ports.PublishRequest
+	verdict     ports.ProvenanceResult
 }
 
 func newHarness(t *testing.T) *harness {
@@ -46,7 +45,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		checks:  &checks.Recording{},
 		store:   store.NewMemory(),
-		verdict: provenance.Result{Decision: provenance.Reprove, Reason: "no keys pinned"},
+		verdict: ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no keys pinned"},
 	}
 	h.engine = New(Engine{
 		Prover: ports.ProveFunc(func(_ context.Context, req ports.ProveRequest) error {
@@ -54,34 +53,34 @@ func newHarness(t *testing.T) *harness {
 			h.lastProve = req
 			return h.proveErr
 		}),
-		Publisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
+		Publisher: ports.PublishFunc(func(_ context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
 			h.published++
 			h.lastPub = req
 			if h.pubErr != nil {
-				return publish.Result{}, h.pubErr
+				return ports.PublishResult{}, h.pubErr
 			}
 			plan, err := publish.BuildPlan(req.Artifact, req.SHA, req.Ref)
 			if err != nil {
-				return publish.Result{}, err
+				return ports.PublishResult{}, err
 			}
-			return publish.Result{
+			return ports.PublishResult{
 				Kind: config.KindImage, Digest: digest, Reference: image + "@" + digest,
 				Tags: plan.Refs(), Signed: true,
 			}, nil
 		}),
-		ReleasePublisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
+		ReleasePublisher: ports.PublishFunc(func(_ context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
 			h.released++
 			h.lastRelease = req
 			if h.releaseErr != nil {
-				return publish.Result{}, h.releaseErr
+				return ports.PublishResult{}, h.releaseErr
 			}
-			return publish.Result{
+			return ports.PublishResult{
 				Kind: config.KindBinaries, Digest: "sha256:manifest",
 				Reference: strings.TrimPrefix(req.Ref, "refs/tags/"),
 				Tags:      []string{"checksums.txt", "checksums.txt.sig"}, Signed: true,
 			}, nil
 		}),
-		Provenance: verifierFunc(func() provenance.Result { return h.verdict }),
+		Provenance: verifierFunc(func() ports.ProvenanceResult { return h.verdict }),
 		Checks:     h.checks,
 		Store:      h.store,
 		Log:        obs.Discard(),
@@ -89,9 +88,9 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-type verifierFunc func() provenance.Result
+type verifierFunc func() ports.ProvenanceResult
 
-func (f verifierFunc) Verify(context.Context, string, string, isolation.Policy) provenance.Result {
+func (f verifierFunc) Verify(context.Context, string, string, isolation.Policy) ports.ProvenanceResult {
 	return f()
 }
 
@@ -200,7 +199,7 @@ func TestSameRepoPullRequestDoesNotPublishEither(t *testing.T) {
 
 func TestTrustedNoteSkipsTheGate(t *testing.T) {
 	h := newHarness(t)
-	h.verdict = provenance.Result{Decision: provenance.Skipped, Reason: "signed by a trusted key"}
+	h.verdict = ports.ProvenanceResult{Decision: ports.Skipped, Reason: "signed by a trusted key"}
 
 	r, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
 	if err != nil {
@@ -481,8 +480,10 @@ func TestAlreadyBuilt(t *testing.T) {
 
 func TestNewDefaultsOptionalCollaborators(t *testing.T) {
 	e := New(Engine{
-		Prover:    ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
-		Publisher: publish.Func(func(context.Context, publish.Request) (publish.Result, error) { return publish.Result{}, nil }),
+		Prover: ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
+		Publisher: ports.PublishFunc(func(context.Context, ports.PublishRequest) (ports.PublishResult, error) {
+			return ports.PublishResult{}, nil
+		}),
 	})
 
 	if e.Checks == nil || e.Store == nil || e.Log == nil || e.Provenance == nil {
@@ -677,14 +678,14 @@ func TestEachArtifactGetsItsOwnBudget(t *testing.T) {
 
 	// Both publishers take most of a budget. With one clock for the whole
 	// phase the second would be starved; with one each, both finish.
-	slow := func(_ context.Context, _ publish.Request) (publish.Result, error) {
+	slow := func(_ context.Context, _ ports.PublishRequest) (ports.PublishResult, error) {
 		time.Sleep(250 * time.Millisecond)
-		return publish.Result{Kind: config.KindImage, Digest: digest, Signed: true}, nil
+		return ports.PublishResult{Kind: config.KindImage, Digest: digest, Signed: true}, nil
 	}
-	h.engine.Publisher = publish.Func(slow)
-	h.engine.ReleasePublisher = publish.Func(func(_ context.Context, _ publish.Request) (publish.Result, error) {
+	h.engine.Publisher = ports.PublishFunc(slow)
+	h.engine.ReleasePublisher = ports.PublishFunc(func(_ context.Context, _ ports.PublishRequest) (ports.PublishResult, error) {
 		time.Sleep(250 * time.Millisecond)
-		return publish.Result{Kind: config.KindBinaries, Digest: "sha256:b", Signed: true}, nil
+		return ports.PublishResult{Kind: config.KindBinaries, Digest: "sha256:b", Signed: true}, nil
 	})
 
 	got, err := h.engine.Execute(t.Context(), r)

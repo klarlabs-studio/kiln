@@ -25,8 +25,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
-	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/service"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/task"
@@ -75,9 +73,9 @@ type Engine struct {
 	// Publisher builds images; ReleasePublisher builds binary releases. Two
 	// fields rather than a registry because there are two kinds, and a map
 	// would be indirection without a second caller to justify it.
-	Publisher        publish.Publisher
-	ReleasePublisher publish.Publisher
-	Provenance       provenance.Verifier
+	Publisher        ports.Publisher
+	ReleasePublisher ports.Publisher
+	Provenance       ports.ProvenanceVerifier
 	// SourceAttester carries warden's verification summary onto the artifact.
 	// Nil publishes build provenance alone.
 	SourceAttester SourceAttester
@@ -127,7 +125,7 @@ func New(e Engine) *Engine {
 		e.Log = obs.Discard()
 	}
 	if e.Provenance == nil {
-		e.Provenance = provenance.Always{Reason: "no provenance verifier configured"}
+		e.Provenance = ports.AlwaysProvenance{Reason: "no provenance verifier configured"}
 	}
 	return &e
 }
@@ -245,13 +243,13 @@ func validate(req Request) error {
 // inherited them — a fact only this phase knows.
 func (e *Engine) doProve(
 	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger,
-) (provenance.Result, error) {
+) (ports.ProvenanceResult, error) {
 	if !req.Pipeline.Wants(req.Event.String(), config.StepProve) {
 		// A pipeline that routes an event to nothing is a pipeline that wants
 		// nothing done. It is not an error, but it is worth saying out loud:
 		// silence here looks identical to a broken trigger.
 		log.Info("prove not routed for this event", "event", req.Event.String())
-		return provenance.Result{Decision: provenance.Reprove, Reason: "prove not routed for this event"}, nil
+		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "prove not routed for this event"}, nil
 	}
 
 	r.Phase = run.PhaseProving
@@ -293,7 +291,7 @@ func (e *Engine) doProve(
 // and only if, the policy also allows it.
 func (e *Engine) doPublish(
 	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
-	gate provenance.Result, log obs.Logger,
+	gate ports.ProvenanceResult, log obs.Logger,
 ) error {
 	wanted := req.Pipeline.ArtifactsFor(req.Event.String())
 
@@ -351,13 +349,13 @@ func (e *Engine) publishAll(
 			return produced, fmt.Errorf("engine: no publisher for artifact kind %q", artifact.Kind)
 		}
 
-		var res publish.Result
+		var res ports.PublishResult
 		// Each artifact gets its own budget. A release that cross-compiles
 		// four targets should not have its clock started by the image build
 		// that preceded it.
 		err := e.withPhaseTimeout(ctx, "publish "+string(artifact.Kind), func(ctx context.Context) error {
 			var pubErr error
-			res, pubErr = publisher.Publish(ctx, publish.Request{
+			res, pubErr = publisher.Publish(ctx, ports.PublishRequest{
 				RepoDir:    req.Dir,
 				SHA:        req.SHA,
 				Ref:        req.Ref,
@@ -415,7 +413,7 @@ func (e *Engine) sourceSummary(ctx context.Context, req Request, log obs.Logger)
 // shares. The publisher adds the subject, which is the only part that is not
 // known until the artifact exists.
 func (e *Engine) provenanceInput(
-	req Request, r *run.Run, policy isolation.Policy, gate provenance.Result,
+	req Request, r *run.Run, policy isolation.Policy, gate ports.ProvenanceResult,
 ) ports.AttestInput {
 	return ports.AttestInput{
 		Repo:  req.Repo,
@@ -439,7 +437,7 @@ func (e *Engine) provenanceInput(
 // publisherFor selects the publisher for an artifact kind. A nil result is a
 // configuration kiln cannot honour, which the caller turns into a failure
 // rather than a silent no-op.
-func (e *Engine) publisherFor(a config.Artifact) publish.Publisher {
+func (e *Engine) publisherFor(a config.Artifact) ports.Publisher {
 	switch a.Kind {
 	case config.KindBinaries:
 		return e.ReleasePublisher

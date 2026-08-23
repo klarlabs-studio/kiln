@@ -16,6 +16,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
@@ -251,7 +253,7 @@ func buildReporter(c *github.Client, log obs.Logger) checks.Reporter {
 // buildPublisher honours KILN_DRY. The dry publisher is a rehearsal that
 // reports a placeholder digest and Signed=false, so nothing downstream can
 // mistake it for a real artifact.
-func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publish.Publisher {
+func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) ports.Publisher {
 	if env.Dry {
 		return publish.NewDry(log)
 	}
@@ -267,7 +269,7 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publ
 // not substituted here the way it is for images.
 func buildReleasePublisher(
 	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log obs.Logger,
-) publish.Publisher {
+) ports.Publisher {
 	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
 	g.SigningKey = env.CosignKey

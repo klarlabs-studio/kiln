@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"gopkg.in/yaml.v3"
 
 	"go.klarlabs.de/kiln/internal/domain/config"
@@ -97,12 +99,12 @@ var ErrUnsignedRelease = errors.New("release config does not sign its artifacts"
 // nothing to call the release.
 var ErrNotATag = errors.New("a binary release needs a tag")
 
-func (g *Goreleaser) Publish(ctx context.Context, req Request) (Result, error) {
+func (g *Goreleaser) Publish(ctx context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
 	if err := g.preflight(req); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
-	var result Result
+	var result ports.PublishResult
 	err := worktree.With(ctx, g.Runner, req.RepoDir, req.SHA, func(dir string) error {
 		var inner error
 		result, inner = g.release(ctx, req, dir)
@@ -111,7 +113,7 @@ func (g *Goreleaser) Publish(ctx context.Context, req Request) (Result, error) {
 	return result, err
 }
 
-func (g *Goreleaser) preflight(req Request) error {
+func (g *Goreleaser) preflight(req ports.PublishRequest) error {
 	if !strings.HasPrefix(req.Ref, "refs/tags/") {
 		return fmt.Errorf("%w: ref %q is not one (route binaries to tag events, or push a tag)",
 			ErrNotATag, req.Ref)
@@ -134,13 +136,13 @@ func (g *Goreleaser) preflight(req Request) error {
 	return nil
 }
 
-func (g *Goreleaser) release(ctx context.Context, req Request, dir string) (Result, error) {
+func (g *Goreleaser) release(ctx context.Context, req ports.PublishRequest, dir string) (ports.PublishResult, error) {
 	cfgPath := req.Artifact.Config
 	if cfgPath == "" {
 		cfgPath = ".goreleaser.yaml"
 	}
 	if err := CheckReleaseSigning(filepath.Join(dir, cfgPath)); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
 	args := []string{"release", "--clean", "--config", cfgPath}
@@ -167,7 +169,7 @@ func (g *Goreleaser) release(ctx context.Context, req Request, dir string) (Resu
 		Name: g.Binary, Args: args, Dir: dir, Env: env,
 		Stdout: req.Output, Stderr: req.Output,
 	}); err != nil {
-		return Result{}, fmt.Errorf("publish: goreleaser release: %w", err)
+		return ports.PublishResult{}, fmt.Errorf("publish: goreleaser release: %w", err)
 	}
 
 	return g.collect(ctx, dir, req)
@@ -213,16 +215,16 @@ type artifact struct {
 var publishedTypes = []string{"Archive", "Checksum", "Signature", "Certificate", "Linux Package", "SBOM"}
 
 // collect reads what goreleaser produced and derives the release's identity.
-func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Result, error) {
+func (g *Goreleaser) collect(ctx context.Context, dir string, req ports.PublishRequest) (ports.PublishResult, error) {
 	distDir := filepath.Join(dir, "dist")
 
 	raw, err := os.ReadFile(filepath.Join(distDir, "artifacts.json")) //nolint:gosec // path is derived from kiln's own worktree
 	if err != nil {
-		return Result{}, fmt.Errorf("publish: goreleaser produced no artifacts.json: %w", err)
+		return ports.PublishResult{}, fmt.Errorf("publish: goreleaser produced no artifacts.json: %w", err)
 	}
 	var entries []artifact
 	if err := json.Unmarshal(raw, &entries); err != nil {
-		return Result{}, fmt.Errorf("publish: parse artifacts.json: %w", err)
+		return ports.PublishResult{}, fmt.Errorf("publish: parse artifacts.json: %w", err)
 	}
 
 	names := make([]string, 0, len(entries))
@@ -239,7 +241,7 @@ func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Resu
 	slices.Sort(names)
 
 	if checksumFile == "" {
-		return Result{}, errors.New(
+		return ports.PublishResult{}, errors.New(
 			"publish: the release has no checksum manifest, so there is nothing for the signature to cover")
 	}
 
@@ -248,14 +250,14 @@ func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Resu
 	// in the ledger and quoting in the Check.
 	digest, err := fileDigest(filepath.Join(distDir, checksumFile))
 	if err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
 	tag := strings.TrimPrefix(req.Ref, "refs/tags/")
 
 	attested, err := g.attest(ctx, distDir, checksumFile, digest, tag, req)
 	if err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 	if attested {
 		names = append(names, ProvenanceAsset)
@@ -264,7 +266,7 @@ func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Resu
 
 	g.Log.Info("released binaries", "tag", tag, "files", len(names), "checksums", digest)
 
-	return Result{
+	return ports.PublishResult{
 		Kind:      config.KindBinaries,
 		Digest:    digest,
 		Reference: tag,
@@ -287,7 +289,7 @@ func (g *Goreleaser) collect(ctx context.Context, dir string, req Request) (Resu
 // there is no release to attach to in either case, and failing would make a
 // rehearsal impossible.
 func (g *Goreleaser) attest(
-	ctx context.Context, distDir, checksumFile, digest, tag string, req Request,
+	ctx context.Context, distDir, checksumFile, digest, tag string, req ports.PublishRequest,
 ) (bool, error) {
 	if g.Dry || g.Uploader == nil {
 		return false, nil

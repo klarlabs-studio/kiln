@@ -18,42 +18,13 @@ import (
 	"fmt"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
 
-// Decision is the verdict for one commit.
-type Decision string
-
-const (
-	// Skipped means a trusted, signed note covers this commit; the prove phase
-	// can be satisfied without re-running the checks.
-	Skipped Decision = "skipped"
-	// Reprove means the note is absent, unsigned, untrusted or unreadable.
-	// The gate runs again. This is the safe default and the common case.
-	Reprove Decision = "reprove"
-	// Forbidden means the isolation policy does not permit skipping at all —
-	// a fork pull request. The note is not even consulted: it was authored on
-	// the same untrusted head, so reading it proves nothing.
-	Forbidden Decision = "forbidden"
-)
-
-// Result carries the verdict and a human-readable reason. The reason is
-// surfaced in the Check summary and the log, because "this run skipped the
-// gate" is a claim an auditor is entitled to see justified.
-type Result struct {
-	Decision Decision
-	Reason   string
-}
-
 // Skip reports whether the prove phase may be satisfied by the note.
-func (r Result) Skip() bool { return r.Decision == Skipped }
-
-// Verifier answers whether a commit carries trustworthy provenance.
-type Verifier interface {
-	Verify(ctx context.Context, repoDir, sha string, policy isolation.Policy) Result
-}
-
 // Warden verifies through the `warden verify` CLI.
 //
 // Shelling out rather than importing Warden is a deliberate boundary: Warden
@@ -90,15 +61,15 @@ func NewWarden(r execx.Runner, binary string, trustedKeys []string) *Warden {
 // author generated five minutes ago. Requiring an operator-pinned key is what
 // makes the skip meaningful, so an operator who has pinned nothing gets no
 // skip rather than a weak one.
-func (w *Warden) Verify(ctx context.Context, repoDir, sha string, policy isolation.Policy) Result {
+func (w *Warden) Verify(ctx context.Context, repoDir, sha string, policy isolation.Policy) ports.ProvenanceResult {
 	if !policy.Skip {
-		return Result{Forbidden, "isolation policy forbids a provenance skip for this event"}
+		return ports.ProvenanceResult{Decision: ports.Forbidden, Reason: "isolation policy forbids a provenance skip for this event"}
 	}
 	if len(w.TrustedKeys) == 0 {
-		return Result{Reprove, "no KILN_TRUSTED_KEYS pinned: kiln only skips for a note signed by a key the operator trusts"}
+		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no KILN_TRUSTED_KEYS pinned: kiln only skips for a note signed by a key the operator trusts"}
 	}
 	if strings.TrimSpace(sha) == "" {
-		return Result{Reprove, "no commit to verify"}
+		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no commit to verify"}
 	}
 
 	res, err := w.Runner.Run(ctx, execx.Cmd{
@@ -119,19 +90,19 @@ func (w *Warden) Verify(ctx context.Context, repoDir, sha string, policy isolati
 		// to find the key material warden was configured with.
 	})
 	if err == nil {
-		return Result{Skipped, fmt.Sprintf("warden note on %s is signed by a trusted key", shortSHA(sha))}
+		return ports.ProvenanceResult{Decision: ports.Skipped, Reason: fmt.Sprintf("warden note on %s is signed by a trusted key", shortSHA(sha))}
 	}
 
 	var notFound *execx.NotFoundError
 	if errors.As(err, &notFound) {
 		// Not a skip and not, by itself, a failure: prove is about to run and
 		// will fail on the same missing binary with a better message.
-		return Result{Reprove, fmt.Sprintf("%s not on PATH: cannot check provenance", w.Binary)}
+		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("%s not on PATH: cannot check provenance", w.Binary)}
 	}
 	if code, ok := execx.ExitCode(err); ok {
-		return Result{Reprove, fmt.Sprintf("warden verify exited %d: %s", code, verdictHint(res, code))}
+		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("warden verify exited %d: %s", code, verdictHint(res, code))}
 	}
-	return Result{Reprove, fmt.Sprintf("warden verify could not run: %v", err)}
+	return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("warden verify could not run: %v", err)}
 }
 
 // verdictHint turns warden's --quiet exit code into something an operator can
@@ -187,18 +158,6 @@ func (w *Warden) SourceAttestation(ctx context.Context, repoDir, sha string) ([]
 		return nil, fmt.Errorf("provenance: warden produced no attestation for %s", shortSHA(sha))
 	}
 	return []byte(body), nil
-}
-
-// Always is a verifier that never skips. The engine uses it when the operator
-// has opted out, and tests use it to pin behaviour.
-type Always struct{ Reason string }
-
-func (a Always) Verify(context.Context, string, string, isolation.Policy) Result {
-	reason := a.Reason
-	if reason == "" {
-		reason = "provenance skip disabled"
-	}
-	return Result{Reprove, reason}
 }
 
 func shortSHA(sha string) string {

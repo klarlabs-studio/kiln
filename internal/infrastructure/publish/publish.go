@@ -14,7 +14,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -29,70 +28,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
-
-// Request is one publish invocation: one artifact from one commit.
-type Request struct {
-	// RepoDir is the repository to check the commit out of.
-	RepoDir string
-	// SHA is the commit to build. Publish checks it out into its own
-	// worktree — the same reason prove does, and it must not rely on prove
-	// having left one behind.
-	SHA string
-	// Ref is the ref the commit was found on. The image publisher reads it for
-	// the semver tag; the binaries publisher requires it to be a tag at all.
-	Ref string
-	// Artifact is the pipeline entry being published. Each publisher plans
-	// from it, so the plan cannot drift from the configuration that produced
-	// it.
-	Artifact config.Artifact
-	// Provenance carries the run-level facts the attestation needs — which
-	// commit, which gate verdict, which builder. The publisher fills in the
-	// subject once the digest exists, because the digest is the one field
-	// nobody knows until the artifact is built.
-	Provenance ports.AttestInput
-	// SourceVSA is Warden's own verification summary for the commit, carried
-	// verbatim. Empty when the commit has no note.
-	//
-	// Kiln republishes it rather than summarising it: kiln reporting "the gate
-	// passed" asks a reader to trust kiln about warden, where the VSA names
-	// the verifier, the policy and the levels reached in a shape a generic
-	// SLSA consumer already reads.
-	SourceVSA []byte
-	// Output, when set, receives docker's live output. It is an io.Writer
-	// rather than an *os.File so a nil value stays a nil interface; a typed-nil
-	// *os.File would satisfy io.Writer and then panic on first write.
-	Output io.Writer
-}
-
-// Result is one published artifact — the hand-off to whoever consumes it:
-// RollOps for an image, a human or an installer for a release.
-type Result struct {
-	// Kind echoes the artifact kind, so a caller aggregating several results
-	// can tell them apart without re-reading the pipeline.
-	Kind config.ArtifactKind
-	// Digest is the immutable `sha256:…` identity. For an image that is what
-	// the registry assigned; for a release it is the digest of the checksum
-	// manifest, which in turn covers every file in it.
-	Digest string
-	// Reference is what a consumer names to get exactly this artifact:
-	// image@digest, or the release tag.
-	Reference string
-	// Tags are the fully qualified image tags now pointing at the digest, or
-	// the file names in a release.
-	Tags []string
-	// Signed reports whether cosign ran. False only on a dry run.
-	Signed bool
-	// Attested reports whether SLSA provenance was attached to the artifact.
-	// Separate from Signed because they answer different questions: a
-	// signature says somebody vouched for these bytes, provenance says where
-	// they came from.
-	Attested bool
-}
-
-// Publisher builds, pushes and signs.
-type Publisher interface {
-	Publish(ctx context.Context, req Request) (Result, error)
-}
 
 // ErrToolMissing reports that docker or cosign is not installed. This is a
 // publish failure, never a silent skip: a pipeline that quietly stopped
@@ -144,17 +79,17 @@ func (d *Docker) signingArgs(args ...string) []string {
 
 // Publish builds the image from a fresh checkout, pushes every tag, resolves
 // the digest and signs it.
-func (d *Docker) Publish(ctx context.Context, req Request) (Result, error) {
+func (d *Docker) Publish(ctx context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
 	if err := d.preflight(); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
 	plan, err := BuildPlan(req.Artifact, req.SHA, req.Ref)
 	if err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
-	var result Result
+	var result ports.PublishResult
 	err = worktree.With(ctx, d.Runner, req.RepoDir, req.SHA, func(dir string) error {
 		var inner error
 		result, inner = d.build(ctx, req, plan, dir)
@@ -178,7 +113,7 @@ func (d *Docker) preflight() error {
 	return nil
 }
 
-func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) (Result, error) {
+func (d *Docker) build(ctx context.Context, req ports.PublishRequest, plan Plan, dir string) (ports.PublishResult, error) {
 	multiArch := len(plan.Platforms) > 1
 
 	var digest string
@@ -189,21 +124,21 @@ func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) 
 		digest, err = d.classicBuildPush(ctx, req, plan, dir)
 	}
 	if err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
 	reference := plan.Image + "@" + digest
 	if err := d.sign(ctx, reference, req); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 	if err := d.attest(ctx, plan.Image, digest, reference, req); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 	if err := d.attachSourceSummary(ctx, reference, req); err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 
-	return Result{
+	return ports.PublishResult{
 		Kind:      config.KindImage,
 		Digest:    digest,
 		Reference: reference,
@@ -220,7 +155,7 @@ func (d *Docker) build(ctx context.Context, req Request, plan Plan, dir string) 
 // signature but no provenance is one whose origin cannot be checked, and
 // "signed by someone" is a much weaker claim than the one kiln exists to
 // make. Better to fail a build than to quietly downgrade what shipped.
-func (d *Docker) attest(ctx context.Context, image, digest, reference string, req Request) error {
+func (d *Docker) attest(ctx context.Context, image, digest, reference string, req ports.PublishRequest) error {
 	in := req.Provenance
 	in.SubjectName = image
 	in.SubjectDigest = digest
@@ -278,7 +213,7 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 // Absent is not fatal. A repository still adopting warden publishes artifacts
 // with build provenance and no source summary; refusing would make adoption
 // all-or-nothing.
-func (d *Docker) attachSourceSummary(ctx context.Context, reference string, req Request) error {
+func (d *Docker) attachSourceSummary(ctx context.Context, reference string, req ports.PublishRequest) error {
 	if len(req.SourceVSA) == 0 {
 		return nil
 	}
@@ -369,7 +304,7 @@ func writeBytes(data []byte) (path string, cleanup func(), err error) {
 
 // classicBuildPush is the single-platform path: plain `docker build`, one push
 // per tag, then read the digest the registry assigned.
-func (d *Docker) classicBuildPush(ctx context.Context, req Request, plan Plan, dir string) (string, error) {
+func (d *Docker) classicBuildPush(ctx context.Context, req ports.PublishRequest, plan Plan, dir string) (string, error) {
 	args := []string{"build", "--platform", plan.Platforms[0], "-f", plan.Dockerfile}
 	args = append(args, plan.BuildArgFlags()...)
 	for _, ref := range plan.Refs() {
@@ -400,7 +335,7 @@ func (d *Docker) classicBuildPush(ctx context.Context, req Request, plan Plan, d
 // buildxPush is the multi-platform path. A multi-arch image cannot exist in
 // the local daemon's image store, so buildx builds and pushes in one step and
 // reports the manifest-list digest through a metadata file.
-func (d *Docker) buildxPush(ctx context.Context, req Request, plan Plan, dir string) (string, error) {
+func (d *Docker) buildxPush(ctx context.Context, req ports.PublishRequest, plan Plan, dir string) (string, error) {
 	metaFile, err := os.CreateTemp("", "kiln-buildx-*.json")
 	if err != nil {
 		return "", fmt.Errorf("publish: create metadata file: %w", err)
@@ -457,7 +392,7 @@ func readBuildxDigest(path string) (string, error) {
 // push sends one tag, retrying transient registry failures. A registry 500 or
 // a dropped connection mid-layer is common enough that failing the whole run
 // on the first one would make unattended watch unusable.
-func (d *Docker) push(ctx context.Context, ref, dir string, req Request) error {
+func (d *Docker) push(ctx context.Context, ref, dir string, req ports.PublishRequest) error {
 	err := d.withRetry(ctx, "docker push "+ref, func(ctx context.Context) error {
 		_, err := d.Runner.Run(ctx, execx.Cmd{
 			Name: d.Docker, Args: []string{"push", ref}, Dir: dir,
@@ -506,7 +441,7 @@ func (d *Docker) resolveDigest(ctx context.Context, image, ref, dir string) (str
 // sign signs the digest, not a tag. A tag is mutable; signing one would attest
 // to whatever that tag points at when someone checks, which is not a claim
 // worth making.
-func (d *Docker) sign(ctx context.Context, reference string, req Request) error {
+func (d *Docker) sign(ctx context.Context, reference string, req ports.PublishRequest) error {
 	err := d.withRetry(ctx, "cosign sign", func(ctx context.Context) error {
 		_, err := d.Runner.Run(ctx, execx.Cmd{
 			Name: d.Cosign,
@@ -593,11 +528,11 @@ func NewDry(log obs.Logger) *Dry {
 // DryDigest is the placeholder a dry run reports instead of a real digest.
 const DryDigest = "sha256:" + "0000000000000000000000000000000000000000000000000000000000000000"
 
-func (d *Dry) Publish(_ context.Context, req Request) (Result, error) {
+func (d *Dry) Publish(_ context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
 	if req.Artifact.Kind == config.KindBinaries {
 		d.Log.Info("dry run: would release binaries",
 			"from", req.Artifact.From, "config", req.Artifact.Config, "ref", req.Ref)
-		return Result{
+		return ports.PublishResult{
 			Kind:      config.KindBinaries,
 			Digest:    DryDigest,
 			Reference: req.Ref,
@@ -607,11 +542,11 @@ func (d *Dry) Publish(_ context.Context, req Request) (Result, error) {
 
 	plan, err := BuildPlan(req.Artifact, req.SHA, req.Ref)
 	if err != nil {
-		return Result{}, err
+		return ports.PublishResult{}, err
 	}
 	d.Log.Info("dry run: would publish",
 		"image", plan.Image, "tags", plan.Refs(), "sha", req.SHA)
-	return Result{
+	return ports.PublishResult{
 		Kind:      config.KindImage,
 		Digest:    DryDigest,
 		Reference: plan.Image + "@" + DryDigest,
@@ -619,8 +554,3 @@ func (d *Dry) Publish(_ context.Context, req Request) (Result, error) {
 		Signed:    false,
 	}, nil
 }
-
-// Func adapts a function to Publisher, for tests.
-type Func func(ctx context.Context, req Request) (Result, error)
-
-func (f Func) Publish(ctx context.Context, req Request) (Result, error) { return f(ctx, req) }

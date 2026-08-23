@@ -60,7 +60,7 @@ func TestPublishBuildsPushesAndSigns(t *testing.T) {
 
 	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
 	plan := mustPlan(t, art, head, ref)
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	})
 	if err != nil {
@@ -88,7 +88,7 @@ func TestPublishTagsEveryPlannedReference(t *testing.T) {
 
 	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
 	plan := mustPlan(t, art, head, ref)
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	}); err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestPublishBuildsFromAWorktreeNotTheCheckout(t *testing.T) {
 	repo.Write("Dockerfile", "FROM alpine # uncommitted\n")
 
 	fake := dockerFake(t)
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
@@ -142,7 +142,7 @@ func TestPublishSignsTheDigestNotATag(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t)
 
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
@@ -166,7 +166,7 @@ func TestPublishSignsTheDigestNotATag(t *testing.T) {
 func TestMissingDockerFailsBeforeAnythingHappens(t *testing.T) {
 	fake := dockerFake(t).Absent("docker")
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: "/repo", SHA: sha, Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
@@ -181,7 +181,7 @@ func TestMissingDockerFailsBeforeAnythingHappens(t *testing.T) {
 func TestMissingCosignFailsBeforePushing(t *testing.T) {
 	fake := dockerFake(t).Absent("cosign")
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: "/repo", SHA: sha, Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
 
@@ -200,7 +200,7 @@ func TestPushFailureFailsTheRun(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t).On("docker push", execx.Response{ExitCode: 1, Stderr: "unauthorized"})
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
@@ -220,7 +220,7 @@ func TestAuthFailuresAreNotRetried(t *testing.T) {
 
 	d := NewDocker(fake, obs.Discard())
 	d.PushRetries = 4
-	_, _ = d.Publish(t.Context(), Request{
+	_, _ = d.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
@@ -248,7 +248,7 @@ func TestTransientFailuresAreRetried(t *testing.T) {
 
 	d := NewDocker(fake, obs.Discard())
 	d.PushRetries = 3
-	if _, err := d.Publish(t.Context(), Request{
+	if _, err := d.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
@@ -271,7 +271,7 @@ func TestDigestComesFromTheRegistryNotTheDaemon(t *testing.T) {
 		Stdout: `["registry.example.com/mirror/glossa-api@` + other + `","` + image + `@` + digest + `"]`,
 	})
 
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
@@ -288,7 +288,7 @@ func TestNoRegistryDigestIsAFailure(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t).On("docker image inspect", execx.Response{Stdout: `[]`})
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	})
@@ -315,7 +315,7 @@ func TestMultiPlatformUsesBuildx(t *testing.T) {
 	ref, art := "refs/tags/v1.0.0", cfg(config.TagSHA, config.TagSemver)
 	art.Platforms = []string{"linux/amd64", "linux/arm64"}
 
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art,
 	})
 	if err != nil {
@@ -348,7 +348,7 @@ func TestBuildxWithoutADigestIsAFailure(t *testing.T) {
 	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
 	art.Platforms = []string{"linux/amd64", "linux/arm64"}
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art})
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art})
 	if err == nil || !strings.Contains(err.Error(), "no image digest") {
 		t.Errorf("err = %v, want a missing-digest failure", err)
 	}
@@ -358,7 +358,7 @@ func TestDryRunTouchesNothing(t *testing.T) {
 	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
 	plan := mustPlan(t, art, sha, ref)
 
-	res, err := NewDry(obs.Discard()).Publish(t.Context(), Request{RepoDir: "/repo", SHA: sha, Ref: ref, Artifact: art})
+	res, err := NewDry(obs.Discard()).Publish(t.Context(), ports.PublishRequest{RepoDir: "/repo", SHA: sha, Ref: ref, Artifact: art})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -433,7 +433,7 @@ func TestImageProvenanceIsAttachedToTheDigest(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: ref, Artifact: art, Provenance: prov,
 	})
 	if err != nil {
@@ -477,7 +477,7 @@ func TestImageProvenancePredicateRecordsTheChain(t *testing.T) {
 	prov.GateReproved = false
 	prov.GateReason = "warden note is signed by a trusted key"
 
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
 	}); err != nil {
@@ -512,7 +512,7 @@ func TestAFailedAttestationFailsThePublish(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
 	})
@@ -527,7 +527,7 @@ func TestAFailedAttestationFailsThePublish(t *testing.T) {
 func TestDryRunClaimsNoAttestation(t *testing.T) {
 	ref, art := "refs/heads/main", cfg(config.TagSHA, config.TagLatest)
 
-	res, err := NewDry(obs.Discard()).Publish(t.Context(), Request{
+	res, err := NewDry(obs.Discard()).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: "/repo", SHA: sha, Ref: ref, Artifact: art, Provenance: imageProvenance(),
 	})
 	if err != nil {
@@ -585,7 +585,7 @@ func TestWardensSummaryTravelsWithTheArtifact(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
 		Provenance: prov, SourceVSA: signedSummary(head, "PASSED"),
@@ -627,7 +627,7 @@ func TestTheSummaryIsCarriedVerbatimNotParaphrased(t *testing.T) {
 
 	prov := imageProvenance()
 	prov.SHA = head
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
 		Provenance: prov, SourceVSA: signedSummary(head, "PASSED"),
@@ -664,7 +664,7 @@ func TestAnUnsignedSummaryIsNotSignedOnWardensBehalf(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
 		Provenance: prov, SourceVSA: []byte(bare),
@@ -692,7 +692,7 @@ func TestASummaryForADifferentCommitIsRefused(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
 		SourceVSA: signedSummary("0000000000000000000000000000000000000000", "PASSED"),
@@ -714,7 +714,7 @@ func TestNoSummaryStillPublishes(t *testing.T) {
 	prov.SHA = head
 
 	// A repository still adopting warden must not be unable to
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
 	})
@@ -739,7 +739,7 @@ func TestAFailingSummaryIsRefused(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	_, err := newPublisher(fake).Publish(t.Context(), Request{
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
 		Provenance: prov, SourceVSA: signedSummary(head, "FAILED"),
@@ -760,7 +760,7 @@ func TestAnUnreadableSummaryDoesNotBlockTheBuild(t *testing.T) {
 
 	prov := imageProvenance()
 	prov.SHA = head
-	res, err := newPublisher(fake).Publish(t.Context(), Request{
+	res, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact:   cfg(config.TagSHA, config.TagLatest),
 		Provenance: prov, SourceVSA: []byte(`{"predicateType":"https://spdx.dev/Document"}`),
@@ -791,7 +791,7 @@ func TestKeyedSigningUsesTheConfiguredKey(t *testing.T) {
 	d := newPublisher(fake)
 	d.SigningKey = "cosign.key"
 
-	if _, err := d.Publish(t.Context(), Request{
+	if _, err := d.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {
@@ -825,7 +825,7 @@ func TestKeylessSigningStaysTheDefault(t *testing.T) {
 	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
 	fake := dockerFake(t)
 
-	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head,
 		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
 	}); err != nil {

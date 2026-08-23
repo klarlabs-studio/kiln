@@ -21,7 +21,6 @@ import (
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 )
 
 const (
@@ -54,8 +53,8 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 	// The gate and the publisher are stubbed: this package's job is the HTTP
 	// contract, not the build.
 	deps.Engine.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil })
-	deps.Engine.Publisher = publish.Func(func(_ context.Context, r publish.Request) (publish.Result, error) {
-		return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
+	deps.Engine.Publisher = ports.PublishFunc(func(_ context.Context, r ports.PublishRequest) (ports.PublishResult, error) {
+		return ports.PublishResult{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 	})
 
 	srv, err := New(deps, token, secret, obs.Discard())
@@ -401,9 +400,9 @@ func TestWebhookRejectsAMalformedPayload(t *testing.T) {
 func TestWebhookForkPullRequestNeverPublishes(t *testing.T) {
 	srv, repo := newServer(t)
 	published := false
-	srv.Deps.Engine.Publisher = publish.Func(func(context.Context, publish.Request) (publish.Result, error) {
+	srv.Deps.Engine.Publisher = ports.PublishFunc(func(context.Context, ports.PublishRequest) (ports.PublishResult, error) {
 		published = true
-		return publish.Result{}, nil
+		return ports.PublishResult{}, nil
 	})
 
 	body := []byte(`{

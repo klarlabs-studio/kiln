@@ -18,7 +18,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
@@ -48,8 +47,8 @@ func newFixture(t *testing.T) *fixture {
 	f := &fixture{upstream: upstream, local: local, store: store.NewMemory()}
 	eng := engine.New(engine.Engine{
 		Prover: ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
-		Publisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
-			return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
+		Publisher: ports.PublishFunc(func(_ context.Context, req ports.PublishRequest) (ports.PublishResult, error) {
+			return ports.PublishResult{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 		}),
 		Store: f.store,
 		Log:   obs.Discard(),

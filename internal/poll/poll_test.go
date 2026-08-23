@@ -11,7 +11,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/watch"
 )
@@ -25,10 +24,12 @@ func newWatcher(t *testing.T) (*watch.Watcher, *gittest.Repo) {
 	s := store.NewMemory()
 	return &watch.Watcher{
 		Engine: engine.New(engine.Engine{
-			Prover:    ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
-			Publisher: publish.Func(func(context.Context, publish.Request) (publish.Result, error) { return publish.Result{}, nil }),
-			Store:     s,
-			Log:       obs.Discard(),
+			Prover: ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
+			Publisher: ports.PublishFunc(func(context.Context, ports.PublishRequest) (ports.PublishResult, error) {
+				return ports.PublishResult{}, nil
+			}),
+			Store: s,
+			Log:   obs.Discard(),
 		}),
 		Store:         s,
 		Runner:        execx.NewSystem(),
