@@ -238,6 +238,7 @@ func TestNewCommitAfterASuccessRebuilds(t *testing.T) {
 
 func TestTagsArePeeledToTheirCommit(t *testing.T) {
 	f := newFixture(t)
+	f.alreadyWatching(t)
 	commit := f.upstream.Head()
 	f.upstream.Tag("v1.0.0")
 
@@ -433,6 +434,7 @@ func TestDryRunExecutesNothing(t *testing.T) {
 
 func TestOneFailingJobDoesNotStopTheTick(t *testing.T) {
 	f := newFixture(t)
+	f.alreadyWatching(t)
 	f.upstream.Tag("v1.0.0")
 
 	failFirst := true
@@ -601,4 +603,14 @@ func hasRef(jobs []Job, ref string) bool {
 		}
 	}
 	return false
+}
+
+// alreadyWatching marks the box as having ticked before, with no tags on the
+// repository at the time. A tag created after this is new work rather than
+// history the box inherited, which is the case most tests mean to describe.
+func (f *fixture) alreadyWatching(t *testing.T) {
+	t.Helper()
+	if err := SaveBaseline(f.watcher.Dir, &Baseline{Tags: map[string]string{}}); err != nil {
+		t.Fatal(err)
+	}
 }

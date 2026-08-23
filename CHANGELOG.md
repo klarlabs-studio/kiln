@@ -28,6 +28,41 @@ All notable changes to kiln are documented here. The format follows
 
 ### Fixed
 
+- **A fresh box republished every release the repository had ever cut.**
+  Nothing bounded tag discovery to tags that appeared *since* the box was
+  installed, and a new box has an empty ledger, so every tag on the remote
+  looked like new work. A tag is a publishing event, so this did not merely
+  re-gate history — it pushed images and wrote fresh provenance for versions
+  that were signed long ago. senat-os has 133 tags.
+
+  A box now records the tags a repository already had on its first tick and
+  builds only what happens after. The record lives in `.kiln/baseline.json`,
+  beside the run ledger rather than inside it: seeding the ledger with
+  synthetic successes would have made `kiln box runs` list runs that never
+  happened, and the ledger is the evidence trail. A tag later moved to a
+  different commit is built again, because the artefact it would publish is
+  not the one that was recorded.
+
+  Only tags are baselined. The branch tip and any open pull requests are
+  current work, and building them is both the point of installing a box and
+  the only sign the operator gets that the pipeline runs at all. A box that
+  already has run history is not given a baseline, since it has built its tags
+  already and a baseline written underneath it could silence a tag that is
+  mid-backoff after a real failure.
+
+  Together with the closed pull request fix, a first tick on senat-os goes
+  from 523 jobs to 3.
+
+### Changed
+
+- **`docs/operating.md` said GitHub deletes `refs/pull/N/head` when a pull
+  request closes.** It does not, and that belief is what produced the bug
+  above. The tick description now says what actually happens, and a new
+  section describes what a box installed on an existing repository does *not*
+  do with that repository's history.
+
+### Fixed
+
 - **A box gated every pull request the repository had ever had.** Discovery
   fetches `+refs/pull/*/head` and built every ref it found. GitHub never
   deletes those refs, so they are not the open pull requests — they are the

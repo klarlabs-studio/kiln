@@ -65,18 +65,47 @@ wants to know now whether it works, not in five minutes.
 2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a non-GitHub
    remote simply has none)
 3. `git fetch +refs/tags/*` (not fatal)
-4. Ask GitHub which open pull requests are same-repo; without a token, every
-   one is a fork
-5. Drop any job whose SHA **and** ref already have a *succeeded* run
-6. Execute the rest
+4. Ask GitHub which pull requests are open, and which of those are same-repo;
+   without a token, every one is a fork
+5. Drop any pull ref whose pull request is no longer open
+6. Drop any tag the box inherited (see *What a new box does not do*)
+7. Drop any job whose SHA **and** ref already have a *succeeded* run
+8. Execute the rest
 
 Only a success suppresses a rebuild, so a transient failure is retried on the
 next tick rather than wedging the ref forever. One failing job does not stop
 the others — otherwise anybody who can open a pull request could halt the
 pipeline.
 
-A closed pull request stops being built: GitHub removes `refs/pull/N/head`, and
-the pruning fetch carries that through.
+### What a new box does not do
+
+A box installed on an existing repository does not gate or publish that
+repository's history. Two things would otherwise make it try.
+
+**`refs/pull/N/head` outlives the pull request.** GitHub never deletes these
+refs, so what a fetch returns is not the open pull requests — it is every pull
+request the repository has ever had. senat-os has 390 of them against 2 open.
+A pull ref is therefore built only while the API says its pull request is
+open. Where there is no token to ask with, a head already contained in the
+watched branch has certainly been merged and is skipped on that evidence
+alone; anything still unaccounted for is built, and still treated as a fork.
+
+**Tags do not go stale.** `v2.1.0` is as valid a tag today as the day it was
+pushed, so there is no state to filter on — only the fact that it predates the
+box. The first tick records the tags already present in `.kiln/baseline.json`
+and builds what happens after. This matters more than it sounds: a tag is a
+publishing event, so without it a new box would push images and write fresh
+provenance for versions signed long ago.
+
+A tag later moved to a different commit is built again, because the artefact
+it would publish is not the one that was recorded. A box that already has run
+history is not given a baseline — it has built its tags already, and one
+written underneath it could silence a tag that is mid-backoff after a real
+failure.
+
+The branch tip and any open pull requests are *not* baselined. They are
+current work, and building them is both the point of installing a box and the
+only sign you get that the pipeline runs at all.
 
 ### Seeing what it would do
 

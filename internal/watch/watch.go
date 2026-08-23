@@ -139,6 +139,11 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		return Result{}, err
 	}
 
+	jobs, err = w.applyBaseline(jobs, dryRun)
+	if err != nil {
+		return Result{}, err
+	}
+
 	result := Result{Discovered: jobs}
 	for _, job := range jobs {
 		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
@@ -376,6 +381,57 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 		return struct{}{}, e
 	})
 	return err
+}
+
+// applyBaseline drops the tags a box inherited rather than earned.
+//
+// The first tick of a new box records what is already there; every tick after
+// that skips it. A tag is a publishing event, so without this a fresh box
+// republishes every release the repository ever cut — 133 of them on one repo
+// here, each pushing images and writing fresh provenance for a version that
+// was signed long ago.
+//
+// Only tags are baselined. The branch tip and any open pull requests are
+// current work, and building them on the first tick is the point of installing
+// a box — it is also the only sign the operator gets that the pipeline runs at
+// all.
+func (w *Watcher) applyBaseline(jobs []Job, dryRun bool) ([]Job, error) {
+	base, err := LoadBaseline(w.Dir)
+	if err != nil {
+		return nil, err
+	}
+	if base == nil {
+		if !ledgerIsEmpty(w.Store) {
+			// An existing box has already built its tags. Writing a baseline
+			// underneath it would silence one that is mid-backoff.
+			return jobs, nil
+		}
+		base = baselineFrom(jobs, w.now())
+		if !dryRun && w.Dir != "" {
+			if err := SaveBaseline(w.Dir, base); err != nil {
+				return nil, err
+			}
+		}
+		if len(base.Tags) > 0 {
+			w.logger().Info("baselined the tags this repository already had",
+				"count", len(base.Tags),
+				"why", "a new box publishes what happens next, not what already shipped")
+		}
+	}
+
+	kept := jobs[:0:0]
+	var skipped int
+	for _, j := range jobs {
+		if base.Covers(j) {
+			skipped++
+			continue
+		}
+		kept = append(kept, j)
+	}
+	if skipped > 0 && base.Tags != nil {
+		w.logger().Debug("skipped baselined tags", "count", skipped)
+	}
+	return kept, nil
 }
 
 // discover builds the job list from local refs.
