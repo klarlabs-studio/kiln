@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 )
@@ -60,7 +61,7 @@ func runPrune(ctx context.Context, args []string, io IO) error {
 	// A one-shot prune takes the repository lock: it removes images a
 	// concurrent build may be about to tag, and the lock is what stops that.
 	return withRepoLock(deps.Dir, "kiln prune", busyRefusal, func() error {
-		res, err := prune.New(deps.Runner, deps.Log).Prune(ctx, prune.Options{
+		res, err := prune.New(deps.Runner, deps.Log).Prune(ctx, ports.PruneOptions{
 			Repos: repos, Keep: retain, BuildCacheMaxAge: maxAge, DryRun: *dryRun,
 		})
 		if err != nil {

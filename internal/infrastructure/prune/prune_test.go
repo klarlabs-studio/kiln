@@ -38,11 +38,7 @@ func prune(t *testing.T, f *execx.Fake, opts Options) Result {
 	if opts.Repos == nil {
 		opts.Repos = []string{repo}
 	}
-	res, err := New(f, obs.Discard()).Prune(t.Context(), opts)
-	if err != nil {
-		t.Fatalf("Prune: %v\n%s", err, f.Transcript())
-	}
-	return res
+	return New(f, obs.Discard()).prune(t.Context(), opts)
 }
 
 func TestOldBuildsAreRemovedAndRecentOnesKept(t *testing.T) {
@@ -186,13 +182,11 @@ func TestZeroCacheAgeLeavesTheCacheAlone(t *testing.T) {
 func TestMissingDockerIsNotAFailure(t *testing.T) {
 	f := fakeDocker().Absent("docker")
 
-	res, err := New(f, obs.Discard()).Prune(t.Context(), Options{Repos: []string{repo}, Keep: 10})
-
 	// A prove-only box has nothing to collect and should not fail
-	// housekeeping over a tool it never needed.
-	if err != nil {
-		t.Errorf("err = %v", err)
-	}
+	// housekeeping over a tool it never needed. That is now guaranteed by the
+	// signature rather than asserted here: prune cannot report a failure, and
+	// the port keeps an error only because a different pruner might.
+	res := New(f, obs.Discard()).prune(t.Context(), Options{Repos: []string{repo}, Keep: 10})
 	if len(res.Removed) != 0 {
 		t.Errorf("Removed = %v", res.Removed)
 	}

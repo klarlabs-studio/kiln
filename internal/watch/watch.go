@@ -30,10 +30,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
-	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/prune"
-	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -90,15 +87,18 @@ type Watcher struct {
 	// Schedule remembers when each scheduled task last fired. Nil disables
 	// scheduled tasks, which is what a caller with no persistent directory —
 	// a test, a dry run — should get.
-	Schedule *schedule.Store
+	Schedule ports.Schedule
 	// Now is the clock, injectable so a test can state what "tomorrow" means
 	// rather than sleep through it.
 	Now func() time.Time
+	// Locks serialises this repository against another kiln — a box ticking
+	// while an operator runs one by hand in the same checkout.
+	Locks ports.Locks
 	// Worktrees reaps checkouts a dying process left behind. Nil disables the
 	// sweep, which is what a caller with no repository — a test — should get.
 	Worktrees ports.Worktrees
 	// Pruner reclaims docker disk each tick. Nil disables it.
-	Pruner *prune.Pruner
+	Pruner ports.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
 	BuildCacheMaxAge time.Duration
 }
@@ -299,7 +299,7 @@ func (w *Watcher) prune(ctx context.Context) {
 	}
 	sort.Strings(repos)
 
-	res, err := w.Pruner.Prune(ctx, prune.Options{
+	res, err := w.Pruner.Prune(ctx, ports.PruneOptions{
 		Repos:            repos,
 		Keep:             keep,
 		BuildCacheMaxAge: w.BuildCacheMaxAge,
@@ -324,12 +324,12 @@ func (w *Watcher) tickLocked(ctx context.Context, dryRun bool) (Result, error) {
 		return w.Once(ctx, dryRun)
 	}
 
-	l, err := lock.TryAcquire(lock.PathFor(w.Dir), "kiln watch --every")
-	if errors.Is(err, lock.ErrBusy) {
+	l, err := w.Locks.TryAcquire(w.Dir, "kiln watch --every")
+	if errors.Is(err, ports.ErrRepoBusy) {
 		// Something else is working this repository. Skipping is the whole
 		// point; the next tick will find whatever is left.
 		w.logger().Info("skipping tick: another kiln holds this repository",
-			"holder", lock.ReadHolder(lock.PathFor(w.Dir)).String())
+			"holder", w.Locks.HolderOf(w.Dir))
 		return Result{}, nil
 	}
 	if err != nil {

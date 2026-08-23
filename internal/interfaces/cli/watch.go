@@ -262,6 +262,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		// a restart.
 		Schedule:         schedule.NewStore(filepath.Dir(deps.Store.Path())),
 		Worktrees:        worktree.NewTrees(deps.Runner),
+		Locks:            lock.NewLocks(),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
 	}

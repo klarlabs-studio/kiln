@@ -17,6 +17,7 @@ import (
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
@@ -56,6 +57,7 @@ func newFixture(t *testing.T) *fixture {
 	})
 	f.watcher = &Watcher{
 		Worktrees: worktree.NewTrees(execx.NewSystem()),
+		Locks:     lock.NewLocks(),
 		Engine:    eng,
 		Store:     f.store,
 		Runner:    execx.NewSystem(),

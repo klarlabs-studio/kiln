@@ -97,11 +97,11 @@ func New(r execx.Runner, log obs.Logger) *Pruner {
 // A missing docker is not an error: a box that only proves, or one running
 // with KILN_DRY, has nothing to collect and should not fail housekeeping over
 // a tool it never needed.
-func (p *Pruner) Prune(ctx context.Context, opts Options) (Result, error) {
+func (p *Pruner) prune(ctx context.Context, opts Options) Result {
 	var result Result
 
 	if _, err := p.Runner.LookPath(p.Docker); err != nil {
-		return result, nil
+		return result
 	}
 
 	for _, repo := range opts.Repos {
@@ -125,7 +125,7 @@ func (p *Pruner) Prune(ctx context.Context, opts Options) (Result, error) {
 		}
 		result.CacheFreed = freed
 	}
-	return result, nil
+	return result
 }
 
 // pruneRepo removes the oldest sha-tagged builds of one image.
