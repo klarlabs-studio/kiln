@@ -51,13 +51,30 @@ type Job struct {
 	Label string
 }
 
+// Forge is the part of the GitHub client discovery needs: which pull requests
+// are open, and which of those come from a fork.
+//
+// Nil, or Enabled reporting false, means the question cannot be asked. That is
+// not the same as "none are open", and the difference decides whether a pull
+// ref that is missing from the answer is known-closed or merely unknown — see
+// pullDecision.
+type Forge interface {
+	Enabled() bool
+	ListOpenPulls(ctx context.Context) ([]github.Pull, error)
+}
+
 // Watcher discovers and executes work.
 type Watcher struct {
 	Engine *engine.Engine
 	Store  store.Store
 	Runner execx.Runner
-	GitHub *github.Client
-	Log    obs.Logger
+	// Forge answers which pull requests are open. An interface rather than
+	// *github.Client because that is the whole question this package asks of
+	// GitHub, and because a concrete client cannot be substituted in a test —
+	// which is why the closed-pull-request logic had to be extracted as a pure
+	// function to be testable at all. task.Forge is the same idea.
+	Forge Forge
+	Log   obs.Logger
 
 	// Dir is the repository to watch.
 	Dir string
@@ -729,12 +746,12 @@ func pullDecision(number int, open map[int]bool, authoritative bool, merged func
 // authoritative. Authoritative means the API answered: a number missing from
 // the map is then known to be closed, rather than merely unknown.
 func (w *Watcher) forkStatus(ctx context.Context) (map[int]bool, bool) {
-	if w.GitHub == nil || !w.GitHub.Enabled() {
+	if w.Forge == nil || !w.Forge.Enabled() {
 		w.logger().Warn("no github token: treating every pull request as a fork",
 			"effect", "no secrets, no publish, no provenance skip on any PR")
 		return nil, false
 	}
-	pulls, err := w.GitHub.ListOpenPulls(ctx)
+	pulls, err := w.Forge.ListOpenPulls(ctx)
 	if err != nil {
 		w.logger().Warn("could not list pull requests: treating every one as a fork", "err", err)
 		return nil, false

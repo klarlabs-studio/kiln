@@ -26,7 +26,7 @@ func New(w *watch.Watcher) *Poller {
 	branchOnly.BranchesOnly = true
 	// A poller has no use for the API even if a token happens to be present:
 	// it never produces a pull request job for the answer to apply to.
-	branchOnly.GitHub = nil
+	branchOnly.Forge = nil
 	return &Poller{w: &branchOnly}
 }
 

@@ -62,14 +62,14 @@ func TestPollSeesOnlyTheTrackedBranch(t *testing.T) {
 func TestPollForcesBranchOnlyAndDropsTheAPIClient(t *testing.T) {
 	w, _ := newWatcher(t)
 	w.BranchesOnly = false
-	w.GitHub = github.NewClient("tok", github.Repo{Owner: "o", Name: "r"}, obs.Discard())
+	w.Forge = github.NewClient("tok", github.Repo{Owner: "o", Name: "r"}, obs.Discard())
 
 	got := New(w).Watcher()
 
 	if !got.BranchesOnly {
 		t.Error("a poller that can be configured to read pull requests is not a poller")
 	}
-	if got.GitHub != nil {
+	if got.Forge != nil {
 		t.Error("poll has no pull request jobs for an API answer to apply to")
 	}
 }
@@ -77,14 +77,14 @@ func TestPollForcesBranchOnlyAndDropsTheAPIClient(t *testing.T) {
 func TestNewDoesNotMutateTheOriginalWatcher(t *testing.T) {
 	w, _ := newWatcher(t)
 	client := github.NewClient("tok", github.Repo{Owner: "o", Name: "r"}, obs.Discard())
-	w.GitHub = client
+	w.Forge = client
 
 	_ = New(w)
 
 	if w.BranchesOnly {
 		t.Error("New mutated the caller's watcher")
 	}
-	if w.GitHub != client {
+	if w.Forge != client {
 		t.Error("New stripped the caller's API client")
 	}
 }

@@ -250,7 +250,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Engine:       deps.Engine,
 		Store:        deps.Store,
 		Runner:       deps.Runner,
-		GitHub:       deps.GitHub,
+		Forge:        deps.GitHub,
 		Log:          deps.Log,
 		Dir:          deps.Dir,
 		Pipeline:     deps.Pipeline,

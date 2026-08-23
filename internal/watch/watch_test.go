@@ -316,7 +316,7 @@ func TestWithoutATokenEveryPullRequestIsAFork(t *testing.T) {
 	prSHA := f.upstream.Commit("pr work", "feature.txt", "x\n")
 	f.upstream.Git("update-ref", "refs/pull/7/head", prSHA)
 	f.upstream.Git("reset", "--hard", "HEAD~1")
-	f.watcher.GitHub = nil
+	f.watcher.Forge = nil
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
@@ -351,7 +351,7 @@ func TestTokenResolvesSameRepoPullRequests(t *testing.T) {
 
 	c := github.NewClient("tok", github.Repo{Owner: "klarlabs-studio", Name: "kiln"}, obs.Discard())
 	c.BaseURL = srv.URL
-	f.watcher.GitHub = c
+	f.watcher.Forge = c
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
@@ -383,7 +383,7 @@ func TestAPIFailureFallsBackToFork(t *testing.T) {
 	c := github.NewClient("tok", github.Repo{Owner: "o", Name: "r"}, obs.Discard())
 	c.BaseURL = srv.URL
 	c.Attempts = 1
-	f.watcher.GitHub = c
+	f.watcher.Forge = c
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {

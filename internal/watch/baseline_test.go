@@ -168,7 +168,7 @@ func TestATokenlessTickDoesNotReplayTheBaselinedPullRequests(t *testing.T) {
 	if _, err := f.watcher.Once(t.Context(), false); err != nil {
 		t.Fatal(err)
 	}
-	f.watcher.GitHub = nil // the token goes away
+	f.watcher.Forge = nil // the token goes away
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
@@ -193,7 +193,7 @@ func TestATokenlessTickStillBuildsAPullRequestOpenedSinceTheBaseline(t *testing.
 	head := f.upstream.Commit("new pr", "new.txt", "x\n")
 	f.upstream.Git("update-ref", "refs/pull/9/head", head)
 	f.upstream.Git("reset", "--hard", "HEAD~1")
-	f.watcher.GitHub = nil
+	f.watcher.Forge = nil
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
@@ -231,7 +231,7 @@ func TestAnOpenPullRequestIsNotSilencedByTheBaseline(t *testing.T) {
 	defer srv.Close()
 	c := github.NewClient("tok", github.Repo{Owner: "klarlabs-studio", Name: "kiln"}, obs.Discard())
 	c.BaseURL = srv.URL
-	f.watcher.GitHub = c
+	f.watcher.Forge = c
 
 	if _, err := f.watcher.Once(t.Context(), false); err != nil {
 		t.Fatal(err)

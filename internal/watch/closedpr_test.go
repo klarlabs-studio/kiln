@@ -81,7 +81,7 @@ func TestDiscovery_SkipsAMergedPullRefWithoutAToken(t *testing.T) {
 	// A pull ref pointing at a commit that IS on the branch: merged.
 	merged := f.upstream.Commit("merged work", "merged.txt", "x\n")
 	f.upstream.Git("update-ref", "refs/pull/4/head", merged)
-	f.watcher.GitHub = nil
+	f.watcher.Forge = nil
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
