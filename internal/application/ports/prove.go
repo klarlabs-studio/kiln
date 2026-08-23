@@ -42,3 +42,18 @@ func (f ProveFunc) Prove(ctx context.Context, req ProveRequest) error { return f
 // distinct from an infrastructure failure so the Check summary can say
 // "your change did not pass" rather than "kiln broke".
 var ErrGateFailed = errors.New("warden gate failed")
+
+// ErrToolMissing reports that a step's toolchain or dependencies are not
+// installed, so the gate never ran. Warden exits 78 (EX_CONFIG) for this.
+//
+// It is not a gate failure and must never be reported as one: saying "your
+// change did not pass" when nothing looked at the change is the one direction
+// this error must not go. A real box posted exactly that on a healthy main.
+var ErrToolMissing = errors.New("gate could not run: toolchain or dependencies missing")
+
+// ErrGateUnavailable reports that another process held a machine-global lock
+// until the wait budget ran out. Warden exits 75 (EX_TEMPFAIL) for this.
+//
+// Also not a gate failure: nothing is wrong with the change and nothing is
+// missing from the box, so the honest answer is "not yet".
+var ErrGateUnavailable = errors.New("gate could not run: another process holds the lock")

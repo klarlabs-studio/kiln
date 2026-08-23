@@ -14,7 +14,6 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
-	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
@@ -171,7 +170,11 @@ func classify(err error) error {
 		return wrapExit(ExitConfig, err)
 	case errors.Is(err, ports.ErrGateFailed):
 		return wrapExit(ExitFailed, err)
-	case errors.Is(err, prove.ErrToolMissing), errors.Is(err, publish.ErrToolMissing):
+	case errors.Is(err, ports.ErrToolMissing), errors.Is(err, ports.ErrGateUnavailable),
+		errors.Is(err, publish.ErrToolMissing):
+		// The gate never ran. Same bucket as a missing toolchain, and
+		// deliberately not ExitFailed: that would say the change was rejected,
+		// which is a claim nothing here is entitled to make.
 		return wrapExit(ExitConfig, err)
 	default:
 		return wrapExit(ExitError, err)

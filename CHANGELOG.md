@@ -6,6 +6,27 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **kiln reported "gate failed" when warden said it could not run the gate.**
+  Every non-zero exit from warden became `ErrGateFailed`, so a missing
+  toolchain was posted as a red `Kiln / Prove — gate failed` on a commit
+  nothing had looked at. Observed on a real box, on a healthy `main`.
+
+  Warden's exit codes are a sysexits(3) contract: `1` is a rejection, `75`
+  (`EX_TEMPFAIL`) is contention, `78` (`EX_CONFIG`) is a step whose toolchain
+  is not installed. kiln now reads them, and reports the last two as
+  `ErrToolMissing` and `ErrGateUnavailable` — with exit code 3, not 2, since
+  claiming a change was rejected is a claim nothing there is entitled to make.
+
+  The check stays a *failure* conclusion, deliberately. A commit whose gate
+  never ran has not been gated, and a neutral conclusion posts as a success
+  commit status, which would show an unverified commit green. What changes is
+  the claim, not the colour: the title is now "gate could not run".
+
+  Anything unrecognised is still a gate failure, which is the safe direction —
+  an exit code kiln has not been taught about must not excuse a commit.
+
 ### Changed
 
 - **The internals are layered.** `internal/` is now

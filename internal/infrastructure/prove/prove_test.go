@@ -80,8 +80,8 @@ func TestMissingWardenIsAFailureNotASkip(t *testing.T) {
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 
-	if !errors.Is(err, ErrToolMissing) {
-		t.Fatalf("err = %v, want ErrToolMissing", err)
+	if !errors.Is(err, ports.ErrToolMissing) {
+		t.Fatalf("err = %v, want ports.ErrToolMissing", err)
 	}
 	// The check must happen before the checkout, so the operator learns
 	// immediately rather than after a clone.
@@ -97,8 +97,8 @@ func TestNoxEnabledButMissingIsAFailure(t *testing.T) {
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Nox: true,
 	})
 
-	if !errors.Is(err, ErrToolMissing) {
-		t.Fatalf("err = %v, want ErrToolMissing", err)
+	if !errors.Is(err, ports.ErrToolMissing) {
+		t.Fatalf("err = %v, want ports.ErrToolMissing", err)
 	}
 	if !strings.Contains(err.Error(), "prove.nox") {
 		t.Errorf("error should name the setting that turns it off, got %v", err)
@@ -294,5 +294,64 @@ func TestGateRunsWithNoStdin(t *testing.T) {
 
 	if cmd := fake.Find("warden run pre-push"); cmd.Stdin != nil {
 		t.Error("kiln fed the gate a push payload it did not construct")
+	}
+}
+
+// Warden's exit codes are a sysexits(3) contract, not a boolean. Collapsing
+// them cost a real box a red "gate failed" on a healthy main: the gate had not
+// rejected anything, it had never run.
+func TestAnEnvironmentFailureIsNotAGateFailure(t *testing.T) {
+	fake := fakeRepo().On("warden run pre-push", execx.Response{
+		ExitCode: 78,
+		Stderr:   "step test could not run: its toolchain or dependencies are not installed",
+	})
+
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
+	})
+
+	if errors.Is(err, ports.ErrGateFailed) {
+		// This is the bug: it tells the author their change is bad when
+		// nothing looked at it.
+		t.Error("exit 78 reported as a gate failure; warden said it could not run")
+	}
+	if !errors.Is(err, ports.ErrToolMissing) {
+		t.Fatalf("err = %v, want ports.ErrToolMissing", err)
+	}
+}
+
+// 75 is EX_TEMPFAIL: another process held a machine-global lock. Nothing is
+// wrong with the change and nothing is missing from the box.
+func TestContentionIsNotAGateFailure(t *testing.T) {
+	fake := fakeRepo().On("warden run pre-push", execx.Response{
+		ExitCode: 75,
+		Stderr:   "another process holds the lock",
+	})
+
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
+	})
+
+	if errors.Is(err, ports.ErrGateFailed) {
+		t.Error("exit 75 reported as a gate failure; the gate never ran")
+	}
+	if !errors.Is(err, ports.ErrGateUnavailable) {
+		t.Fatalf("err = %v, want ports.ErrGateUnavailable", err)
+	}
+}
+
+// The ordinary rejection must keep reading as one.
+func TestAGateRejectionStillReadsAsOne(t *testing.T) {
+	fake := fakeRepo().On("warden run pre-push", execx.Response{ExitCode: 1, Stderr: "lint failed"})
+
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
+	})
+
+	if !errors.Is(err, ports.ErrGateFailed) {
+		t.Fatalf("err = %v, want ports.ErrGateFailed", err)
+	}
+	if errors.Is(err, ports.ErrToolMissing) || errors.Is(err, ports.ErrGateUnavailable) {
+		t.Error("a genuine rejection was excused as an environment problem")
 	}
 }
