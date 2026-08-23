@@ -10,3 +10,18 @@ type Logger interface {
 	Error(msg string, kv ...any)
 	With(kv ...any) Logger
 }
+
+// DiscardLogger is a Logger that throws everything away.
+//
+// It lives beside the port rather than with the real logger so a component
+// whose Log is nil can default itself without reaching into infrastructure for
+// a no-op — the same reason NoopReporter is here.
+func DiscardLogger() Logger { return discardLogger{} }
+
+type discardLogger struct{}
+
+func (discardLogger) Debug(string, ...any) {}
+func (discardLogger) Info(string, ...any)  {}
+func (discardLogger) Warn(string, ...any)  {}
+func (discardLogger) Error(string, ...any) {}
+func (discardLogger) With(...any) Logger   { return discardLogger{} }

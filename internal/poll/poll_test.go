@@ -9,6 +9,7 @@ import (
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
@@ -32,7 +33,7 @@ func newWatcher(t *testing.T) (*watch.Watcher, *gittest.Repo) {
 			Log:   obs.Discard(),
 		}),
 		Store:         s,
-		Runner:        execx.NewSystem(),
+		Git:           gitcli.New(execx.NewSystem()),
 		Log:           obs.Discard(),
 		Dir:           local.Dir,
 		Pipeline:      config.Default(),

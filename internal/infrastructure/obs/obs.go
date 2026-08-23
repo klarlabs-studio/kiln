@@ -35,7 +35,7 @@ func NewTo(w io.Writer, level string) ports.Logger {
 
 // Discard is a logger that drops everything. Tests use it so a failing
 // assertion is not buried in log noise.
-func Discard() ports.Logger { return discard{} }
+func Discard() ports.Logger { return ports.DiscardLogger() }
 
 type boltLogger struct {
 	log  *bolt.Logger
@@ -90,11 +90,3 @@ func apply(ev *bolt.Event, kv []any) {
 		}
 	}
 }
-
-type discard struct{}
-
-func (discard) Debug(string, ...any)       {}
-func (discard) Info(string, ...any)        {}
-func (discard) Warn(string, ...any)        {}
-func (discard) Error(string, ...any)       {}
-func (d discard) With(...any) ports.Logger { return d }

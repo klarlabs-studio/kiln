@@ -16,6 +16,7 @@ import (
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -60,7 +61,7 @@ func newFixture(t *testing.T) *fixture {
 		Locks:     lock.NewLocks(),
 		Engine:    eng,
 		Store:     f.store,
-		Runner:    execx.NewSystem(),
+		Git:       gitcli.New(execx.NewSystem()),
 		Log:       obs.Discard(),
 		Dir:       local.Dir,
 		Repo:      "klarlabs-studio/kiln",
@@ -469,7 +470,7 @@ func TestOneFailingJobDoesNotStopTheTick(t *testing.T) {
 
 func TestFetchFailureFailsTheTick(t *testing.T) {
 	f := newFixture(t)
-	f.watcher.Runner = execx.NewFake().On("git fetch", execx.Response{ExitCode: 128, Stderr: "no such remote"})
+	f.watcher.Git = gitcli.New(execx.NewFake().On("git fetch", execx.Response{ExitCode: 128, Stderr: "no such remote"}))
 
 	if _, err := f.watcher.Once(t.Context(), false); err == nil {
 		t.Error("a tick that cannot fetch the tracked branch must fail")
@@ -486,7 +487,7 @@ func TestMissingPullRefsAreNotFatal(t *testing.T) {
 	fake.On("git fetch --prune --quiet origin +refs/pull", execx.Response{
 		ExitCode: 128, Stderr: "couldn't find remote ref refs/pull/*/head",
 	})
-	f.watcher.Runner = fake
+	f.watcher.Git = gitcli.New(fake)
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {

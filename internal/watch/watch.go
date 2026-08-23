@@ -16,7 +16,6 @@ import (
 	"errors"
 	"fmt"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -29,8 +28,6 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/infrastructure/execx"
-	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -64,7 +61,6 @@ type Forge interface {
 type Watcher struct {
 	Engine *engine.Engine
 	Store  ports.Ledger
-	Runner execx.Runner
 	// Forge answers which pull requests are open. An interface rather than
 	// *github.Client because that is the whole question this package asks of
 	// GitHub, and because a concrete client cannot be substituted in a test —
@@ -91,6 +87,10 @@ type Watcher struct {
 	// Now is the clock, injectable so a test can state what "tomorrow" means
 	// rather than sleep through it.
 	Now func() time.Time
+	// Git answers the questions discovery asks of the repository. The
+	// application never names a git command: which format string produces a
+	// peeled annotated tag is not a decision it makes.
+	Git ports.Git
 	// Locks serialises this repository against another kiln — a box ticking
 	// while an operator runs one by hand in the same checkout.
 	Locks ports.Locks
@@ -396,12 +396,7 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 		Jitter:        true,
 	})
 	_, err := r.Execute(ctx, func(ctx context.Context) (struct{}, error) {
-		_, e := w.Runner.Run(ctx, execx.Cmd{
-			Name: "git",
-			Args: []string{"fetch", "--prune", "--quiet", remote, refspec},
-			Dir:  w.Dir,
-		})
-		return struct{}{}, e
+		return struct{}{}, w.Git.Fetch(ctx, w.Dir, remote, refspec)
 	})
 	return err
 }
@@ -568,16 +563,12 @@ func (w *Watcher) branchJob(ctx context.Context) (Job, error) {
 		branch = "main"
 	}
 
-	res, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"rev-parse", "--verify", fmt.Sprintf("refs/remotes/%s/%s", remote, branch)},
-		Dir:  w.Dir,
-	})
+	sha, err := w.Git.HeadSHA(ctx, w.Dir, remote, branch)
 	if err != nil {
 		return Job{}, fmt.Errorf("watch: resolve %s/%s: %w", remote, branch, err)
 	}
 	return Job{
-		SHA:   res.Output(),
+		SHA:   sha,
 		Ref:   "refs/heads/" + branch,
 		Event: isolation.EventPush,
 		Label: branch,
@@ -588,36 +579,18 @@ func (w *Watcher) branchJob(ctx context.Context) (Job, error) {
 // annotated tag's own object id is not something a worktree can check out and
 // not something a warden note is bound to.
 func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
-	res, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"for-each-ref", "--format=%(refname)\t%(objecttype)\t%(objectname)\t%(*objectname)", "refs/tags/"},
-		Dir:  w.Dir,
-	})
+	tags, err := w.Git.Tags(ctx, w.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("watch: list tags: %w", err)
 	}
 
-	var jobs []Job
-	for line := range strings.SplitSeq(res.Output(), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		fields := strings.Split(line, "\t")
-		if len(fields) < 3 {
-			continue
-		}
-		ref, objType, objName := fields[0], fields[1], fields[2]
-
-		sha := objName
-		if objType == "tag" && len(fields) > 3 && fields[3] != "" {
-			// %(*objectname) is the peeled commit.
-			sha = fields[3]
-		}
+	jobs := make([]Job, 0, len(tags))
+	for _, t := range tags {
 		jobs = append(jobs, Job{
-			SHA:   sha,
-			Ref:   ref,
+			SHA:   t.SHA,
+			Ref:   t.Name,
 			Event: isolation.EventTag,
-			Label: strings.TrimPrefix(ref, "refs/tags/"),
+			Label: strings.TrimPrefix(t.Name, "refs/tags/"),
 		})
 	}
 	return jobs, nil
@@ -633,40 +606,19 @@ func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
 // deliberately unfiltered: the baseline has to record what a repository
 // already had, not the subset a token happened to say was open.
 func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
-	res, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"for-each-ref", "--format=%(refname)\t%(objectname)", PRRefNamespace},
-		Dir:  w.Dir,
-	})
+	refs, err := w.Git.PullRefs(ctx, w.Dir)
 	if err != nil {
 		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
-	out := map[string]string{}
-	for line := range strings.SplitSeq(res.Output(), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		ref, sha, ok := strings.Cut(line, "\t")
-		if !ok {
-			continue
-		}
-		number, convErr := strconv.Atoi(strings.TrimPrefix(ref, PRRefNamespace))
-		if convErr != nil {
-			continue
-		}
-		// Keyed by the ref a Job carries, not the local parking namespace, so
-		// the baseline and the job list are talking about the same thing.
-		out[fmt.Sprintf("refs/pull/%d/head", number)] = sha
+	out := make(map[string]string, len(refs))
+	for _, r := range refs {
+		out[r.Name] = r.SHA
 	}
 	return out, nil
 }
 
 func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, error) {
-	res, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"for-each-ref", "--format=%(refname)\t%(objectname)", PRRefNamespace},
-		Dir:  w.Dir,
-	})
+	refs, err := w.Git.PullRefs(ctx, w.Dir)
 	if err != nil {
 		return nil, false, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
@@ -676,19 +628,13 @@ func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, 
 
 	var jobs []Job
 	var closed int
-	for line := range strings.SplitSeq(res.Output(), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		ref, sha, ok := strings.Cut(line, "\t")
-		if !ok {
-			continue
-		}
-		number, convErr := strconv.Atoi(strings.TrimPrefix(ref, PRRefNamespace))
+	for _, r := range refs {
+		number, convErr := pullNumber(r.Name)
 		if convErr != nil {
-			log.Debug("skipping unparsable pull ref", "ref", ref)
+			log.Debug("skipping unparsable pull ref", "ref", r.Name)
 			continue
 		}
+		sha := r.SHA
 
 		fork, build := pullDecision(number, open, authoritative, func() bool {
 			return w.mergedIntoBranch(ctx, sha, branchTip)
@@ -779,17 +725,20 @@ func (w *Watcher) mergedIntoBranch(ctx context.Context, sha, branchTip string) b
 	if sha == "" || branchTip == "" {
 		return false
 	}
-	_, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"merge-base", "--is-ancestor", sha, branchTip},
-		Dir:  w.Dir,
-	})
-	return err == nil
+	contained, err := w.Git.Contains(ctx, w.Dir, sha, branchTip)
+	return err == nil && contained
 }
 
 func (w *Watcher) logger() ports.Logger {
 	if w.Log == nil {
-		return obs.Discard()
+		return ports.DiscardLogger()
 	}
 	return w.Log
+}
+
+// pullNumber reads N out of refs/pull/N/head.
+func pullNumber(ref string) (int, error) {
+	var n int
+	_, err := fmt.Sscanf(ref, "refs/pull/%d/head", &n)
+	return n, err
 }

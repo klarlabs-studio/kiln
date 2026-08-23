@@ -11,6 +11,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
@@ -250,7 +251,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 	return &watch.Watcher{
 		Engine:       deps.Engine,
 		Store:        deps.Store,
-		Runner:       deps.Runner,
+		Git:          gitcli.New(deps.Runner),
 		Forge:        deps.GitHub,
 		Log:          deps.Log,
 		Dir:          deps.Dir,
