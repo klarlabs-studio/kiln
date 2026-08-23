@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-23
+
 ### Added
 
 - **`KILN_COSIGN_KEY` — keyed cosign signing.** Kiln passed it to cosign's
