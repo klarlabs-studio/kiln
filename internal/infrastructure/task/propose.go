@@ -1,0 +1,129 @@
+package task
+
+import (
+	"context"
+	"fmt"
+	"strings"
+
+	"go.klarlabs.de/kiln/internal/application/ports"
+
+	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+)
+
+// Summary renders the proposal for a check body.
+// Propose commits whatever the task changed, pushes it and opens or updates a
+// pull request.
+//
+// Nothing here runs unless the worktree is actually dirty. A remediation task
+// that found nothing to fix must not push an empty commit or open a pull
+// request saying so — that is how a useful automation becomes noise people
+// filter out, and then miss the day it matters.
+func (t *Runner) Propose(
+	ctx context.Context, req ports.TaskRequest, spec config.PullRequest, forge ports.PullProposer,
+) (ports.Proposal, error) {
+	if !req.Policy.Secrets {
+		// Structural, not a configuration mistake: an untrusted head must
+		// never hold a credential that can write to the base repository.
+		// Config validation already refuses pull_request on a pull_request
+		// task; this is the second lock, for any caller that assembles a
+		// request by hand.
+		return ports.Proposal{}, fmt.Errorf("task %s: refusing to open a pull request from an untrusted head", req.Name)
+	}
+
+	dirty, err := t.dirty(ctx, req.Dir)
+	if err != nil {
+		return ports.Proposal{}, err
+	}
+	if !dirty {
+		return ports.Proposal{Changed: false}, nil
+	}
+
+	if err := t.commit(ctx, req, spec); err != nil {
+		return ports.Proposal{}, err
+	}
+	if err := t.push(ctx, req.Dir, spec.Branch); err != nil {
+		return ports.Proposal{}, err
+	}
+
+	proposal := ports.Proposal{Changed: true, Branch: spec.Branch}
+	if forge == nil {
+		// No token, no forge. The branch is pushed and says what happened;
+		// failing here would throw away work that succeeded.
+		return proposal, nil
+	}
+
+	number, opened, err := forge.OpenPullRequest(ctx, spec.Branch, spec.Base, spec.Title, spec.Body)
+	if err != nil {
+		return proposal, err
+	}
+	proposal.Number, proposal.Opened = number, opened
+
+	if opened {
+		// Only on creation. Re-applying labels on every run would fight an
+		// operator who deliberately removed one.
+		if err := forge.LabelPull(ctx, number, spec.Labels); err != nil {
+			return proposal, err
+		}
+	}
+	return proposal, nil
+}
+
+// dirty reports whether the worktree has changes, tracked or not.
+func (t *Runner) dirty(ctx context.Context, dir string) (bool, error) {
+	res, err := t.Exec.Run(ctx, execx.Cmd{
+		Name: "git", Args: []string{"status", "--porcelain"}, Dir: dir,
+	})
+	if err != nil {
+		return false, fmt.Errorf("task: read worktree status: %w", err)
+	}
+	return strings.TrimSpace(res.Stdout) != "", nil
+}
+
+// commit puts the task's changes on the head branch.
+//
+// The worktree is a detached checkout of the commit under test, so this
+// creates the branch there rather than switching an existing one: the base is
+// deliberately the commit the task ran against, not whatever the branch
+// pointed at last time. A remediation is a statement about *this* code.
+func (t *Runner) commit(ctx context.Context, req ports.TaskRequest, spec config.PullRequest) error {
+	steps := [][]string{
+		{"switch", "--force-create", spec.Branch},
+		{"add", "--all"},
+		{"-c", "user.name=kiln", "-c", "user.email=kiln@klarlabs.de",
+			"commit", "--message", commitMessage(req.Name, spec.Title)},
+	}
+	for _, args := range steps {
+		if _, err := t.Exec.Run(ctx, execx.Cmd{Name: "git", Args: args, Dir: req.Dir}); err != nil {
+			return fmt.Errorf("task %s: git %s: %w", req.Name, args[0], err)
+		}
+	}
+	return nil
+}
+
+// push force-updates the branch.
+//
+// Forced because the branch is kiln's own and is rebuilt from the commit under
+// test each time; a fast-forward would require carrying yesterday's
+// remediation into today's, which is how a stale fix outlives the code it was
+// fixing. --force-with-lease is not the safer choice here, since there is no
+// expected old value to lease against on a branch that may not exist yet.
+func (t *Runner) push(ctx context.Context, dir, branch string) error {
+	_, err := t.Exec.Run(ctx, execx.Cmd{
+		Name: "git",
+		Args: []string{"push", "--force", "origin", "HEAD:refs/heads/" + branch},
+		Dir:  dir,
+	})
+	if err != nil {
+		return fmt.Errorf("task: push %s: %w", branch, err)
+	}
+	return nil
+}
+
+func commitMessage(task, title string) string {
+	body := strings.TrimSpace(title)
+	if body == "" {
+		body = "changes from task " + task
+	}
+	return body + "\n\nProduced by kiln task " + task + "."
+}

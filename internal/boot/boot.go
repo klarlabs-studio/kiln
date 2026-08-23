@@ -16,21 +16,25 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/checks"
-	"go.klarlabs.de/kiln/internal/config"
-	"go.klarlabs.de/kiln/internal/credstore"
-	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/envconfig"
-	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/github"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/prove"
-	"go.klarlabs.de/kiln/internal/provenance"
-	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/service"
-	"go.klarlabs.de/kiln/internal/store"
-	"go.klarlabs.de/kiln/internal/task"
-	"go.klarlabs.de/kiln/internal/worktree"
+	"go.klarlabs.de/kiln/internal/application/ports"
+	"go.klarlabs.de/kiln/internal/version"
+
+	"go.klarlabs.de/kiln/internal/application/engine"
+	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/infrastructure/checks"
+	"go.klarlabs.de/kiln/internal/infrastructure/credstore"
+	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/pipelinefile"
+	"go.klarlabs.de/kiln/internal/infrastructure/prove"
+	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
+	"go.klarlabs.de/kiln/internal/infrastructure/publish"
+	"go.klarlabs.de/kiln/internal/infrastructure/service"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/task"
+	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
 // Options are the per-invocation inputs boot cannot read from the environment.
@@ -45,7 +49,7 @@ type Options struct {
 	// Env overrides the process environment, for tests.
 	Env *envconfig.Env
 	// Log overrides the logger.
-	Log obs.Logger
+	Log ports.Logger
 }
 
 // Deps is the assembled graph.
@@ -65,9 +69,9 @@ type Deps struct {
 	Runner execx.Runner
 	Store  *store.File
 	GitHub *github.Client
-	Checks checks.Reporter
+	Checks ports.Reporter
 	Engine *engine.Engine
-	Log    obs.Logger
+	Log    ports.Logger
 
 	// output is where subprocess output goes for requests built from this
 	// graph. Unexported so surfaces read it through Output() rather than
@@ -151,12 +155,14 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
 		Publisher:        buildPublisher(env, runner, log),
 		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
+		KilnVersion:      version.Version,
 		ToolVersions:     toolVersions(ctx, runner, env),
 		PhaseTimeout:     env.PhaseTimeout,
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
-		GitHub:           deps.GitHub,
+		Worktrees:        worktree.NewTrees(runner),
+		Proposer:         github.NewProposer(deps.GitHub),
 		KeepRoot:         filepath.Dir(deps.Store.Path()),
 		Services:         service.New(runner, log),
 		Checks:           deps.Checks,
@@ -213,14 +219,14 @@ func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
 	if explicit != "" {
 		// An explicitly named pipeline that does not exist is a mistake worth
 		// stopping for; a missing default one is not.
-		p, err := config.LoadFile(explicit)
+		p, err := pipelinefile.LoadFile(explicit)
 		if err != nil {
 			return config.Pipeline{}, false, err
 		}
 		return p, true, nil
 	}
 
-	p, err := config.LoadDir(dir)
+	p, err := pipelinefile.LoadDir(dir)
 	switch {
 	case errors.Is(err, config.ErrNotFound):
 		return p, false, nil
@@ -231,18 +237,18 @@ func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
 	}
 }
 
-func buildClient(env envconfig.Env, repo github.Repo, log obs.Logger) *github.Client {
+func buildClient(env envconfig.Env, repo github.Repo, log ports.Logger) *github.Client {
 	if env.Token == "" || !repo.Valid() {
 		return nil
 	}
 	return github.NewClient(env.Token, repo, log)
 }
 
-func buildReporter(c *github.Client, log obs.Logger) checks.Reporter {
+func buildReporter(c *github.Client, log ports.Logger) ports.Reporter {
 	if c == nil || !c.Enabled() {
 		// No token: gate the commit, print the result, tell nobody. Failing
 		// here would make a laptop run impossible.
-		return checks.Noop{}
+		return ports.NoopReporter{}
 	}
 	return checks.NewGitHub(c, log)
 }
@@ -250,7 +256,7 @@ func buildReporter(c *github.Client, log obs.Logger) checks.Reporter {
 // buildPublisher honours KILN_DRY. The dry publisher is a rehearsal that
 // reports a placeholder digest and Signed=false, so nothing downstream can
 // mistake it for a real artifact.
-func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publish.Publisher {
+func buildPublisher(env envconfig.Env, runner execx.Runner, log ports.Logger) ports.Publisher {
 	if env.Dry {
 		return publish.NewDry(log)
 	}
@@ -265,8 +271,8 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) publ
 // would rehearse nothing — but withholds the upload, so the dry publisher is
 // not substituted here the way it is for images.
 func buildReleasePublisher(
-	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log obs.Logger,
-) publish.Publisher {
+	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log ports.Logger,
+) ports.Publisher {
 	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
 	g.SigningKey = env.CosignKey
