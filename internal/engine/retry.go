@@ -5,8 +5,9 @@ import (
 	"math"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 // Verdict is what a watch tick should do with a discovered job.
@@ -44,7 +45,7 @@ const RetryCap = time.Hour
 // delay doubles from fifteen minutes to an hour and stays there, so a genuine
 // breakage settles into a heartbeat instead of a spin, and a transient one
 // recovers on its own.
-func Decide(s store.Store, sha, ref string, now time.Time) (Verdict, time.Duration) {
+func Decide(s ports.Ledger, sha, ref string, now time.Time) (Verdict, time.Duration) {
 	if s == nil {
 		return Build, 0
 	}
@@ -81,7 +82,7 @@ func backoff(failures int) time.Duration {
 
 // failureHistory counts consecutive failed runs for a commit and returns when
 // the most recent one finished.
-func failureHistory(s store.Store, sha, ref string) (int, time.Time) {
+func failureHistory(s ports.Ledger, sha, ref string) (int, time.Time) {
 	runs, err := s.List()
 	if err != nil {
 		return 0, time.Time{}

@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
 // Both implementations satisfy the same contract, so both run the same suite.
-func each(t *testing.T, fn func(t *testing.T, s Store)) {
+func each(t *testing.T, fn func(t *testing.T, s ports.Ledger)) {
 	t.Helper()
 	t.Run("memory", func(t *testing.T) { fn(t, NewMemory()) })
 	t.Run("file", func(t *testing.T) {
@@ -30,7 +32,7 @@ func mkRun(id, sha, ref string, phase run.Phase, at time.Time) *run.Run {
 }
 
 func TestSaveAndGet(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		want := mkRun("run-1", "abc", "refs/heads/main", run.PhaseSucceeded, time.Now())
 		if err := s.Save(want); err != nil {
 			t.Fatalf("Save: %v", err)
@@ -47,7 +49,7 @@ func TestSaveAndGet(t *testing.T) {
 }
 
 func TestGetUnknownIsNotFound(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		if _, err := s.Get("nope"); !errors.Is(err, ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
@@ -55,7 +57,7 @@ func TestGetUnknownIsNotFound(t *testing.T) {
 }
 
 func TestLatestOnEmptyLedger(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		if _, err := s.Latest(); !errors.Is(err, ErrNotFound) {
 			t.Errorf("err = %v, want ErrNotFound", err)
 		}
@@ -63,7 +65,7 @@ func TestLatestOnEmptyLedger(t *testing.T) {
 }
 
 func TestLatestIsNewestByStartTime(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		base := time.Now().Add(-time.Hour)
 		// Saved out of order on purpose: the ledger orders by start time, not
 		// by arrival.
@@ -82,7 +84,7 @@ func TestLatestIsNewestByStartTime(t *testing.T) {
 }
 
 func TestSaveReplacesSameID(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		at := time.Now()
 		mustSave(t, s, mkRun("run-1", "abc", "r", run.PhaseProving, at))
 		mustSave(t, s, mkRun("run-1", "abc", "r", run.PhaseSucceeded, at))
@@ -101,7 +103,7 @@ func TestSaveReplacesSameID(t *testing.T) {
 }
 
 func TestLastSuccessIgnoresFailures(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		at := time.Now()
 		mustSave(t, s, mkRun("run-fail", "abc", "refs/heads/main", run.PhaseFailed, at))
 
@@ -118,7 +120,7 @@ func TestLastSuccessIgnoresFailures(t *testing.T) {
 }
 
 func TestLastSuccessIsRefScoped(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		mustSave(t, s, mkRun("run-1", "abc", "refs/heads/main", run.PhaseSucceeded, time.Now()))
 
 		// Same commit, different ref: a tag pointing at an already-built branch
@@ -131,7 +133,7 @@ func TestLastSuccessIsRefScoped(t *testing.T) {
 }
 
 func TestSaveRejectsRunWithoutID(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		if err := s.Save(&run.Run{SHA: "abc"}); err == nil {
 			t.Error("Save accepted a run with no id")
 		}
@@ -142,7 +144,7 @@ func TestSaveRejectsRunWithoutID(t *testing.T) {
 }
 
 func TestStoreHandsOutClones(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		original := mkRun("run-1", "abc", "r", run.PhaseSucceeded, time.Now())
 		original.Tags = []string{"ghcr.io/x/y:latest"}
 		mustSave(t, s, original)
@@ -250,7 +252,7 @@ func TestNewFileUsesTheProductionCap(t *testing.T) {
 }
 
 func TestConcurrentSaves(t *testing.T) {
-	each(t, func(t *testing.T, s Store) {
+	each(t, func(t *testing.T, s ports.Ledger) {
 		const n = 24
 		var wg sync.WaitGroup
 		base := time.Now()
@@ -272,7 +274,7 @@ func TestConcurrentSaves(t *testing.T) {
 	})
 }
 
-func mustSave(t *testing.T, s Store, r *run.Run) {
+func mustSave(t *testing.T, s ports.Ledger, r *run.Run) {
 	t.Helper()
 	if err := s.Save(r); err != nil {
 		t.Fatalf("Save %s: %v", r.ID, err)

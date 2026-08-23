@@ -79,7 +79,7 @@ type Engine struct {
 	// SourceAttester carries warden's verification summary onto the artifact.
 	// Nil publishes build provenance alone.
 	SourceAttester SourceAttester
-	Checks         checks.Reporter
+	Checks         ports.Reporter
 	// Tasks runs the pipeline's automation. Nil disables tasks entirely, which
 	// is what a caller that only wants prove-and-publish gets by default.
 	Tasks *task.Runner
@@ -87,7 +87,7 @@ type Engine struct {
 	// stops there, which is the right behaviour on a box with no token: the
 	// work is not thrown away, it just needs a human to notice it.
 	GitHub *github.Client
-	Store  store.Store
+	Store  ports.Ledger
 	Log    obs.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
@@ -116,7 +116,7 @@ type Engine struct {
 // only wires the essentials still gets a working, silent engine.
 func New(e Engine) *Engine {
 	if e.Checks == nil {
-		e.Checks = checks.Noop{}
+		e.Checks = ports.NoopReporter{}
 	}
 	if e.Store == nil {
 		e.Store = store.NewMemory()
@@ -249,12 +249,12 @@ func (e *Engine) doProve(
 		// nothing done. It is not an error, but it is worth saying out loud:
 		// silence here looks identical to a broken trigger.
 		log.Info("prove not routed for this event", "event", req.Event.String())
-		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "prove not routed for this event"}, nil
+		return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: "prove not routed for this event"}, nil
 	}
 
 	r.Phase = run.PhaseProving
 	e.persist(r, log)
-	e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NameProve, req.SHA) }, log, checks.NameProve)
+	e.report(ctx, func() error { return e.Checks.Start(ctx, ports.NameProve, req.SHA) }, log, ports.NameProve)
 
 	verdict := e.Provenance.Verify(ctx, req.Dir, req.SHA, policy)
 	log.Info("provenance", "decision", string(verdict.Decision), "reason", verdict.Reason)
@@ -277,8 +277,8 @@ func (e *Engine) doProve(
 
 	conclusion, title, summary := checks.ProveSummary(r.Skipped, verdict.Reason, err)
 	e.report(ctx, func() error {
-		return e.Checks.Complete(ctx, checks.NameProve, req.SHA, conclusion, title, summary)
-	}, log, checks.NameProve)
+		return e.Checks.Complete(ctx, ports.NameProve, req.SHA, conclusion, title, summary)
+	}, log, ports.NameProve)
 
 	if err != nil {
 		log.Error("prove failed", "err", err)
@@ -312,15 +312,15 @@ func (e *Engine) doPublish(
 
 	r.Phase = run.PhasePublishing
 	e.persist(r, log)
-	e.report(ctx, func() error { return e.Checks.Start(ctx, checks.NamePublish, req.SHA) }, log, checks.NamePublish)
+	e.report(ctx, func() error { return e.Checks.Start(ctx, ports.NamePublish, req.SHA) }, log, ports.NamePublish)
 
 	produced, err := e.publishAll(ctx, req, r, wanted,
 		e.provenanceInput(req, r, policy, gate), e.sourceSummary(ctx, req, log), log)
 
 	conclusion, title, summary := checks.PublishSummary(produced, err)
 	e.report(ctx, func() error {
-		return e.Checks.Complete(ctx, checks.NamePublish, req.SHA, conclusion, title, summary)
-	}, log, checks.NamePublish)
+		return e.Checks.Complete(ctx, ports.NamePublish, req.SHA, conclusion, title, summary)
+	}, log, ports.NamePublish)
 
 	if err != nil {
 		log.Error("publish failed", "err", err)
@@ -718,7 +718,7 @@ func (e *Engine) persist(r *run.Run, log obs.Logger) {
 // Ref-scoped, not SHA-scoped: a tag pointing at an already-built branch head
 // still needs its own run, because the tag routes to different steps and
 // produces a different moving tag.
-func AlreadyBuilt(s store.Store, sha, ref string) bool {
+func AlreadyBuilt(s ports.Ledger, sha, ref string) bool {
 	if s == nil {
 		return false
 	}

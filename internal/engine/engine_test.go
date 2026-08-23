@@ -27,7 +27,7 @@ const (
 type harness struct {
 	engine      *Engine
 	checks      *checks.Recording
-	store       store.Store
+	store       ports.Ledger
 	proved      int
 	published   int
 	released    int
@@ -45,7 +45,7 @@ func newHarness(t *testing.T) *harness {
 	h := &harness{
 		checks:  &checks.Recording{},
 		store:   store.NewMemory(),
-		verdict: ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no keys pinned"},
+		verdict: ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: "no keys pinned"},
 	}
 	h.engine = New(Engine{
 		Prover: ports.ProveFunc(func(_ context.Context, req ports.ProveRequest) error {
@@ -139,10 +139,10 @@ func TestPushProvesAndPublishes(t *testing.T) {
 	if r.Digest != digest {
 		t.Errorf("Digest = %q", r.Digest)
 	}
-	if c, _ := h.checks.Conclusions(checks.NameProve); c != checks.Success {
+	if c, _ := h.checks.Conclusions(ports.NameProve); c != ports.ConclusionSuccess {
 		t.Errorf("prove check = %s", c)
 	}
-	if c, _ := h.checks.Conclusions(checks.NamePublish); c != checks.Success {
+	if c, _ := h.checks.Conclusions(ports.NamePublish); c != ports.ConclusionSuccess {
 		t.Errorf("publish check = %s", c)
 	}
 }
@@ -164,7 +164,7 @@ func TestForkPullRequestProvesButNeverPublishes(t *testing.T) {
 	if h.published != 0 {
 		t.Error("a fork pull request published an image")
 	}
-	if h.checks.Started(checks.NamePublish) {
+	if h.checks.Started(ports.NamePublish) {
 		t.Error("a suppressed publish must not open a check")
 	}
 }
@@ -199,7 +199,7 @@ func TestSameRepoPullRequestDoesNotPublishEither(t *testing.T) {
 
 func TestTrustedNoteSkipsTheGate(t *testing.T) {
 	h := newHarness(t)
-	h.verdict = ports.ProvenanceResult{Decision: ports.Skipped, Reason: "signed by a trusted key"}
+	h.verdict = ports.ProvenanceResult{Decision: ports.DecisionSkipped, Reason: "signed by a trusted key"}
 
 	r, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
 	if err != nil {
@@ -214,11 +214,11 @@ func TestTrustedNoteSkipsTheGate(t *testing.T) {
 	}
 	// The commit is still gated — by the note — so a protected branch waiting
 	// on this check must be satisfied.
-	if c, _ := h.checks.Conclusions(checks.NameProve); c != checks.Success {
+	if c, _ := h.checks.Conclusions(ports.NameProve); c != ports.ConclusionSuccess {
 		t.Errorf("prove check = %s, want success", c)
 	}
-	if !strings.Contains(h.checks.Summary(checks.NameProve), "trusted key") {
-		t.Errorf("the skip must be justified in the check: %q", h.checks.Summary(checks.NameProve))
+	if !strings.Contains(h.checks.Summary(ports.NameProve), "trusted key") {
+		t.Errorf("the skip must be justified in the check: %q", h.checks.Summary(ports.NameProve))
 	}
 	// A skipped prove does not skip the publish.
 	if h.published != 1 {
@@ -241,7 +241,7 @@ func TestProveFailureStopsBeforePublish(t *testing.T) {
 	if r.Phase != run.PhaseFailed || r.Error == "" {
 		t.Errorf("run = %+v, want a recorded failure", r)
 	}
-	if c, _ := h.checks.Conclusions(checks.NameProve); c != checks.Failure {
+	if c, _ := h.checks.Conclusions(ports.NameProve); c != ports.ConclusionFailure {
 		t.Errorf("prove check = %s", c)
 	}
 }
@@ -258,7 +258,7 @@ func TestPublishFailureFailsTheRun(t *testing.T) {
 	if r.Phase != run.PhaseFailed {
 		t.Errorf("Phase = %s", r.Phase)
 	}
-	if c, _ := h.checks.Conclusions(checks.NamePublish); c != checks.Failure {
+	if c, _ := h.checks.Conclusions(ports.NamePublish); c != ports.ConclusionFailure {
 		t.Errorf("publish check = %s", c)
 	}
 }
@@ -332,7 +332,7 @@ func TestSemverOnlyOnABranchFailsWithAReportedCheck(t *testing.T) {
 	}
 	// The operator must see this on the commit, not only in a log they are not
 	// watching.
-	if c, _ := h.checks.Conclusions(checks.NamePublish); c != checks.Failure {
+	if c, _ := h.checks.Conclusions(ports.NamePublish); c != ports.ConclusionFailure {
 		t.Errorf("publish check = %s, want the plan failure reported", c)
 	}
 	// Planning now happens inside the publisher, so what matters is that
@@ -435,7 +435,7 @@ func TestUnroutedEventDoesNothing(t *testing.T) {
 	if got.Phase != run.PhaseSucceeded {
 		t.Errorf("Phase = %s, want succeeded (nothing was asked for)", got.Phase)
 	}
-	if h.checks.Started(checks.NameProve) {
+	if h.checks.Started(ports.NameProve) {
 		t.Error("opened a check for a phase that was not routed")
 	}
 }

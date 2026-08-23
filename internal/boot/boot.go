@@ -68,7 +68,7 @@ type Deps struct {
 	Runner execx.Runner
 	Store  *store.File
 	GitHub *github.Client
-	Checks checks.Reporter
+	Checks ports.Reporter
 	Engine *engine.Engine
 	Log    obs.Logger
 
@@ -241,11 +241,11 @@ func buildClient(env envconfig.Env, repo github.Repo, log obs.Logger) *github.Cl
 	return github.NewClient(env.Token, repo, log)
 }
 
-func buildReporter(c *github.Client, log obs.Logger) checks.Reporter {
+func buildReporter(c *github.Client, log obs.Logger) ports.Reporter {
 	if c == nil || !c.Enabled() {
 		// No token: gate the commit, print the result, tell nobody. Failing
 		// here would make a laptop run impossible.
-		return checks.Noop{}
+		return ports.NoopReporter{}
 	}
 	return checks.NewGitHub(c, log)
 }

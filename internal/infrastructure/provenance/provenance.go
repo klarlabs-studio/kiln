@@ -63,13 +63,13 @@ func NewWarden(r execx.Runner, binary string, trustedKeys []string) *Warden {
 // skip rather than a weak one.
 func (w *Warden) Verify(ctx context.Context, repoDir, sha string, policy isolation.Policy) ports.ProvenanceResult {
 	if !policy.Skip {
-		return ports.ProvenanceResult{Decision: ports.Forbidden, Reason: "isolation policy forbids a provenance skip for this event"}
+		return ports.ProvenanceResult{Decision: ports.DecisionForbidden, Reason: "isolation policy forbids a provenance skip for this event"}
 	}
 	if len(w.TrustedKeys) == 0 {
-		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no KILN_TRUSTED_KEYS pinned: kiln only skips for a note signed by a key the operator trusts"}
+		return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: "no KILN_TRUSTED_KEYS pinned: kiln only skips for a note signed by a key the operator trusts"}
 	}
 	if strings.TrimSpace(sha) == "" {
-		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: "no commit to verify"}
+		return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: "no commit to verify"}
 	}
 
 	res, err := w.Runner.Run(ctx, execx.Cmd{
@@ -90,19 +90,19 @@ func (w *Warden) Verify(ctx context.Context, repoDir, sha string, policy isolati
 		// to find the key material warden was configured with.
 	})
 	if err == nil {
-		return ports.ProvenanceResult{Decision: ports.Skipped, Reason: fmt.Sprintf("warden note on %s is signed by a trusted key", shortSHA(sha))}
+		return ports.ProvenanceResult{Decision: ports.DecisionSkipped, Reason: fmt.Sprintf("warden note on %s is signed by a trusted key", shortSHA(sha))}
 	}
 
 	var notFound *execx.NotFoundError
 	if errors.As(err, &notFound) {
 		// Not a skip and not, by itself, a failure: prove is about to run and
 		// will fail on the same missing binary with a better message.
-		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("%s not on PATH: cannot check provenance", w.Binary)}
+		return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: fmt.Sprintf("%s not on PATH: cannot check provenance", w.Binary)}
 	}
 	if code, ok := execx.ExitCode(err); ok {
-		return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("warden verify exited %d: %s", code, verdictHint(res, code))}
+		return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: fmt.Sprintf("warden verify exited %d: %s", code, verdictHint(res, code))}
 	}
-	return ports.ProvenanceResult{Decision: ports.Reprove, Reason: fmt.Sprintf("warden verify could not run: %v", err)}
+	return ports.ProvenanceResult{Decision: ports.DecisionReprove, Reason: fmt.Sprintf("warden verify could not run: %v", err)}
 }
 
 // verdictHint turns warden's --quiet exit code into something an operator can

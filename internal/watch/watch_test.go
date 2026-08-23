@@ -28,7 +28,7 @@ type fixture struct {
 	watcher  *Watcher
 	upstream *gittest.Repo
 	local    *gittest.Repo
-	store    store.Store
+	store    ports.Ledger
 }
 
 func newFixture(t *testing.T) *fixture {

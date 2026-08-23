@@ -5,8 +5,9 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/gittest"
-	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -156,8 +157,8 @@ func TestNoTokenMeansNoChecksAndNoClient(t *testing.T) {
 		t.Error("a client was built with no token")
 	}
 	// Gate the commit, print the result, tell nobody — rather than fail.
-	if _, ok := deps.Checks.(checks.Noop); !ok {
-		t.Errorf("reporter = %T, want checks.Noop", deps.Checks)
+	if _, ok := deps.Checks.(ports.NoopReporter); !ok {
+		t.Errorf("reporter = %T, want ports.NoopReporter", deps.Checks)
 	}
 }
 

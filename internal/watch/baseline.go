@@ -10,8 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/isolation"
-	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 // BaselineFile is where a box records what already existed when it first
@@ -134,7 +135,7 @@ func baselineFrom(jobs []Job, pulls map[string]string, at time.Time) *Baseline {
 // Only a genuinely new box gets a baseline. An existing one has already built
 // its tags, and writing a baseline underneath it would silence a tag that is
 // mid-backoff after a real failure.
-func ledgerIsEmpty(s store.Store) bool {
+func ledgerIsEmpty(s ports.Ledger) bool {
 	if s == nil {
 		return false
 	}

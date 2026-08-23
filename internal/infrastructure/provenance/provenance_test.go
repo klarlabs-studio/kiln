@@ -53,7 +53,7 @@ func TestForkPullRequestNeverConsultsTheNote(t *testing.T) {
 	fake := execx.NewFake()
 	got := NewWarden(fake, "warden", []string{"KEY1"}).Verify(t.Context(), "/repo", sha, forkPR)
 
-	if got.Decision != ports.Forbidden {
+	if got.Decision != ports.DecisionForbidden {
 		t.Errorf("ports.ProvenanceDecision = %s, want forbidden", got.Decision)
 	}
 	if fake.Ran("warden") {
@@ -65,7 +65,7 @@ func TestNoPinnedKeysMeansNoSkip(t *testing.T) {
 	fake := execx.NewFake()
 	got := NewWarden(fake, "warden", nil).Verify(t.Context(), "/repo", sha, trusting)
 
-	if got.Decision != ports.Reprove {
+	if got.Decision != ports.DecisionReprove {
 		t.Errorf("ports.ProvenanceDecision = %s, want reprove", got.Decision)
 	}
 	if !strings.Contains(got.Reason, "KILN_TRUSTED_KEYS") {
@@ -82,7 +82,7 @@ func TestUnsignedOrUntrustedNoteReproves(t *testing.T) {
 	fake := execx.NewFake().On("warden verify", execx.Response{ExitCode: 1})
 	got := NewWarden(fake, "warden", []string{"KEY1"}).Verify(t.Context(), "/repo", sha, trusting)
 
-	if got.Decision != ports.Reprove {
+	if got.Decision != ports.DecisionReprove {
 		t.Fatalf("ports.ProvenanceDecision = %s, want reprove", got.Decision)
 	}
 	if !strings.Contains(got.Reason, "re-proving") {
@@ -107,7 +107,7 @@ func TestMissingWardenBinaryReproves(t *testing.T) {
 
 	// Not a skip. Prove is about to fail on the same missing binary, which is
 	// where the operator gets the real message.
-	if got.Decision != ports.Reprove {
+	if got.Decision != ports.DecisionReprove {
 		t.Errorf("ports.ProvenanceDecision = %s, want reprove", got.Decision)
 	}
 	if !strings.Contains(got.Reason, "PATH") {
@@ -133,7 +133,7 @@ func TestEmptyBinaryDefaultsToWarden(t *testing.T) {
 func TestEmptySHANeverSkips(t *testing.T) {
 	got := NewWarden(execx.NewFake(), "warden", []string{"KEY1"}).Verify(t.Context(), "/repo", "  ", trusting)
 
-	if got.Decision != ports.Reprove {
+	if got.Decision != ports.DecisionReprove {
 		t.Errorf("ports.ProvenanceDecision = %s, want reprove", got.Decision)
 	}
 }

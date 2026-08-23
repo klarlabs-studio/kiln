@@ -9,6 +9,8 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -17,11 +19,11 @@ import (
 // The names are a contract with branch protection and with RollOps' PR
 // writeback. This test exists so that renaming one is a deliberate act.
 func TestCheckNamesAreStable(t *testing.T) {
-	if NameProve != "Kiln / Prove" {
-		t.Errorf("NameProve = %q — renaming this unblocks every protected branch waiting on it", NameProve)
+	if ports.NameProve != "Kiln / Prove" {
+		t.Errorf("ports.NameProve = %q — renaming this unblocks every protected branch waiting on it", ports.NameProve)
 	}
-	if NamePublish != "Kiln / Publish" {
-		t.Errorf("NamePublish = %q — renaming this needs a migration note", NamePublish)
+	if ports.NamePublish != "Kiln / Publish" {
+		t.Errorf("ports.NamePublish = %q — renaming this needs a migration note", ports.NamePublish)
 	}
 }
 
@@ -51,10 +53,10 @@ func TestStartThenCompleteUpdatesTheSameRun(t *testing.T) {
 		}
 	})
 
-	if err := r.Start(t.Context(), NameProve, "abc"); err != nil {
+	if err := r.Start(t.Context(), ports.NameProve, "abc"); err != nil {
 		t.Fatal(err)
 	}
-	if err := r.Complete(t.Context(), NameProve, "abc", Success, "gate passed", "all good"); err != nil {
+	if err := r.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "gate passed", "all good"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -81,7 +83,7 @@ func TestCompleteWithoutStartStillReportsTheVerdict(t *testing.T) {
 
 	// Start failed earlier (a transient API blip). Losing the verdict entirely
 	// is worse than opening a run just to conclude it.
-	if err := r.Complete(t.Context(), NamePublish, "abc", Failure, "publish failed", "boom"); err != nil {
+	if err := r.Complete(t.Context(), ports.NamePublish, "abc", ports.ConclusionFailure, "publish failed", "boom"); err != nil {
 		t.Fatal(err)
 	}
 	if created.Load() != 1 || patched.Load() != 1 {
@@ -101,10 +103,10 @@ func TestTwoPhasesTrackSeparateRuns(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 
-	_ = r.Start(t.Context(), NameProve, "abc")
-	_ = r.Start(t.Context(), NamePublish, "abc")
-	_ = r.Complete(t.Context(), NameProve, "abc", Success, "", "")
-	_ = r.Complete(t.Context(), NamePublish, "abc", Success, "", "")
+	_ = r.Start(t.Context(), ports.NameProve, "abc")
+	_ = r.Start(t.Context(), ports.NamePublish, "abc")
+	_ = r.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "", "")
+	_ = r.Complete(t.Context(), ports.NamePublish, "abc", ports.ConclusionSuccess, "", "")
 
 	if len(patched) != 2 {
 		t.Errorf("patched %v, want two distinct check runs", patched)
@@ -117,10 +119,10 @@ func TestReporterWithoutATokenIsSilent(t *testing.T) {
 
 	// `kiln run` on a laptop should gate a commit and print the result, not
 	// fail because it could not tell GitHub about it.
-	if err := r.Start(t.Context(), NameProve, "abc"); err != nil {
+	if err := r.Start(t.Context(), ports.NameProve, "abc"); err != nil {
 		t.Errorf("Start without a token: %v", err)
 	}
-	if err := r.Complete(t.Context(), NameProve, "abc", Success, "", ""); err != nil {
+	if err := r.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "", ""); err != nil {
 		t.Errorf("Complete without a token: %v", err)
 	}
 }
@@ -131,17 +133,17 @@ func TestAPIFailureIsReportedToTheCaller(t *testing.T) {
 	})
 
 	// The engine treats this as best-effort, but it must be able to see it.
-	if err := r.Start(t.Context(), NameProve, "abc"); err == nil {
+	if err := r.Start(t.Context(), ports.NameProve, "abc"); err == nil {
 		t.Error("a 401 should surface to the caller")
 	}
 }
 
 func TestNoopIsAlwaysHappy(t *testing.T) {
-	var n Noop
-	if err := n.Start(t.Context(), NameProve, "abc"); err != nil {
+	var n ports.NoopReporter
+	if err := n.Start(t.Context(), ports.NameProve, "abc"); err != nil {
 		t.Error(err)
 	}
-	if err := n.Complete(t.Context(), NameProve, "abc", Success, "", ""); err != nil {
+	if err := n.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "", ""); err != nil {
 		t.Error(err)
 	}
 }
@@ -149,20 +151,20 @@ func TestNoopIsAlwaysHappy(t *testing.T) {
 func TestRecordingCapturesTheSequence(t *testing.T) {
 	var rec Recording
 
-	_ = rec.Start(t.Context(), NameProve, "abc")
-	_ = rec.Complete(t.Context(), NameProve, "abc", Success, "gate passed", "details")
+	_ = rec.Start(t.Context(), ports.NameProve, "abc")
+	_ = rec.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "gate passed", "details")
 
-	if !rec.Started(NameProve) {
+	if !rec.Started(ports.NameProve) {
 		t.Error("Started = false")
 	}
-	got, ok := rec.Conclusions(NameProve)
-	if !ok || got != Success {
-		t.Errorf("Conclusion = (%s, %v)", got, ok)
+	got, ok := rec.Conclusions(ports.NameProve)
+	if !ok || got != ports.ConclusionSuccess {
+		t.Errorf("ports.Conclusion = (%s, %v)", got, ok)
 	}
-	if rec.Summary(NameProve) != "details" {
-		t.Errorf("Summary = %q", rec.Summary(NameProve))
+	if rec.Summary(ports.NameProve) != "details" {
+		t.Errorf("Summary = %q", rec.Summary(ports.NameProve))
 	}
-	if _, ok := rec.Conclusions(NamePublish); ok {
+	if _, ok := rec.Conclusions(ports.NamePublish); ok {
 		t.Error("reported a conclusion for a check that never ran")
 	}
 }
@@ -171,10 +173,10 @@ func TestFailingReporter(t *testing.T) {
 	want := errors.New("network down")
 	f := Failing{Err: want}
 
-	if err := f.Start(t.Context(), NameProve, "abc"); !errors.Is(err, want) {
+	if err := f.Start(t.Context(), ports.NameProve, "abc"); !errors.Is(err, want) {
 		t.Errorf("err = %v", err)
 	}
-	if err := (Failing{}).Complete(t.Context(), NameProve, "abc", Success, "", ""); err == nil {
+	if err := (Failing{}).Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "", ""); err == nil {
 		t.Error("the zero Failing must still fail")
 	}
 }
@@ -182,7 +184,7 @@ func TestFailingReporter(t *testing.T) {
 func TestProveSummaryForAPass(t *testing.T) {
 	got, title, _ := ProveSummary(false, "checks ran", nil)
 
-	if got != Success || !strings.Contains(title, "passed") {
+	if got != ports.ConclusionSuccess || !strings.Contains(title, "passed") {
 		t.Errorf("(%s, %q)", got, title)
 	}
 }
@@ -192,8 +194,8 @@ func TestSkippedProveStillConcludesSuccess(t *testing.T) {
 
 	// The commit IS gated — by the note. A branch protection rule waiting on
 	// this check must be satisfied, or every provenance skip blocks a merge.
-	if got != Success {
-		t.Errorf("Conclusion = %s, want success", got)
+	if got != ports.ConclusionSuccess {
+		t.Errorf("ports.Conclusion = %s, want success", got)
 	}
 	if !strings.Contains(title, "provenance") {
 		t.Errorf("title = %q, want it to say the gate was satisfied by provenance", title)
@@ -206,7 +208,7 @@ func TestSkippedProveStillConcludesSuccess(t *testing.T) {
 func TestProveSummaryForAFailure(t *testing.T) {
 	got, title, summary := ProveSummary(false, "", errors.New("lint failed on main.go"))
 
-	if got != Failure || !strings.Contains(title, "failed") {
+	if got != ports.ConclusionFailure || !strings.Contains(title, "failed") {
 		t.Errorf("(%s, %q)", got, title)
 	}
 	if !strings.Contains(summary, "lint failed on main.go") {
@@ -222,7 +224,7 @@ func TestPublishSummaryForASignedImage(t *testing.T) {
 
 	got, title, summary := PublishSummary(artifacts, nil)
 
-	if got != Success || !strings.Contains(title, "image") {
+	if got != ports.ConclusionSuccess || !strings.Contains(title, "image") {
 		t.Errorf("(%s, %q)", got, title)
 	}
 	for _, want := range []string{"ghcr.io/x/y:latest", "ghcr.io/x/y@sha256:aaa", "RollOps"} {
@@ -241,8 +243,8 @@ func TestPublishSummaryListsBothKinds(t *testing.T) {
 
 	got, title, summary := PublishSummary(artifacts, nil)
 
-	if got != Success {
-		t.Errorf("Conclusion = %s", got)
+	if got != ports.ConclusionSuccess {
+		t.Errorf("ports.Conclusion = %s", got)
 	}
 	// One event produced both, so one check reports both. Splitting them would
 	// make branch protection wait on a name that does not always exist.
@@ -265,8 +267,8 @@ func TestDryRunPublishIsNeutralNotSuccess(t *testing.T) {
 	got, title, summary := PublishSummary(artifacts, nil)
 
 	// A rehearsal on a pull request page must not read as a real artifact.
-	if got != Neutral {
-		t.Errorf("Conclusion = %s, want neutral for a dry run", got)
+	if got != ports.ConclusionNeutral {
+		t.Errorf("ports.Conclusion = %s, want neutral for a dry run", got)
 	}
 	if !strings.Contains(strings.ToLower(title+summary), "dry") {
 		t.Errorf("a dry run must say so: %q / %q", title, summary)
@@ -281,15 +283,15 @@ func TestOneUnsignedArtifactMakesTheWholeCheckNeutral(t *testing.T) {
 
 	// "Mostly signed" is not a claim worth making on a check anyone reads as
 	// a guarantee.
-	if got, _, _ := PublishSummary(artifacts, nil); got != Neutral {
-		t.Errorf("Conclusion = %s, want neutral when any artifact is unsigned", got)
+	if got, _, _ := PublishSummary(artifacts, nil); got != ports.ConclusionNeutral {
+		t.Errorf("ports.Conclusion = %s, want neutral when any artifact is unsigned", got)
 	}
 }
 
 func TestPublishSummaryWithNothingRouted(t *testing.T) {
 	got, title, _ := PublishSummary(nil, nil)
 
-	if got != Neutral || !strings.Contains(title, "nothing") {
+	if got != ports.ConclusionNeutral || !strings.Contains(title, "nothing") {
 		t.Errorf("(%s, %q)", got, title)
 	}
 }
@@ -297,8 +299,8 @@ func TestPublishSummaryWithNothingRouted(t *testing.T) {
 func TestPublishSummaryForAFailure(t *testing.T) {
 	got, _, summary := PublishSummary(nil, errors.New("cosign sign refused"))
 
-	if got != Failure {
-		t.Errorf("Conclusion = %s", got)
+	if got != ports.ConclusionFailure {
+		t.Errorf("ports.Conclusion = %s", got)
 	}
 	if !strings.Contains(summary, "cosign sign refused") {
 		t.Errorf("summary = %q", summary)

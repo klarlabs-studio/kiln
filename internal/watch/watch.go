@@ -20,6 +20,8 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/fortify/retry"
 
 	"go.klarlabs.de/kiln/internal/domain/config"
@@ -32,7 +34,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
-	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
@@ -66,7 +67,7 @@ type Forge interface {
 // Watcher discovers and executes work.
 type Watcher struct {
 	Engine *engine.Engine
-	Store  store.Store
+	Store  ports.Ledger
 	Runner execx.Runner
 	// Forge answers which pull requests are open. An interface rather than
 	// *github.Client because that is the whole question this package asks of

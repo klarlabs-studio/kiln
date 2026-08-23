@@ -17,16 +17,14 @@ import (
 	"strings"
 	"sync"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 )
 
 // The check-run names Kiln posts. Do not rename without a migration note.
-const (
-	NameProve   = "Kiln / Prove"
-	NamePublish = "Kiln / Publish"
-)
 
 // TaskName is the check name for one task.
 //
@@ -37,7 +35,7 @@ const (
 func TaskName(task string) string { return "Kiln / " + task }
 
 // TaskSummary renders the body of a task's check.
-func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, string) {
+func TaskSummary(err error, tolerated bool, output string) (ports.Conclusion, string, string) {
 	body := strings.TrimSpace(output)
 	if body != "" {
 		body = "```\n" + body + "\n```"
@@ -45,38 +43,15 @@ func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, 
 
 	switch {
 	case err == nil:
-		return Success, "task passed", body
+		return ports.ConclusionSuccess, "task passed", body
 	case tolerated:
-		// Neutral, not failure: the pipeline was told this one may fail. A red
+		// ports.ConclusionNeutral, not failure: the pipeline was told this one may fail. A red
 		// check for something the author declared advisory is how a wall of
 		// red gets ignored.
-		return Neutral, "task failed (tolerated)", body
+		return ports.ConclusionNeutral, "task failed (tolerated)", body
 	default:
-		return Failure, "task failed", body
+		return ports.ConclusionFailure, "task failed", body
 	}
-}
-
-// Conclusion is a completed check's verdict, in GitHub's vocabulary.
-type Conclusion string
-
-const (
-	Success Conclusion = "success"
-	Failure Conclusion = "failure"
-	Neutral Conclusion = "neutral"
-	Skipped Conclusion = "skipped"
-)
-
-// Reporter posts check runs.
-//
-// Every method is best-effort from the engine's point of view: a run that
-// built and signed a correct artifact must not be recorded as failed because
-// GitHub was unreachable while Kiln tried to say so. The engine logs reporting
-// errors and carries on.
-type Reporter interface {
-	// Start opens an in-progress check run for a phase.
-	Start(ctx context.Context, name, sha string) error
-	// Complete closes it with a verdict.
-	Complete(ctx context.Context, name, sha string, conclusion Conclusion, title, summary string) error
 }
 
 // GitHub is the real reporter.
@@ -111,12 +86,12 @@ func (g *GitHub) useStatuses() {
 
 // statusState maps a check conclusion onto the four a commit status has.
 //
-// Neutral and skipped become success rather than failure: both mean "this did
+// ports.ConclusionNeutral and skipped become success rather than failure: both mean "this did
 // not go wrong", and a required context that reads failure would block a merge
 // for something the pipeline deliberately did not do.
-func statusState(c Conclusion) string {
+func statusState(c ports.Conclusion) string {
 	switch c {
-	case Failure:
+	case ports.ConclusionFailure:
 		return "failure"
 	default:
 		return "success"
@@ -160,7 +135,7 @@ func (g *GitHub) Start(ctx context.Context, name, sha string) error {
 	return nil
 }
 
-func (g *GitHub) Complete(ctx context.Context, name, sha string, c Conclusion, title, summary string) error {
+func (g *GitHub) Complete(ctx context.Context, name, sha string, c ports.Conclusion, title, summary string) error {
 	if !g.Client.Enabled() {
 		return nil
 	}
@@ -197,18 +172,6 @@ func (g *GitHub) Complete(ctx context.Context, name, sha string, c Conclusion, t
 
 func key(name, sha string) string { return name + "@" + sha }
 
-// Noop reports nowhere.
-//
-// This is what a run without GITHUB_TOKEN gets. It is a deliberate, quiet
-// degradation: `kiln run` on a laptop should gate a commit and print the
-// result, not fail because it could not tell GitHub about it.
-type Noop struct{}
-
-func (Noop) Start(context.Context, string, string) error { return nil }
-func (Noop) Complete(context.Context, string, string, Conclusion, string, string) error {
-	return nil
-}
-
 // Recording captures calls in memory, for tests and for `--dry-run`.
 type Recording struct {
 	mu     sync.Mutex
@@ -220,7 +183,7 @@ type Event struct {
 	Name       string
 	SHA        string
 	Started    bool
-	Conclusion Conclusion
+	Conclusion ports.Conclusion
 	Title      string
 	Summary    string
 }
@@ -232,7 +195,7 @@ func (r *Recording) Start(_ context.Context, name, sha string) error {
 	return nil
 }
 
-func (r *Recording) Complete(_ context.Context, name, sha string, c Conclusion, title, summary string) error {
+func (r *Recording) Complete(_ context.Context, name, sha string, c ports.Conclusion, title, summary string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.Events = append(r.Events, Event{
@@ -242,7 +205,7 @@ func (r *Recording) Complete(_ context.Context, name, sha string, c Conclusion, 
 }
 
 // Conclusions returns the verdict recorded for a check, and whether one was.
-func (r *Recording) Conclusions(name string) (Conclusion, bool) {
+func (r *Recording) Conclusions(name string) (ports.Conclusion, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := len(r.Events) - 1; i >= 0; i-- {
@@ -277,12 +240,12 @@ func (r *Recording) Summary(name string) string {
 	return ""
 }
 
-// Failing wraps a Reporter and returns an error from every call, so a test can
+// Failing wraps a ports.Reporter and returns an error from every call, so a test can
 // assert that reporting trouble does not change a run's verdict.
 type Failing struct{ Err error }
 
 func (f Failing) Start(context.Context, string, string) error { return f.err() }
-func (f Failing) Complete(context.Context, string, string, Conclusion, string, string) error {
+func (f Failing) Complete(context.Context, string, string, ports.Conclusion, string, string) error {
 	return f.err()
 }
 func (f Failing) err() error {
@@ -293,17 +256,17 @@ func (f Failing) err() error {
 }
 
 // ProveSummary renders the body of the prove check.
-func ProveSummary(skipped bool, reason string, err error) (Conclusion, string, string) {
+func ProveSummary(skipped bool, reason string, err error) (ports.Conclusion, string, string) {
 	switch {
 	case err != nil:
-		return Failure, "gate failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
+		return ports.ConclusionFailure, "gate failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
 	case skipped:
 		// A skipped gate concludes `success`, not `skipped`: the commit *is*
 		// gated — by the note Warden signed — and a branch protection rule
 		// waiting on this check must be satisfied. The summary says how.
-		return Success, "gate satisfied by warden provenance", reason
+		return ports.ConclusionSuccess, "gate satisfied by warden provenance", reason
 	default:
-		return Success, "gate passed", reason
+		return ports.ConclusionSuccess, "gate passed", reason
 	}
 }
 
@@ -312,12 +275,12 @@ func ProveSummary(skipped bool, reason string, err error) (Conclusion, string, s
 // It lists every artifact the run produced, because a release that shipped an
 // image and a set of binaries is one event, and splitting it across two checks
 // would make branch protection wait on a name that does not always exist.
-func PublishSummary(artifacts []run.Artifact, err error) (Conclusion, string, string) {
+func PublishSummary(artifacts []run.Artifact, err error) (ports.Conclusion, string, string) {
 	if err != nil {
-		return Failure, "publish failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
+		return ports.ConclusionFailure, "publish failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
 	}
 	if len(artifacts) == 0 {
-		return Neutral, "nothing published", "No artifact was routed to this event."
+		return ports.ConclusionNeutral, "nothing published", "No artifact was routed to this event."
 	}
 
 	var b strings.Builder
@@ -341,10 +304,10 @@ func PublishSummary(artifacts []run.Artifact, err error) (Conclusion, string, st
 	if !allSigned {
 		// A rehearsal must never read as a real artifact on a pull request page.
 		b.WriteString("Dry run: nothing was pushed or signed.\n")
-		return Neutral, "dry run", b.String()
+		return ports.ConclusionNeutral, "dry run", b.String()
 	}
 	b.WriteString("Signed with cosign. RollOps can pin the image digest.\n")
-	return Success, summaryTitle(artifacts), b.String()
+	return ports.ConclusionSuccess, summaryTitle(artifacts), b.String()
 }
 
 // summaryTitle names what was produced, so the check line is readable without
