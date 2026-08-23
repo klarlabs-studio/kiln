@@ -9,8 +9,8 @@ import (
 
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/github"
-	"go.klarlabs.de/kiln/internal/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 )
 
 // A tag is a publishing event. A fresh box that builds every tag it finds

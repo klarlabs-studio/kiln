@@ -23,7 +23,7 @@ import (
 
 	"gopkg.in/yaml.v3"
 
-	"go.klarlabs.de/kiln/internal/prune"
+	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 )
 
 // FileName is the pipeline file Kiln looks for at the repository root.

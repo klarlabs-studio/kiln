@@ -25,6 +25,12 @@ const modulePath = "go.klarlabs.de/kiln/internal/"
 //
 // The rule is the classic one: a layer may import inward, never outward.
 // domain is the centre and depends on nothing but the standard library.
+// The pseudo-layer for packages the migration has not placed yet. A layer that
+// lists it is still being moved; a layer that does not is finished, and the
+// list is therefore a visible record of what is left rather than a comment
+// that goes stale.
+const unassigned = "unassigned"
+
 var layers = []struct {
 	prefix string
 	name   string
@@ -32,7 +38,15 @@ var layers = []struct {
 	// always import itself.
 	mayImport []string
 }{
+	// The centre. Nothing internal, not even a logger: a rule with one
+	// exception is a rule nobody can apply without asking.
 	{"domain/", "domain", nil},
+	// Adapters. They speak the domain's language to the outside world, so
+	// they may know the domain and never the other way round.
+	{"infrastructure/", "infrastructure", []string{"domain", unassigned}},
+	// Delivery: the CLI, the MCP server, the daemon. Outermost, so it may
+	// reach anything — its job is to assemble, not to decide.
+	{"interfaces/", "interfaces", []string{"domain", "application", "infrastructure", unassigned}},
 }
 
 func layerOf(pkg string) (string, bool) {
@@ -78,9 +92,10 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 		pkg := filepath.ToSlash(filepath.Dir(strings.TrimPrefix(path, root+string(filepath.Separator))))
 		from, known := layerOf(pkg + "/")
 		if !known {
-			// Not yet assigned to a layer. Unassigned packages are not a
-			// failure: the migration lands one layer at a time, and a rule
-			// that failed on everything at once could never be introduced.
+			// The importing package has no layer yet, so there is no rule to
+			// check it against. The migration lands one layer at a time, and a
+			// rule that failed on all thirty packages at once could never be
+			// introduced.
 			return nil
 		}
 
@@ -99,10 +114,7 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 			target := strings.TrimPrefix(imported, modulePath) + "/"
 			to, targetKnown := layerOf(target)
 			if !targetKnown {
-				t.Errorf("%s (%s) imports %s, which belongs to no layer:\n"+
-					"\tthe %s layer may only import %v",
-					path, from, imported, from, allowedFor(from))
-				continue
+				to = unassigned
 			}
 			if !mayImport(from, to) {
 				t.Errorf("%s (%s) imports %s (%s):\n"+

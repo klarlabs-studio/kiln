@@ -26,14 +26,14 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/github"
-	"go.klarlabs.de/kiln/internal/lock"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/prune"
-	"go.klarlabs.de/kiln/internal/schedule"
-	"go.klarlabs.de/kiln/internal/store"
-	"go.klarlabs.de/kiln/internal/worktree"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/lock"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/prune"
+	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private

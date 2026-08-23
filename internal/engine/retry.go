@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 // Verdict is what a watch tick should do with a discovered job.

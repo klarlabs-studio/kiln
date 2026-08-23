@@ -7,15 +7,15 @@ import (
 	"testing"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/prove"
-	"go.klarlabs.de/kiln/internal/provenance"
-	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/checks"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/prove"
+	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
+	"go.klarlabs.de/kiln/internal/infrastructure/publish"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 const (

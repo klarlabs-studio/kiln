@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/domain/isolation"
-	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 // BaselineFile is where a box records what already existed when it first

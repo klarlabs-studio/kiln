@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
 )
 
 // fakeForge is what a concrete *github.Client could not be: substitutable.

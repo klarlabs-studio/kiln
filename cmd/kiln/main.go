@@ -10,7 +10,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"go.klarlabs.de/kiln/internal/cli"
+	"go.klarlabs.de/kiln/internal/interfaces/cli"
 )
 
 // main is a thin shell around run so that every deferred cleanup — including

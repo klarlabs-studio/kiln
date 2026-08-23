@@ -5,11 +5,11 @@ import (
 	"strings"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/checks"
-	"go.klarlabs.de/kiln/internal/envconfig"
 	"go.klarlabs.de/kiln/internal/gittest"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/publish"
+	"go.klarlabs.de/kiln/internal/infrastructure/checks"
+	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 )
 
 const pipeline = `apiVersion: kiln.klarlabs.de/v1

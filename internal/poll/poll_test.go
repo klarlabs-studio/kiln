@@ -6,13 +6,13 @@ import (
 
 	"go.klarlabs.de/kiln/internal/config"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/gittest"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/prove"
-	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/prove"
+	"go.klarlabs.de/kiln/internal/infrastructure/publish"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/watch"
 )
 

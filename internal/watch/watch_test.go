@@ -13,13 +13,13 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/gittest"
-	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/prove"
-	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/prove"
+	"go.klarlabs.de/kiln/internal/infrastructure/publish"
+	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
 
 // fixture is a watcher over a real clone of a real repository, driven by an

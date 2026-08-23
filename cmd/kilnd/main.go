@@ -16,7 +16,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/boot"
-	"go.klarlabs.de/kiln/internal/daemon"
+	"go.klarlabs.de/kiln/internal/interfaces/daemon"
 	"go.klarlabs.de/kiln/internal/version"
 )
 
