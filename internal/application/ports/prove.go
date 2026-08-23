@@ -18,6 +18,9 @@ type ProveRequest struct {
 	Policy isolation.Policy
 	// Nox runs the optional scanner after the gate passes.
 	Nox bool
+	// Materialize names gitignored directories the gate needs, carried from
+	// the clone into the worktree. Ignored unless Policy grants secrets.
+	Materialize []string
 	// Output, when set, receives the gate's live stdout/stderr so an operator
 	// watching `kiln run` sees progress rather than a long silence.
 	Output io.Writer

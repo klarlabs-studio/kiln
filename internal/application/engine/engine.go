@@ -265,12 +265,13 @@ func (e *Engine) doProve(
 	} else {
 		err = e.withPhaseTimeout(ctx, "prove", func(ctx context.Context) error {
 			return e.Prover.Prove(ctx, ports.ProveRequest{
-				RepoDir:    req.Dir,
-				SHA:        req.SHA,
-				Policy:     policy,
-				Nox:        req.Pipeline.Prove.Nox,
-				Output:     req.Output,
-				ServiceEnv: req.ServiceEnv,
+				RepoDir:     req.Dir,
+				SHA:         req.SHA,
+				Policy:      policy,
+				Nox:         req.Pipeline.Prove.Nox,
+				Materialize: req.Pipeline.Prove.Materialize,
+				Output:      req.Output,
+				ServiceEnv:  req.ServiceEnv,
 			})
 		})
 	}

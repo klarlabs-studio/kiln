@@ -181,6 +181,16 @@ type On struct {
 type Prove struct {
 	From string `yaml:"from"`
 	Nox  bool   `yaml:"nox"`
+	// Materialize names gitignored directories to carry from the clone into
+	// the worktree the gate runs in — node_modules being the case that forced
+	// it. A repository whose dependencies live in a global cache, which is
+	// every Go one, needs nothing here.
+	//
+	// Honoured only for a trusted event. The pipeline is read from the commit
+	// being gated, so a fork's author writes this list, and copying what they
+	// name out of the operator's clone is exactly the thing isolation exists
+	// to prevent.
+	Materialize []string `yaml:"materialize"`
 }
 
 // ArtifactKind discriminates the entries in the publish list.
@@ -478,6 +488,14 @@ func (p Pipeline) validate() error {
 		return fmt.Errorf(
 			"prove.from must be \"warden\", got %q: .warden.yaml is the only check language kiln speaks",
 			p.Prove.From)
+	}
+	for _, m := range p.Prove.Materialize {
+		// The list comes from the repository, so this is reachable from a
+		// pull request. The runtime check in prove is the real boundary; this
+		// refuses the obvious form where the message can explain itself.
+		if filepath.IsAbs(m) || strings.Contains(m, "..") {
+			return fmt.Errorf("prove.materialize: %q must stay inside the repository", m)
+		}
 	}
 	for name, steps := range map[string][]Step{
 		"on.pull_request": p.On.PullRequest,

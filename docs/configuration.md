@@ -32,6 +32,7 @@ on:
 prove:
   from: warden        # only accepted value
   nox: false          # run `nox scan .` after the gate
+  materialize: []     # gitignored dirs the gate needs, e.g. [node_modules]
 
 publish:                          # a LIST of artifacts
   - kind: image                   # image | binaries (default: image)
@@ -467,3 +468,48 @@ Checks live in `.warden.yaml`; compute is the machine Kiln runs on.
 A repository with no `.kiln.yaml` gets the default: prove every event, publish
 nothing. `kiln doctor` reports it as a warning rather than a failure, because
 that is exactly right for a library.
+
+---
+
+## `prove.materialize`
+
+A gate runs in a disposable worktree, not in your clone. Anything gitignored
+is therefore absent from it — which is invisible for Go, whose dependencies
+come from the module cache, and fatal for Node, whose `node_modules` is
+exactly that:
+
+```
+test could not run: vitest is not installed in the validation worktree
+```
+
+The trap is that the same gate passes when you run it by hand in the clone,
+where `node_modules` exists. That reads as flakiness rather than as a missing
+file.
+
+Name what has to come across:
+
+```yaml
+prove:
+  from: warden
+  materialize: [node_modules]
+```
+
+Entries are copied from the clone into the worktree before the gate runs,
+hardlinked where the filesystem allows, and never over a path the commit
+itself provides — what is tracked wins over what happens to be lying in the
+clone. A named directory that does not exist is skipped rather than failing
+the run: a fresh clone where nobody has installed anything yet is not a
+pipeline error, and the gate will say so on its own terms.
+
+### It does nothing for a fork
+
+This list is read from the commit being gated, so on a pull request its author
+wrote it — and on a fork that author is a stranger. `materialize: [".env"]`
+would otherwise hand them whatever sits beside your clone, inside code kiln is
+about to execute.
+
+So materialising is governed by the same bit as registry and signing
+credentials: a fork gets nothing, and its gate fails with "could not run".
+That is the honest outcome, and it is the reason a Node repository cannot be
+gated on fork pull requests by a box today. Same-repo pull requests, pushes
+and tags are unaffected.
