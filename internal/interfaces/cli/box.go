@@ -184,12 +184,17 @@ func (a *agent) status(io IO) error {
 	// listed by launchctl, and simply never runs again — no log line, no
 	// status, nothing to alert on. Upgrading kiln used to do exactly that, so
 	// "installed" on its own is not a useful thing to say.
-	if a.exe != "" {
-		if _, err := os.Stat(a.exe); err != nil {
+	//
+	// Read from the installed unit, not from a.exe. a.exe is the kiln running
+	// right now, which after an upgrade is a perfectly good binary that the
+	// schedule knows nothing about — checking it reports health while the box
+	// is dead, which is the mistake this check exists to catch.
+	if scheduled := a.scheduledBinary(); scheduled != "" {
+		if _, err := os.Stat(scheduled); err != nil {
 			io.printf("PROBLEM: the scheduled binary no longer exists: %s\n"+
 				"  the schedule is loaded and will never run. This is what an\n"+
 				"  upgrade does to a box installed by an older build.\n\n"+
-				"Run: kiln box install --dir %s\n", a.exe, a.repo)
+				"Run: kiln box install --dir %s\n", scheduled, a.repo)
 			return nil
 		}
 	}
@@ -405,4 +410,49 @@ func sameFile(a, b string) bool {
 		return false
 	}
 	return os.SameFile(ai, bi)
+}
+
+// scheduledBinary is the program the installed unit actually names, or empty
+// when it cannot be read.
+//
+// Deliberately a substring scan rather than a plist or ini parser: the check
+// is a courtesy, and a unit this cannot read should produce no output rather
+// than an error about XML. Both formats put the program first, which is the
+// only field wanted.
+func (a *agent) scheduledBinary() string {
+	raw, err := os.ReadFile(a.unit)
+	if err != nil {
+		return ""
+	}
+	text := string(raw)
+
+	if a.goos == "darwin" {
+		// Anchored on the key, not on the first <string> in the file: a real
+		// plist opens with <key>Label</key><string>de.klarlabs.kiln.x</string>,
+		// so scanning from the top returns the label. It is not a file, so the
+		// check still fired — for the wrong reason and naming the wrong thing.
+		i := strings.Index(text, "<key>ProgramArguments</key>")
+		if i < 0 {
+			return ""
+		}
+		const open, close = "<string>", "</string>"
+		j := strings.Index(text[i:], open)
+		if j < 0 {
+			return ""
+		}
+		rest := text[i+j+len(open):]
+		k := strings.Index(rest, close)
+		if k < 0 {
+			return ""
+		}
+		return rest[:k]
+	}
+
+	// systemd: ExecStart=/path/to/kiln watch ...
+	for line := range strings.SplitSeq(text, "\n") {
+		if after, ok := strings.CutPrefix(strings.TrimSpace(line), "ExecStart="); ok {
+			return strings.Fields(after)[0]
+		}
+	}
+	return ""
 }

@@ -68,17 +68,27 @@ func mustExe(t *testing.T, path string) {
 	}
 }
 
-// The check that would have caught this without anyone going to look. A box
-// whose binary has been deleted keeps its plist, stays listed by launchctl,
-// and simply stops — so "installed" on its own is not a useful thing to say.
-func TestStatusReportsAScheduleWhoseBinaryIsGone(t *testing.T) {
+// The check that would have caught this without anyone going to look.
+//
+// It has to read the path out of the *installed* unit, not recompute it from
+// the running binary. The first version of this check did the latter and
+// reported a healthy box while the schedule pointed at a deleted 0.3.4 — it
+// passed its unit test only because the test set the field by hand, which is
+// not something that happens.
+func TestStatusReadsTheBinaryFromTheInstalledUnit(t *testing.T) {
 	dir := t.TempDir()
+	gone := filepath.Join(dir, "upgraded-away", "kiln")
 	unit := filepath.Join(dir, "unit.plist")
-	if err := os.WriteFile(unit, []byte("x"), 0o644); err != nil {
+	if err := os.WriteFile(unit, []byte(unitNaming(gone)), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	a := &agent{repo: dir, unit: unit, exe: filepath.Join(dir, "upgraded-away", "kiln")}
+	// exe is whatever kiln is running *now*, and it exists — that is exactly
+	// the state after an upgrade, and the reason recomputing it is useless.
+	running := filepath.Join(dir, "bin", "kiln")
+	mustExe(t, running)
+
+	a := &agent{repo: dir, unit: unit, exe: running, goos: "darwin"}
 	var out bytes.Buffer
 
 	if err := a.status(IO{Out: &out, Err: &out}); err != nil {
@@ -86,9 +96,45 @@ func TestStatusReportsAScheduleWhoseBinaryIsGone(t *testing.T) {
 	}
 
 	if !strings.Contains(out.String(), "no longer exists") {
-		t.Errorf("status said nothing about the missing binary:\n%s", out.String())
+		t.Errorf("status reported a healthy box while the schedule names a deleted binary:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "kiln box install") {
 		t.Errorf("status did not say how to repair it:\n%s", out.String())
 	}
+}
+
+// A schedule whose binary is still there must not be reported as broken.
+func TestStatusIsQuietWhenTheScheduledBinaryExists(t *testing.T) {
+	dir := t.TempDir()
+	live := filepath.Join(dir, "bin", "kiln")
+	mustExe(t, live)
+	unit := filepath.Join(dir, "unit.plist")
+	if err := os.WriteFile(unit, []byte(unitNaming(live)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	a := &agent{repo: dir, unit: unit, exe: live, goos: "darwin"}
+	var out bytes.Buffer
+
+	if err := a.status(IO{Out: &out, Err: &out}); err != nil {
+		t.Fatal(err)
+	}
+
+	if strings.Contains(out.String(), "no longer exists") {
+		t.Errorf("status cried wolf about a working box:\n%s", out.String())
+	}
+}
+
+// unitNaming is a launchd plist naming one program, which is all the check reads.
+func unitNaming(exe string) string {
+	// Label first, as a real plist has it — the version of this that scanned
+	// from the top of the file returned the label instead of the binary.
+	return `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict>
+  <key>Label</key>
+  <string>de.klarlabs.kiln.example</string>
+  <key>ProgramArguments</key>
+  <array><string>` + exe + `</string><string>watch</string></array>
+</dict></plist>
+`
 }
