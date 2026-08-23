@@ -6,21 +6,13 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
-### Fixed
+## [0.3.1] - 2026-08-23
 
-- **`kiln doctor` failed every tag-only pipeline.** It planned each artifact
-  against whatever ref is checked out — a branch, normally — even for an
-  artifact declared `on: [tag]`, which can never be built from one. For the
-  common `tags: [sha, semver]` that produced "no moving tag ... publish semver
-  only on tag events", advising the operator to do exactly what the config
-  already said. On senat-os that was six failures and a non-zero exit on a
-  correct pipeline, which is worse than no check: the one signal before a
-  release was entirely noise, and it was the run that should have reported the
-  signing problem. A tag-only artifact is now planned against a tag, labelled
-  as hypothetical when doctor is not standing on one. A branch build that
-  really has no moving tag still fails, and a test pins that.
-
-## [0.3.0] - 2026-08-23
+0.3.0 was tagged but never published: its release build ran `go test` before
+installing cosign, and a doctor test added in 0.3.0 needed it. The test is now
+environment-independent. No 0.3.0 artifacts exist, and the tag is left where it
+is rather than moved — quietly re-pointing a public ref is worse than
+explaining it.
 
 ### Added
 
@@ -43,6 +35,18 @@ All notable changes to kiln are documented here. The format follows
   the place to say it.
 
 ### Fixed
+
+- **`kiln doctor` failed every tag-only pipeline.** It planned each artifact
+  against whatever ref is checked out — a branch, normally — even for an
+  artifact declared `on: [tag]`, which can never be built from one. For the
+  common `tags: [sha, semver]` that produced "no moving tag ... publish semver
+  only on tag events", advising the operator to do exactly what the config
+  already said. On senat-os that was six failures and a non-zero exit on a
+  correct pipeline, which is worse than no check: the one signal before a
+  release was entirely noise, and it was the run that should have reported the
+  signing problem. A tag-only artifact is now planned against a tag, labelled
+  as hypothetical when doctor is not standing on one. A branch build that
+  really has no moving tag still fails, and a test pins that.
 
 - **A fresh box republished every release the repository had ever cut.**
   Nothing bounded tag discovery to tags that appeared *since* the box was
@@ -69,16 +73,6 @@ All notable changes to kiln are documented here. The format follows
   Together with the closed pull request fix, a first tick on senat-os goes
   from 523 jobs to 3.
 
-### Changed
-
-- **`docs/operating.md` said GitHub deletes `refs/pull/N/head` when a pull
-  request closes.** It does not, and that belief is what produced the bug
-  above. The tick description now says what actually happens, and a new
-  section describes what a box installed on an existing repository does *not*
-  do with that repository's history.
-
-### Fixed
-
 - **A box gated every pull request the repository had ever had.** Discovery
   fetches `+refs/pull/*/head` and built every ref it found. GitHub never
   deletes those refs, so they are not the open pull requests — they are the
@@ -98,6 +92,14 @@ All notable changes to kiln are documented here. The format follows
   described the closed one. Found by installing a box on a real repository and
   reading its first tick: it announced it was building `refs/pull/4/head`,
   which had merged some time ago.
+
+### Changed
+
+- **`docs/operating.md` said GitHub deletes `refs/pull/N/head` when a pull
+  request closes.** It does not, and that belief is what produced the bug
+  above. The tick description now says what actually happens, and a new
+  section describes what a box installed on an existing repository does *not*
+  do with that repository's history.
 
 ## [0.2.1] - 2026-08-23
 
