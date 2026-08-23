@@ -1,6 +1,7 @@
 package ports
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -39,6 +40,14 @@ func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, 
 // ProveSummary renders the body of the prove check.
 func ProveSummary(skipped bool, reason string, err error) (Conclusion, string, string) {
 	switch {
+	case errors.Is(err, ErrToolMissing), errors.Is(err, ErrGateUnavailable):
+		// Still a failure conclusion, and deliberately: a commit whose gate
+		// never ran has not been gated, and ConclusionNeutral posts as a
+		// *success* commit status — which would show an unverified commit
+		// green. What changes is the claim, not the colour. "gate failed"
+		// tells an author their change is bad; nothing looked at their change.
+		return ConclusionFailure, "gate could not run",
+			"```\n" + strings.TrimSpace(err.Error()) + "\n```"
 	case err != nil:
 		return ConclusionFailure, "gate failed", "```\n" + strings.TrimSpace(err.Error()) + "\n```"
 	case skipped:

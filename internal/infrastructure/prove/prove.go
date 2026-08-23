@@ -45,14 +45,6 @@ func NewWarden(r execx.Runner, wardenBin, noxBin string) *Warden {
 	return &Warden{Runner: r, WardenBin: wardenBin, NoxBin: noxBin}
 }
 
-// ErrToolMissing reports that a required binary is not installed.
-//
-// This is a prove *failure*, never a skip. A missing `warden` means the checks
-// did not run, and a commit whose checks did not run has not passed them —
-// treating the absence as a pass would turn an operator's broken install into
-// a silently ungated pipeline, which is the one outcome Kiln exists to prevent.
-var ErrToolMissing = errors.New("required tool missing")
-
 // Prove gates the commit. It returns nil only if the gate actually ran and
 // actually passed.
 func (w *Warden) Prove(ctx context.Context, req ports.ProveRequest) error {
@@ -65,12 +57,12 @@ func (w *Warden) Prove(ctx context.Context, req ports.ProveRequest) error {
 	// worktree's worth of wait to learn it.
 	if _, err := w.Runner.LookPath(w.WardenBin); err != nil {
 		return fmt.Errorf("%w: %s is the source gate and kiln cannot pass a commit without it "+
-			"(install warden or set KILN_WARDEN): %w", ErrToolMissing, w.WardenBin, err)
+			"(install warden or set KILN_WARDEN): %w", ports.ErrToolMissing, w.WardenBin, err)
 	}
 	if req.Nox {
 		if _, err := w.Runner.LookPath(w.NoxBin); err != nil {
 			return fmt.Errorf("%w: prove.nox is enabled but %s is not installed "+
-				"(install nox, set KILN_NOX, or set prove.nox: false): %w", ErrToolMissing, w.NoxBin, err)
+				"(install nox, set KILN_NOX, or set prove.nox: false): %w", ports.ErrToolMissing, w.NoxBin, err)
 		}
 	}
 
@@ -105,8 +97,8 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 		Stdout: req.Output,
 		Stderr: req.Output,
 	}); err != nil {
-		if _, isExit := execx.ExitCode(err); isExit {
-			return fmt.Errorf("%w: %w", ports.ErrGateFailed, err)
+		if code, isExit := execx.ExitCode(err); isExit {
+			return fmt.Errorf("%w: %w", wardenVerdict(code), err)
 		}
 		return fmt.Errorf("prove: %w", err)
 	}
@@ -162,4 +154,29 @@ func (w *Warden) env(req ports.ProveRequest) []string {
 	// Service addresses are not secrets — they are ephemeral loopback ports
 	// on this box — and a fork's tests need the database as much as anyone's.
 	return append(scrubbed, req.ServiceEnv...)
+}
+
+// Warden's exit codes follow sysexits(3), and the distinction is the whole
+// point of them: 75 and 78 both mean the gate never ran, which is not the
+// claim that a gate rejection makes. Collapsing all three into one failure
+// told an author their commit was bad when nothing had looked at it — a real
+// box posted exactly that on a healthy main.
+const (
+	wardenContention  = 75 // EX_TEMPFAIL: a machine-global lock was held
+	wardenEnvironment = 78 // EX_CONFIG: a step's toolchain is not installed
+)
+
+// wardenVerdict says what a warden exit code actually claims.
+//
+// Anything unrecognised is a gate failure, which is the safe direction: an
+// exit code kiln has not been taught about must not excuse a commit.
+func wardenVerdict(code int) error {
+	switch code {
+	case wardenContention:
+		return ports.ErrGateUnavailable
+	case wardenEnvironment:
+		return ports.ErrToolMissing
+	default:
+		return ports.ErrGateFailed
+	}
 }
