@@ -63,6 +63,71 @@ publish:
     tags: [sha, latest]
 `
 
+// tagOnlySemverPipeline is the shape every real repository here uses: images
+// cut from a version tag, tagged sha + semver. Doctor runs on a branch, where
+// that plan has no semver — which is correct and must not be reported as a
+// misconfiguration.
+const tagOnlySemverPipeline = `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  push: [prove]
+  tag: [prove, publish]
+publish:
+  - kind: image
+    image: ghcr.io/felixgeelhaar/glossa-api
+    tags: [sha, semver]
+    on: [tag]
+`
+
+// TestDoctorDoesNotFailATagOnlyPipelineOnABranch covers a false positive that
+// made doctor useless where it mattered most: six of these, all advising the
+// operator to do the thing the config already did, and a non-zero exit on a
+// correct pipeline.
+func TestDoctorDoesNotFailATagOnlyPipelineOnABranch(t *testing.T) {
+	repoWith(t, tagOnlySemverPipeline)
+
+	// --config-only so the verdict is about the pipeline and nothing else. A
+	// CI runner has no cosign, and a toolchain failure there would mask
+	// exactly the exit code this asserts.
+	out, _, code := capture(t, "doctor", "--config-only")
+
+	if strings.Contains(out, "no moving tag") {
+		t.Errorf("a tag-only artifact cannot be built from a branch:\n%s", out)
+	}
+	if code != ExitOK {
+		t.Errorf("code = %d, want ExitOK on a correct pipeline:\n%s", code, out)
+	}
+	// The plan shown is for a tag that does not exist, so it has to say so —
+	// an unrecognised version number in the output is otherwise alarming.
+	if !strings.Contains(out, "only publishes on a tag") {
+		t.Errorf("doctor should label the hypothetical plan:\n%s", out)
+	}
+}
+
+// TestDoctorStillFailsAnUnpinnableBranchBuild keeps the check that the false
+// positive was hiding: an artifact that really is built on a branch, with no
+// moving tag, is one RollOps' imagePolicy would never see.
+func TestDoctorStillFailsAnUnpinnableBranchBuild(t *testing.T) {
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  push: [prove, publish]
+publish:
+  - kind: image
+    image: ghcr.io/felixgeelhaar/glossa-api
+    tags: [sha, semver]
+`)
+
+	out, _, code := capture(t, "doctor", "--config-only")
+
+	if !strings.Contains(out, "no moving tag") {
+		t.Errorf("a branch build with no moving tag is still a real problem:\n%s", out)
+	}
+	if code == ExitOK {
+		t.Errorf("code = %d, want a failure:\n%s", code, out)
+	}
+}
+
 func TestVersionPrintsTheStamp(t *testing.T) {
 	out, _, code := capture(t, "version")
 

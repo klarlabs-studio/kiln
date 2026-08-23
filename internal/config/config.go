@@ -824,6 +824,27 @@ func (p Pipeline) WatchTags() bool { return p.Watch.Tags == nil || *p.Watch.Tags
 
 // TagKinds returns the configured tag kinds in a stable order, so `kiln doctor`
 // prints the same plan twice in a row.
+// PublishesOn reports whether this artifact is published for the given event.
+// An empty On list means every publishing event, which is what the parser
+// leaves for an image that did not name one.
+func (a Artifact) PublishesOn(event string) bool {
+	if len(a.On) == 0 {
+		return true
+	}
+	for _, e := range a.On {
+		if e == event {
+			return true
+		}
+	}
+	return false
+}
+
+// TagOnly reports an artifact that is only ever published from a tag. Planning
+// one against a branch ref describes a build that cannot happen.
+func (a Artifact) TagOnly() bool {
+	return a.PublishesOn("tag") && !a.PublishesOn("push") && !a.PublishesOn("pull_request")
+}
+
 func (a Artifact) TagKinds() []Tag {
 	out := slices.Clone(a.Tags)
 	slices.Sort(out)
