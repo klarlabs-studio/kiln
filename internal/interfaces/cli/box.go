@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
+
+	"go.klarlabs.de/kiln/internal/infrastructure/binpath"
 
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
@@ -376,41 +377,14 @@ func sanitise(name string) string {
 
 // scheduledPath is the binary a schedule should name.
 //
-// Not the resolved one. os.Executable() run through EvalSymlinks gives the
-// real file, which is precisely wrong for a plist expected to outlive an
-// upgrade: under Homebrew that is Caskroom/kiln/<version>/kiln, and
-// `brew upgrade` deletes the directory. The job stays loaded, launchctl still
-// lists it, and nothing runs again — no log line, no status, nothing to alert
-// on. A box that stops silently is worse than no box, because the operator
-// believes commits are being gated when they are not.
+// Not the resolved one: under Homebrew that is Caskroom/kiln/<version>/kiln,
+// and `brew upgrade` deletes the directory. The job stays loaded, launchctl
+// still lists it, and nothing runs again. A box that stops silently is worse
+// than no box, because the operator believes commits are being gated.
 //
-// The stable name is whatever the package manager put on PATH and repoints on
-// upgrade. It is only borrowed when it resolves to the binary actually
-// running, so a box installed from a local build is never quietly scheduled
-// against a different kiln.
-func scheduledPath(exe string) string {
-	onPath, err := exec.LookPath(filepath.Base(exe))
-	if err != nil {
-		return exe
-	}
-	if sameFile(onPath, exe) {
-		return onPath
-	}
-	return exe
-}
-
-// sameFile reports that two paths reach the same binary, following symlinks.
-func sameFile(a, b string) bool {
-	ai, err := os.Stat(a)
-	if err != nil {
-		return false
-	}
-	bi, err := os.Stat(b)
-	if err != nil {
-		return false
-	}
-	return os.SameFile(ai, bi)
-}
+// The same question the keychain access list asks, so the same answer:
+// binpath.Stable is shared by both, rather than written twice and drifting.
+func scheduledPath(exe string) string { return binpath.Stable(exe) }
 
 // scheduledBinary is the program the installed unit actually names, or empty
 // when it cannot be read.
