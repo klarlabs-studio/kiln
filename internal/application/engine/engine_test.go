@@ -486,8 +486,14 @@ func TestNewDefaultsOptionalCollaborators(t *testing.T) {
 		}),
 	})
 
-	if e.Checks == nil || e.Store == nil || e.Log == nil || e.Provenance == nil {
+	if e.Checks == nil || e.Log == nil || e.Provenance == nil {
 		t.Fatalf("New left a collaborator nil: %+v", e)
+	}
+	// Store is deliberately not among them. Where a box keeps its run history
+	// is the composition root's decision, and an engine that quietly defaults
+	// to an in-memory ledger is one wiring mistake away from losing it.
+	if e.Store != nil {
+		t.Error("New invented a ledger; that is the caller's to supply")
 	}
 	// The defaulted verifier must never skip: an engine wired without a
 	// provenance verifier has no basis to trust anything.

@@ -25,12 +25,6 @@ const modulePath = "go.klarlabs.de/kiln/internal/"
 //
 // The rule is the classic one: a layer may import inward, never outward.
 // domain is the centre and depends on nothing but the standard library.
-// The pseudo-layer for packages the migration has not placed yet. A layer that
-// lists it is still being moved; a layer that does not is finished, and the
-// list is therefore a visible record of what is left rather than a comment
-// that goes stale.
-const unassigned = "unassigned"
-
 var layers = []struct {
 	prefix string
 	name   string
@@ -43,10 +37,26 @@ var layers = []struct {
 	{"domain/", "domain", nil},
 	// Adapters. They speak the domain's language to the outside world, so
 	// they may know the domain and never the other way round.
-	{"infrastructure/", "infrastructure", []string{"domain", unassigned}},
+	// The application: what kiln does, expressed only in terms of the domain
+	// and the ports it declares. It names no adapter.
+	{"application/", "application", []string{"domain"}},
+	// Adapters. They speak the domain's language to the outside world and
+	// implement the ports, so they depend on the application rather than the
+	// other way round — which is the whole trick.
+	{"infrastructure/", "infrastructure", []string{"domain", "application", "buildinfo"}},
 	// Delivery: the CLI, the MCP server, the daemon. Outermost, so it may
 	// reach anything — its job is to assemble, not to decide.
-	{"interfaces/", "interfaces", []string{"domain", "application", "infrastructure", unassigned}},
+	{"interfaces/", "interfaces", []string{"domain", "application", "infrastructure", "composition", "buildinfo"}},
+	// The composition root. It is the one place allowed to know every layer,
+	// because assembling them is the entire job.
+	{"boot/", "composition", []string{"domain", "application", "infrastructure", "buildinfo"}},
+	// The build stamp, written by the linker at release time. It is not a
+	// layer so much as a constant with a build-time value, and the ldflags in
+	// .goreleaser.yaml name this import path, so it does not move.
+	{"version/", "buildinfo", nil},
+	// The rule itself, and the git fixture tests build repositories with.
+	{"arch/", "arch", nil},
+	{"gittest/", "testfixture", nil},
 }
 
 func layerOf(pkg string) (string, bool) {
@@ -101,10 +111,9 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 		pkg := filepath.ToSlash(filepath.Dir(strings.TrimPrefix(path, root+string(filepath.Separator))))
 		from, known := layerOf(pkg + "/")
 		if !known {
-			// The importing package has no layer yet, so there is no rule to
-			// check it against. The migration lands one layer at a time, and a
-			// rule that failed on all thirty packages at once could never be
-			// introduced.
+			t.Errorf("%s belongs to no layer:\n"+
+				"\tevery package under internal/ must be placed in the table above",
+				path)
 			return nil
 		}
 
@@ -123,7 +132,11 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 			target := strings.TrimPrefix(imported, modulePath) + "/"
 			to, targetKnown := layerOf(target)
 			if !targetKnown {
-				to = unassigned
+				t.Errorf("%s (%s) imports %s, which belongs to no layer:\n"+
+					"\tevery package under internal/ must be placed in the table above,\n"+
+					"\tso that adding one is a decision about where it belongs",
+					path, from, imported)
+				continue
 			}
 			if !mayImport(from, to) {
 				t.Errorf("%s (%s) imports %s (%s):\n"+

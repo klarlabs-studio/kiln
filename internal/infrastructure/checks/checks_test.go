@@ -182,7 +182,7 @@ func TestFailingReporter(t *testing.T) {
 }
 
 func TestProveSummaryForAPass(t *testing.T) {
-	got, title, _ := ProveSummary(false, "checks ran", nil)
+	got, title, _ := ports.ProveSummary(false, "checks ran", nil)
 
 	if got != ports.ConclusionSuccess || !strings.Contains(title, "passed") {
 		t.Errorf("(%s, %q)", got, title)
@@ -190,7 +190,7 @@ func TestProveSummaryForAPass(t *testing.T) {
 }
 
 func TestSkippedProveStillConcludesSuccess(t *testing.T) {
-	got, title, summary := ProveSummary(true, "warden note on abc1234 is signed by a trusted key", nil)
+	got, title, summary := ports.ProveSummary(true, "warden note on abc1234 is signed by a trusted key", nil)
 
 	// The commit IS gated — by the note. A branch protection rule waiting on
 	// this check must be satisfied, or every provenance skip blocks a merge.
@@ -206,7 +206,7 @@ func TestSkippedProveStillConcludesSuccess(t *testing.T) {
 }
 
 func TestProveSummaryForAFailure(t *testing.T) {
-	got, title, summary := ProveSummary(false, "", errors.New("lint failed on main.go"))
+	got, title, summary := ports.ProveSummary(false, "", errors.New("lint failed on main.go"))
 
 	if got != ports.ConclusionFailure || !strings.Contains(title, "failed") {
 		t.Errorf("(%s, %q)", got, title)
@@ -222,7 +222,7 @@ func TestPublishSummaryForASignedImage(t *testing.T) {
 		Names: []string{"ghcr.io/x/y:sha-abc1234", "ghcr.io/x/y:latest"}, Signed: true,
 	}}
 
-	got, title, summary := PublishSummary(artifacts, nil)
+	got, title, summary := ports.PublishSummary(artifacts, nil)
 
 	if got != ports.ConclusionSuccess || !strings.Contains(title, "image") {
 		t.Errorf("(%s, %q)", got, title)
@@ -241,7 +241,7 @@ func TestPublishSummaryListsBothKinds(t *testing.T) {
 			Names: []string{"checksums.txt", "checksums.txt.sig", "x_1.4.0_linux_amd64.tar.gz"}, Signed: true},
 	}
 
-	got, title, summary := PublishSummary(artifacts, nil)
+	got, title, summary := ports.PublishSummary(artifacts, nil)
 
 	if got != ports.ConclusionSuccess {
 		t.Errorf("ports.Conclusion = %s", got)
@@ -264,7 +264,7 @@ func TestDryRunPublishIsNeutralNotSuccess(t *testing.T) {
 		Names: []string{"ghcr.io/x/y:latest"}, Signed: false,
 	}}
 
-	got, title, summary := PublishSummary(artifacts, nil)
+	got, title, summary := ports.PublishSummary(artifacts, nil)
 
 	// A rehearsal on a pull request page must not read as a real artifact.
 	if got != ports.ConclusionNeutral {
@@ -283,13 +283,13 @@ func TestOneUnsignedArtifactMakesTheWholeCheckNeutral(t *testing.T) {
 
 	// "Mostly signed" is not a claim worth making on a check anyone reads as
 	// a guarantee.
-	if got, _, _ := PublishSummary(artifacts, nil); got != ports.ConclusionNeutral {
+	if got, _, _ := ports.PublishSummary(artifacts, nil); got != ports.ConclusionNeutral {
 		t.Errorf("ports.Conclusion = %s, want neutral when any artifact is unsigned", got)
 	}
 }
 
 func TestPublishSummaryWithNothingRouted(t *testing.T) {
-	got, title, _ := PublishSummary(nil, nil)
+	got, title, _ := ports.PublishSummary(nil, nil)
 
 	if got != ports.ConclusionNeutral || !strings.Contains(title, "nothing") {
 		t.Errorf("(%s, %q)", got, title)
@@ -297,7 +297,7 @@ func TestPublishSummaryWithNothingRouted(t *testing.T) {
 }
 
 func TestPublishSummaryForAFailure(t *testing.T) {
-	got, _, summary := PublishSummary(nil, errors.New("cosign sign refused"))
+	got, _, summary := ports.PublishSummary(nil, errors.New("cosign sign refused"))
 
 	if got != ports.ConclusionFailure {
 		t.Errorf("ports.Conclusion = %s", got)

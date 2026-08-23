@@ -100,7 +100,7 @@ var ErrNotReady = errors.New("service never became ready")
 // If any service fails, the ones already started are torn down before
 // returning. A half-started set left behind would hold ports and memory on a
 // box that is about to try the whole thing again on the next tick.
-func (s *Runner) Start(ctx context.Context, services map[string]config.Service, runID string) (*Set, error) {
+func (s *Runner) startAll(ctx context.Context, services map[string]config.Service, runID string) (*Set, error) {
 	if len(services) == 0 {
 		return &Set{}, nil
 	}

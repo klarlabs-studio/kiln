@@ -16,56 +16,19 @@ package task
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/config"
-	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
 
-// Request is one task to run.
-type Request struct {
-	// Name is the task's key in `.kiln.yaml`.
-	Name string
-	// Task is the definition.
-	Task config.Task
-	// Dir is the checked-out worktree. Tasks never run in the operator's
-	// working copy, for the same reason builds do not.
-	Dir string
-	// SHA is the commit being worked on, exported to the command.
-	SHA string
-	// Ref and Event describe why this run happened.
-	Ref   string
-	Event string
-	// Policy decides whether the command may see the operator's environment.
-	Policy isolation.Policy
-	// Output receives the command's stdout and stderr as it runs.
-	Output io.Writer
-	// ServiceEnv carries the addresses of the run's service containers.
-	ServiceEnv []string
-}
-
-// Result is what a task did.
-type Result struct {
-	Name     string
-	Duration time.Duration
-	// Err is the command's failure, if any. A task with allow_failure set
-	// still records it here — the run does not fail, but the record must not
-	// pretend nothing happened.
-	Err error
-	// Tolerated reports that Err was suppressed by allow_failure.
-	Tolerated bool
-}
-
 // OK reports whether the task passed, or failed in a way the pipeline accepts.
-func (r Result) OK() bool { return r.Err == nil || r.Tolerated }
-
 // Runner executes tasks.
 type Runner struct {
 	Exec execx.Runner
@@ -77,16 +40,13 @@ type Runner struct {
 // New builds a runner.
 func New(r execx.Runner) *Runner { return &Runner{Exec: r, Shell: "sh"} }
 
-// ErrTaskFailed reports a task whose command exited non-zero.
-var ErrTaskFailed = errors.New("task failed")
-
 // Run executes one task and returns what happened.
 //
 // The command runs under `sh -euc`: -e so a script that fails halfway fails,
 // rather than reporting success because its last line happened to be an echo,
 // and -u so a typo'd variable is an error instead of an empty string quietly
 // deleting the wrong directory.
-func (t *Runner) Run(ctx context.Context, req Request) Result {
+func (t *Runner) Run(ctx context.Context, req ports.TaskRequest) ports.TaskResult {
 	started := time.Now()
 
 	dir := req.Dir
@@ -119,9 +79,9 @@ func (t *Runner) Run(ctx context.Context, req Request) Result {
 
 	_, err := t.Exec.Run(ctx, cmd)
 
-	result := Result{Name: req.Name, Duration: time.Since(started)}
+	result := ports.TaskResult{Name: req.Name, Duration: time.Since(started)}
 	if err != nil {
-		result.Err = fmt.Errorf("%w: %s: %w", ErrTaskFailed, req.Name, err)
+		result.Err = fmt.Errorf("%w: %s: %w", ports.ErrTaskFailed, req.Name, err)
 		result.Tolerated = req.Task.AllowFailure
 	}
 	return result
@@ -132,7 +92,7 @@ func (t *Runner) Run(ctx context.Context, req Request) Result {
 // Named KILN_ rather than GITHUB_ on purpose. A task that reads GITHUB_SHA
 // would keep working when somebody moved it back into Actions and silently
 // mean something subtly different — the merge commit rather than the head.
-func (t *Runner) env(req Request) []string {
+func (t *Runner) env(req ports.TaskRequest) []string {
 	return []string{
 		"KILN_SHA=" + req.SHA,
 		"KILN_REF=" + req.Ref,

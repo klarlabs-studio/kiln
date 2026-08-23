@@ -22,13 +22,6 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/infrastructure/checks"
-	"go.klarlabs.de/kiln/internal/infrastructure/github"
-	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/service"
-	"go.klarlabs.de/kiln/internal/infrastructure/store"
-	"go.klarlabs.de/kiln/internal/infrastructure/task"
-	"go.klarlabs.de/kiln/internal/version"
 )
 
 // Request is what a surface asks for.
@@ -81,7 +74,7 @@ type Engine struct {
 	Checks         ports.Reporter
 	// Tasks runs the pipeline's automation. Nil disables tasks entirely, which
 	// is what a caller that only wants prove-and-publish gets by default.
-	Tasks *task.Runner
+	Tasks ports.Tasks
 	// Worktrees hands out the disposable checkout every phase runs in. The
 	// engine used to reach through Tasks.Exec for this, which meant it could
 	// not run a phase without a task runner it might not need.
@@ -89,16 +82,23 @@ type Engine struct {
 	// GitHub opens the pull requests tasks propose. Nil pushes the branch and
 	// stops there, which is the right behaviour on a box with no token: the
 	// work is not thrown away, it just needs a human to notice it.
-	GitHub *github.Client
-	Store  ports.Ledger
-	Log    ports.Logger
+	// KilnVersion is the build stamp recorded in provenance as the builder's
+	// identity. Supplied rather than read from the binary: which build is
+	// running is a fact about the process, and the composition root is what
+	// knows it.
+	KilnVersion string
+	// Proposer opens the pull requests tasks propose. Nil pushes the branch
+	// and stops there.
+	Proposer ports.PullProposer
+	Store    ports.Ledger
+	Log      ports.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
 	ToolVersions map[string]string
 	// Services starts the containers a gate needs beside it. Nil disables
 	// them, which is what a pipeline with no services: block gets anyway.
-	Services *service.Runner
+	Services ports.Services
 	// KeepRoot is where retained task output is written, normally the .kiln
 	// directory beside the ledger. Empty disables retention.
 	KeepRoot string
@@ -121,11 +121,8 @@ func New(e Engine) *Engine {
 	if e.Checks == nil {
 		e.Checks = ports.NoopReporter{}
 	}
-	if e.Store == nil {
-		e.Store = store.NewMemory()
-	}
 	if e.Log == nil {
-		e.Log = obs.Discard()
+		e.Log = ports.DiscardLogger()
 	}
 	if e.Provenance == nil {
 		e.Provenance = ports.AlwaysProvenance{Reason: "no provenance verifier configured"}
@@ -278,7 +275,7 @@ func (e *Engine) doProve(
 		})
 	}
 
-	conclusion, title, summary := checks.ProveSummary(r.Skipped, verdict.Reason, err)
+	conclusion, title, summary := ports.ProveSummary(r.Skipped, verdict.Reason, err)
 	e.report(ctx, func() error {
 		return e.Checks.Complete(ctx, ports.NameProve, req.SHA, conclusion, title, summary)
 	}, log, ports.NameProve)
@@ -320,7 +317,7 @@ func (e *Engine) doPublish(
 	produced, err := e.publishAll(ctx, req, r, wanted,
 		e.provenanceInput(req, r, policy, gate), e.sourceSummary(ctx, req, log), log)
 
-	conclusion, title, summary := checks.PublishSummary(produced, err)
+	conclusion, title, summary := ports.PublishSummary(produced, err)
 	e.report(ctx, func() error {
 		return e.Checks.Complete(ctx, ports.NamePublish, req.SHA, conclusion, title, summary)
 	}, log, ports.NamePublish)
@@ -430,7 +427,7 @@ func (e *Engine) provenanceInput(
 		GateTool:     "warden",
 		GateReproved: !r.Skipped,
 		GateReason:   gate.Reason,
-		KilnVersion:  version.Version,
+		KilnVersion:  e.KilnVersion,
 		ToolVersions: e.ToolVersions,
 		InvocationID: r.ID,
 		StartedOn:    r.StartedAt,
@@ -518,15 +515,15 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 // startServices brings up the pipeline's service containers.
 func (e *Engine) startServices(
 	ctx context.Context, req Request, r *run.Run, log ports.Logger,
-) (*service.Set, error) {
+) (ports.ServiceSet, error) {
 	if e.Services == nil || len(req.Pipeline.Services) == 0 {
-		return &service.Set{}, nil
+		return ports.NoServices(), nil
 	}
 	log.Info("starting services", "count", len(req.Pipeline.Services))
 
 	set, err := e.Services.Start(ctx, req.Pipeline.Services, r.ID)
 	if err != nil {
-		return &service.Set{}, fmt.Errorf("services: %w", err)
+		return ports.NoServices(), fmt.Errorf("services: %w", err)
 	}
 	return set, nil
 }
@@ -577,13 +574,13 @@ func (e *Engine) runTasks(
 	var failed []string
 	for _, nt := range wanted {
 		e.report(ctx, func() error {
-			return e.Checks.Start(ctx, checks.TaskName(nt.Name), req.SHA)
-		}, log, checks.TaskName(nt.Name))
+			return e.Checks.Start(ctx, ports.TaskName(nt.Name), req.SHA)
+		}, log, ports.TaskName(nt.Name))
 
 		var output strings.Builder
-		result := task.Result{}
+		result := ports.TaskResult{}
 		err := e.withPhaseTimeout(ctx, "task "+nt.Name, func(ctx context.Context) error {
-			result = e.Tasks.Run(ctx, task.Request{
+			result = e.Tasks.Run(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task,
 				Dir: dir, SHA: req.SHA, Ref: req.Ref, Event: req.Event.String(),
 				Policy: policy, ServiceEnv: req.ServiceEnv,
@@ -606,7 +603,7 @@ func (e *Engine) runTasks(
 		// wants after the worktree is gone, and keeping it only on success
 		// would withhold it in exactly the case it matters.
 		if len(nt.Task.Keep) > 0 && e.KeepRoot != "" {
-			kept, kerr := task.Keep(dir, task.KeepDir(e.KeepRoot, r.ID, nt.Name), nt.Task.Keep)
+			kept, kerr := e.Tasks.Keep(dir, e.Tasks.KeepDir(e.KeepRoot, r.ID, nt.Name), nt.Task.Keep)
 			for _, f := range kept {
 				fmt.Fprintf(&output, "kept %s (%d bytes)\n", f.Name, f.Bytes)
 			}
@@ -623,10 +620,10 @@ func (e *Engine) runTasks(
 		// failed remediation left behind would open a pull request full of a
 		// half-applied fix, which is worse than no pull request.
 		if spec := nt.Task.PullRequest; spec != nil && result.Err == nil {
-			proposal, perr := e.Tasks.Propose(ctx, task.Request{
+			proposal, perr := e.Tasks.Propose(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task, Dir: dir, SHA: req.SHA,
 				Ref: req.Ref, Event: req.Event.String(), Policy: policy,
-			}, *spec, e.forge())
+			}, *spec, e.Proposer)
 			if perr != nil {
 				result.Err = perr
 				result.Tolerated = nt.Task.AllowFailure
@@ -635,10 +632,10 @@ func (e *Engine) runTasks(
 			log.Info("task proposal", "task", nt.Name, "outcome", proposal.Summary())
 		}
 
-		conclusion, title, summary := checks.TaskSummary(result.Err, result.Tolerated, output.String())
+		conclusion, title, summary := ports.TaskSummary(result.Err, result.Tolerated, output.String())
 		e.report(ctx, func() error {
-			return e.Checks.Complete(ctx, checks.TaskName(nt.Name), req.SHA, conclusion, title, summary)
-		}, log, checks.TaskName(nt.Name))
+			return e.Checks.Complete(ctx, ports.TaskName(nt.Name), req.SHA, conclusion, title, summary)
+		}, log, ports.TaskName(nt.Name))
 
 		r.Tasks = append(r.Tasks, run.Task{
 			Name: nt.Name, OK: result.OK(), Tolerated: result.Tolerated,
@@ -661,7 +658,7 @@ func (e *Engine) runTasks(
 		if keep <= 0 {
 			keep = DefaultKeepRuns
 		}
-		if err := task.Sweep(e.KeepRoot, keep); err != nil {
+		if err := e.Tasks.Sweep(e.KeepRoot, keep); err != nil {
 			// Housekeeping never fails a run: that would be the disk-space
 			// protection causing the outage it exists to prevent.
 			log.Warn("could not sweep old task output", "err", err)
@@ -669,39 +666,13 @@ func (e *Engine) runTasks(
 	}
 
 	if len(failed) > 0 {
-		return fmt.Errorf("%w: %s", task.ErrTaskFailed, strings.Join(failed, ", "))
+		return fmt.Errorf("%w: %s", ports.ErrTaskFailed, strings.Join(failed, ", "))
 	}
 	return nil
 }
 
 // DefaultKeepRuns is how many runs of retained task output are kept.
 const DefaultKeepRuns = 20
-
-// forge returns the pull-request opener, or nil when there is no usable
-// token — a typed nil in an interface would satisfy `!= nil` and then panic on
-// the first call, which is the classic version of this bug.
-func (e *Engine) forge() task.Forge {
-	if e.GitHub == nil || !e.GitHub.Enabled() {
-		return nil
-	}
-	return forge{client: e.GitHub}
-}
-
-// forge adapts the GitHub client to what proposing needs.
-//
-// A narrow interface declared by the consumer, so the task package does not
-// import the whole client and a test can supply four lines instead of an HTTP
-// server.
-type forge struct{ client *github.Client }
-
-func (f forge) OpenPullRequest(ctx context.Context, head, base, title, body string) (int, bool, error) {
-	pull, opened, err := f.client.OpenPullRequest(ctx, head, base, title, body)
-	return pull.Number, opened, err
-}
-
-func (f forge) LabelPull(ctx context.Context, number int, labels []string) error {
-	return f.client.LabelPull(ctx, number, labels)
-}
 
 // orDiscard keeps io.MultiWriter from panicking on a nil writer, which is what
 // a caller with no terminal passes.

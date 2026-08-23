@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
@@ -69,9 +71,9 @@ func repoWithRemote(t *testing.T) string {
 	return work
 }
 
-func propose(t *testing.T, dir string, policy isolation.Policy, f task.Forge) (task.Proposal, error) {
+func propose(t *testing.T, dir string, policy isolation.Policy, f ports.PullProposer) (ports.Proposal, error) {
 	t.Helper()
-	return task.New(execx.NewSystem()).Propose(t.Context(), task.Request{
+	return task.New(execx.NewSystem()).Propose(t.Context(), ports.TaskRequest{
 		Name: "remediate", Dir: dir, SHA: "deadbeef", Ref: "refs/heads/main",
 		Event: "schedule", Policy: policy,
 	}, config.PullRequest{

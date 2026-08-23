@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"gopkg.in/yaml.v3"
 
 	"go.klarlabs.de/kiln/internal/domain/config"
@@ -18,10 +20,10 @@ import (
 // trusted is the policy a push gets: the command may see the environment.
 var trusted = isolation.Policy{Secrets: true, Publish: true, Skip: true}
 
-func run(t *testing.T, dir string, def config.Task, policy isolation.Policy) (task.Result, string) {
+func run(t *testing.T, dir string, def config.Task, policy isolation.Policy) (ports.TaskResult, string) {
 	t.Helper()
 	var out strings.Builder
-	res := task.New(execx.NewSystem()).Run(t.Context(), task.Request{
+	res := task.New(execx.NewSystem()).Run(t.Context(), ports.TaskRequest{
 		Name: "check", Task: def, Dir: dir,
 		SHA: "8115748887775797df0398ed27080998f4d0c8d7", Ref: "refs/heads/main", Event: "push",
 		Policy: policy, Output: &out,
@@ -56,7 +58,7 @@ func TestAScriptThatFailsHalfwayFails(t *testing.T) {
 	if res.Err == nil {
 		t.Fatal("a script whose first command failed reported success")
 	}
-	if !errors.Is(res.Err, task.ErrTaskFailed) {
+	if !errors.Is(res.Err, ports.ErrTaskFailed) {
 		t.Errorf("err = %v, want ErrTaskFailed", res.Err)
 	}
 	if res.OK() {

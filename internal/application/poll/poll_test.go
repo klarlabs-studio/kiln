@@ -4,16 +4,16 @@ import (
 	"context"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/application/ports"
+	"go.klarlabs.de/kiln/internal/application/watch"
 	"go.klarlabs.de/kiln/internal/domain/config"
-	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
-	"go.klarlabs.de/kiln/internal/watch"
 )
 
 func newWatcher(t *testing.T) (*watch.Watcher, *gittest.Repo) {

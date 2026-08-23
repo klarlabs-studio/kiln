@@ -5,44 +5,13 @@ import (
 	"fmt"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
 
-// Proposal is what a task left behind for review.
-type Proposal struct {
-	// Changed reports whether the task modified anything at all. False is the
-	// common and healthy case for a remediation task: nothing to fix today.
-	Changed bool
-	// Branch is the head branch the changes were pushed to.
-	Branch string
-	// Number is the pull request, when one was opened or found.
-	Number int
-	// Opened distinguishes a new pull request from an update to the one that
-	// was already there.
-	Opened bool
-}
-
 // Summary renders the proposal for a check body.
-func (p Proposal) Summary() string {
-	switch {
-	case !p.Changed:
-		return "no changes to propose"
-	case p.Number == 0:
-		return "pushed " + p.Branch
-	case p.Opened:
-		return fmt.Sprintf("opened #%d from %s", p.Number, p.Branch)
-	default:
-		return fmt.Sprintf("updated #%d from %s", p.Number, p.Branch)
-	}
-}
-
-// Forge is the part of the GitHub client proposing needs.
-type Forge interface {
-	OpenPullRequest(ctx context.Context, head, base, title, body string) (number int, opened bool, err error)
-	LabelPull(ctx context.Context, number int, labels []string) error
-}
-
 // Propose commits whatever the task changed, pushes it and opens or updates a
 // pull request.
 //
@@ -51,33 +20,33 @@ type Forge interface {
 // request saying so — that is how a useful automation becomes noise people
 // filter out, and then miss the day it matters.
 func (t *Runner) Propose(
-	ctx context.Context, req Request, spec config.PullRequest, forge Forge,
-) (Proposal, error) {
+	ctx context.Context, req ports.TaskRequest, spec config.PullRequest, forge ports.PullProposer,
+) (ports.Proposal, error) {
 	if !req.Policy.Secrets {
 		// Structural, not a configuration mistake: an untrusted head must
 		// never hold a credential that can write to the base repository.
 		// Config validation already refuses pull_request on a pull_request
 		// task; this is the second lock, for any caller that assembles a
 		// request by hand.
-		return Proposal{}, fmt.Errorf("task %s: refusing to open a pull request from an untrusted head", req.Name)
+		return ports.Proposal{}, fmt.Errorf("task %s: refusing to open a pull request from an untrusted head", req.Name)
 	}
 
 	dirty, err := t.dirty(ctx, req.Dir)
 	if err != nil {
-		return Proposal{}, err
+		return ports.Proposal{}, err
 	}
 	if !dirty {
-		return Proposal{Changed: false}, nil
+		return ports.Proposal{Changed: false}, nil
 	}
 
 	if err := t.commit(ctx, req, spec); err != nil {
-		return Proposal{}, err
+		return ports.Proposal{}, err
 	}
 	if err := t.push(ctx, req.Dir, spec.Branch); err != nil {
-		return Proposal{}, err
+		return ports.Proposal{}, err
 	}
 
-	proposal := Proposal{Changed: true, Branch: spec.Branch}
+	proposal := ports.Proposal{Changed: true, Branch: spec.Branch}
 	if forge == nil {
 		// No token, no forge. The branch is pushed and says what happened;
 		// failing here would throw away work that succeeded.
@@ -117,7 +86,7 @@ func (t *Runner) dirty(ctx context.Context, dir string) (bool, error) {
 // creates the branch there rather than switching an existing one: the base is
 // deliberately the commit the task ran against, not whatever the branch
 // pointed at last time. A remediation is a statement about *this* code.
-func (t *Runner) commit(ctx context.Context, req Request, spec config.PullRequest) error {
+func (t *Runner) commit(ctx context.Context, req ports.TaskRequest, spec config.PullRequest) error {
 	steps := [][]string{
 		{"switch", "--force-create", spec.Branch},
 		{"add", "--all"},

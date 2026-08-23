@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/poll"
+	"go.klarlabs.de/kiln/internal/application/watch"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
@@ -16,8 +18,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
-	"go.klarlabs.de/kiln/internal/poll"
-	"go.klarlabs.de/kiln/internal/watch"
 )
 
 // runWatch backs both `kiln watch` and `kiln poll`.

@@ -12,7 +12,7 @@ package poll
 import (
 	"context"
 
-	"go.klarlabs.de/kiln/internal/watch"
+	"go.klarlabs.de/kiln/internal/application/watch"
 )
 
 // Poller watches a single branch.

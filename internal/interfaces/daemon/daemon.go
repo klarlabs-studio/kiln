@@ -26,10 +26,10 @@ import (
 	"sync"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
-	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"

@@ -10,9 +10,10 @@ import (
 	"slices"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/config"
-	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/policyfile"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -371,7 +372,7 @@ func (r *doctorReport) checkTasks(deps *boot.Deps) {
 					name, event)
 			}
 		}
-		r.ok("  posts check %q", checks.TaskName(name))
+		r.ok("  posts check %q", ports.TaskName(name))
 	}
 }
 

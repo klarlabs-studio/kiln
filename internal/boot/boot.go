@@ -17,9 +17,10 @@ import (
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/application/ports"
+	"go.klarlabs.de/kiln/internal/version"
 
+	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/domain/config"
-	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/credstore"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
@@ -154,13 +155,14 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
 		Publisher:        buildPublisher(env, runner, log),
 		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
+		KilnVersion:      version.Version,
 		ToolVersions:     toolVersions(ctx, runner, env),
 		PhaseTimeout:     env.PhaseTimeout,
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
 		Worktrees:        worktree.NewTrees(runner),
-		GitHub:           deps.GitHub,
+		Proposer:         github.NewProposer(deps.GitHub),
 		KeepRoot:         filepath.Dir(deps.Store.Path()),
 		Services:         service.New(runner, log),
 		Checks:           deps.Checks,

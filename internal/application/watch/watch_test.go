@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"

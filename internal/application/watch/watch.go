@@ -23,11 +23,11 @@ import (
 
 	"go.klarlabs.de/fortify/retry"
 
+	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/forge"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/engine"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -65,7 +65,7 @@ type Watcher struct {
 	// *github.Client because that is the whole question this package asks of
 	// GitHub, and because a concrete client cannot be substituted in a test —
 	// which is why the closed-pull-request logic had to be extracted as a pure
-	// function to be testable at all. task.Forge is the same idea.
+	// function to be testable at all. ports.PullProposer is the same idea.
 	Forge Forge
 	Log   ports.Logger
 

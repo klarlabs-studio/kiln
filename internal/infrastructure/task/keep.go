@@ -9,15 +9,9 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-)
 
-// KeptFile is one retained output.
-type KeptFile struct {
-	// Name is the path relative to the worktree, as the operator wrote it.
-	Name string
-	// Bytes is the size, so `kiln status` can say what is taking up the disk.
-	Bytes int64
-}
+	"go.klarlabs.de/kiln/internal/application/ports"
+)
 
 // Keep copies a task's declared outputs out of the worktree before it is
 // destroyed.
@@ -30,12 +24,12 @@ type KeptFile struct {
 //
 // Failures to copy are returned, not swallowed. A retention that quietly kept
 // nothing looks identical to a task that produced nothing.
-func Keep(worktree, dest string, globs []string) ([]KeptFile, error) {
+func Keep(worktree, dest string, globs []string) ([]ports.KeptFile, error) {
 	if len(globs) == 0 {
 		return nil, nil
 	}
 
-	var kept []KeptFile
+	var kept []ports.KeptFile
 	var problems []string
 
 	for _, pattern := range globs {
@@ -58,7 +52,7 @@ func Keep(worktree, dest string, globs []string) ([]KeptFile, error) {
 				problems = append(problems, err.Error())
 				continue
 			}
-			kept = append(kept, KeptFile{Name: rel, Bytes: size})
+			kept = append(kept, ports.KeptFile{Name: rel, Bytes: size})
 		}
 	}
 
