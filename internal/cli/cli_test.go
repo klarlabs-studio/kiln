@@ -86,7 +86,10 @@ publish:
 func TestDoctorDoesNotFailATagOnlyPipelineOnABranch(t *testing.T) {
 	repoWith(t, tagOnlySemverPipeline)
 
-	out, _, code := capture(t, "doctor")
+	// --config-only so the verdict is about the pipeline and nothing else. A
+	// CI runner has no cosign, and a toolchain failure there would mask
+	// exactly the exit code this asserts.
+	out, _, code := capture(t, "doctor", "--config-only")
 
 	if strings.Contains(out, "no moving tag") {
 		t.Errorf("a tag-only artifact cannot be built from a branch:\n%s", out)
@@ -115,7 +118,7 @@ publish:
     tags: [sha, semver]
 `)
 
-	out, _, code := capture(t, "doctor")
+	out, _, code := capture(t, "doctor", "--config-only")
 
 	if !strings.Contains(out, "no moving tag") {
 		t.Errorf("a branch build with no moving tag is still a real problem:\n%s", out)
