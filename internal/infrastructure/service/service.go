@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -80,11 +81,11 @@ func (s *Set) Stop() {
 type Runner struct {
 	Exec   execx.Runner
 	Docker string
-	Log    obs.Logger
+	Log    ports.Logger
 }
 
 // New builds a runner.
-func New(r execx.Runner, log obs.Logger) *Runner {
+func New(r execx.Runner, log ports.Logger) *Runner {
 	if log == nil {
 		log = obs.Discard()
 	}

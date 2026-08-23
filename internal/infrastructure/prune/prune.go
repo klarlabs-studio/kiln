@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -80,12 +81,12 @@ type Result struct {
 // Pruner reclaims disk.
 type Pruner struct {
 	Runner execx.Runner
-	Log    obs.Logger
+	Log    ports.Logger
 	Docker string
 }
 
 // New builds a pruner.
-func New(r execx.Runner, log obs.Logger) *Pruner {
+func New(r execx.Runner, log ports.Logger) *Pruner {
 	if log == nil {
 		log = obs.Discard()
 	}

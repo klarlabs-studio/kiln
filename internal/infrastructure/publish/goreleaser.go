@@ -38,7 +38,7 @@ import (
 // turns that from a habit into a property.
 type Goreleaser struct {
 	Runner execx.Runner
-	Log    obs.Logger
+	Log    ports.Logger
 	// Binary is the goreleaser executable (KILN_GORELEASER).
 	Binary string
 	// Cosign is checked for presence; the signing itself is configured in
@@ -80,7 +80,7 @@ func (g *Goreleaser) signingArgs(args ...string) []string {
 const ProvenanceAsset = "provenance.intoto.jsonl"
 
 // NewGoreleaser builds a release publisher.
-func NewGoreleaser(r execx.Runner, log obs.Logger, token string, dry bool) *Goreleaser {
+func NewGoreleaser(r execx.Runner, log ports.Logger, token string, dry bool) *Goreleaser {
 	if log == nil {
 		log = obs.Discard()
 	}

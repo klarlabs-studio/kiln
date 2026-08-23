@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"go.klarlabs.de/fortify/retry"
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/forge"
 
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
@@ -90,14 +91,14 @@ type Client struct {
 	Repo    Repo
 	BaseURL string
 	HTTP    *http.Client
-	Log     obs.Logger
+	Log     ports.Logger
 	// Attempts bounds the retry of transient API failures.
 	Attempts int
 }
 
 // NewClient builds a client. A nil HTTP client gets a sane timeout: an
 // unbounded default would let a hung API call stall a watch tick forever.
-func NewClient(token string, repo Repo, log obs.Logger) *Client {
+func NewClient(token string, repo Repo, log ports.Logger) *Client {
 	if log == nil {
 		log = obs.Discard()
 	}

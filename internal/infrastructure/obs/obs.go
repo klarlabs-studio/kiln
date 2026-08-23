@@ -5,7 +5,7 @@
 // line there corrupts the protocol. Keeping the writer fixed at stderr in one
 // place means no caller can get it wrong.
 //
-// The rest of the codebase depends on the narrow Logger interface below rather
+// The rest of the codebase depends on the narrow ports.Logger interface below rather
 // than on *bolt.Logger, so unit tests can pass Discard and the engine has no
 // opinion about the logging backend.
 package obs
@@ -16,26 +16,16 @@ import (
 	"os"
 
 	"go.klarlabs.de/bolt"
+	"go.klarlabs.de/kiln/internal/application/ports"
 )
 
-// Logger is the subset of structured logging Kiln uses. Fields are key/value
-// pairs; an odd trailing key is rendered with an empty value rather than
-// dropped, so a miscounted call still shows up in the log.
-type Logger interface {
-	Debug(msg string, kv ...any)
-	Info(msg string, kv ...any)
-	Warn(msg string, kv ...any)
-	Error(msg string, kv ...any)
-	With(kv ...any) Logger
-}
-
 // New returns the production logger: bolt JSON on stderr at the given level.
-func New(level string) Logger {
+func New(level string) ports.Logger {
 	return NewTo(os.Stderr, level)
 }
 
 // NewTo is New with an explicit writer, for tests that assert on log output.
-func NewTo(w io.Writer, level string) Logger {
+func NewTo(w io.Writer, level string) ports.Logger {
 	lg := bolt.New(bolt.NewJSONHandler(w))
 	if level != "" {
 		lg.SetLevel(bolt.ParseLevel(level))
@@ -45,7 +35,7 @@ func NewTo(w io.Writer, level string) Logger {
 
 // Discard is a logger that drops everything. Tests use it so a failing
 // assertion is not buried in log noise.
-func Discard() Logger { return discard{} }
+func Discard() ports.Logger { return discard{} }
 
 type boltLogger struct {
 	log  *bolt.Logger
@@ -57,7 +47,7 @@ func (b *boltLogger) Info(msg string, kv ...any)  { b.emit(b.log.Info(), msg, kv
 func (b *boltLogger) Warn(msg string, kv ...any)  { b.emit(b.log.Warn(), msg, kv) }
 func (b *boltLogger) Error(msg string, kv ...any) { b.emit(b.log.Error(), msg, kv) }
 
-func (b *boltLogger) With(kv ...any) Logger {
+func (b *boltLogger) With(kv ...any) ports.Logger {
 	merged := make([]any, 0, len(b.base)+len(kv))
 	merged = append(merged, b.base...)
 	merged = append(merged, kv...)
@@ -103,8 +93,8 @@ func apply(ev *bolt.Event, kv []any) {
 
 type discard struct{}
 
-func (discard) Debug(string, ...any) {}
-func (discard) Info(string, ...any)  {}
-func (discard) Warn(string, ...any)  {}
-func (discard) Error(string, ...any) {}
-func (d discard) With(...any) Logger { return d }
+func (discard) Debug(string, ...any)       {}
+func (discard) Info(string, ...any)        {}
+func (discard) Warn(string, ...any)        {}
+func (discard) Error(string, ...any)       {}
+func (d discard) With(...any) ports.Logger { return d }

@@ -71,7 +71,7 @@ type Watcher struct {
 	// which is why the closed-pull-request logic had to be extracted as a pure
 	// function to be testable at all. task.Forge is the same idea.
 	Forge Forge
-	Log   obs.Logger
+	Log   ports.Logger
 
 	// Dir is the repository to watch.
 	Dir string
@@ -787,7 +787,7 @@ func (w *Watcher) mergedIntoBranch(ctx context.Context, sha, branchTip string) b
 	return err == nil
 }
 
-func (w *Watcher) logger() obs.Logger {
+func (w *Watcher) logger() ports.Logger {
 	if w.Log == nil {
 		return obs.Discard()
 	}

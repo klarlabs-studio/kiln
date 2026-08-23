@@ -38,7 +38,7 @@ var ErrToolMissing = errors.New("required tool missing")
 // Docker is the real publisher.
 type Docker struct {
 	Runner execx.Runner
-	Log    obs.Logger
+	Log    ports.Logger
 	// Docker and Cosign are the binary names, overridable for testing and for
 	// podman-compatible shims.
 	Docker string
@@ -54,7 +54,7 @@ type Docker struct {
 }
 
 // NewDocker builds a publisher.
-func NewDocker(r execx.Runner, log obs.Logger) *Docker {
+func NewDocker(r execx.Runner, log ports.Logger) *Docker {
 	if log == nil {
 		log = obs.Discard()
 	}
@@ -515,10 +515,10 @@ func retryableRegistryError(err error) bool {
 // Dry plans without touching a registry. It backs KILN_DRY=1 and `kiln
 // doctor`, and it deliberately reports Signed=false and a placeholder digest
 // so nothing downstream can mistake a rehearsal for a real artifact.
-type Dry struct{ Log obs.Logger }
+type Dry struct{ Log ports.Logger }
 
 // NewDry builds a dry publisher.
-func NewDry(log obs.Logger) *Dry {
+func NewDry(log ports.Logger) *Dry {
 	if log == nil {
 		log = obs.Discard()
 	}

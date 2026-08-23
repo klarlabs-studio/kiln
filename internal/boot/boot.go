@@ -48,7 +48,7 @@ type Options struct {
 	// Env overrides the process environment, for tests.
 	Env *envconfig.Env
 	// Log overrides the logger.
-	Log obs.Logger
+	Log ports.Logger
 }
 
 // Deps is the assembled graph.
@@ -70,7 +70,7 @@ type Deps struct {
 	GitHub *github.Client
 	Checks ports.Reporter
 	Engine *engine.Engine
-	Log    obs.Logger
+	Log    ports.Logger
 
 	// output is where subprocess output goes for requests built from this
 	// graph. Unexported so surfaces read it through Output() rather than
@@ -235,14 +235,14 @@ func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
 	}
 }
 
-func buildClient(env envconfig.Env, repo github.Repo, log obs.Logger) *github.Client {
+func buildClient(env envconfig.Env, repo github.Repo, log ports.Logger) *github.Client {
 	if env.Token == "" || !repo.Valid() {
 		return nil
 	}
 	return github.NewClient(env.Token, repo, log)
 }
 
-func buildReporter(c *github.Client, log obs.Logger) ports.Reporter {
+func buildReporter(c *github.Client, log ports.Logger) ports.Reporter {
 	if c == nil || !c.Enabled() {
 		// No token: gate the commit, print the result, tell nobody. Failing
 		// here would make a laptop run impossible.
@@ -254,7 +254,7 @@ func buildReporter(c *github.Client, log obs.Logger) ports.Reporter {
 // buildPublisher honours KILN_DRY. The dry publisher is a rehearsal that
 // reports a placeholder digest and Signed=false, so nothing downstream can
 // mistake it for a real artifact.
-func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) ports.Publisher {
+func buildPublisher(env envconfig.Env, runner execx.Runner, log ports.Logger) ports.Publisher {
 	if env.Dry {
 		return publish.NewDry(log)
 	}
@@ -269,7 +269,7 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log obs.Logger) port
 // would rehearse nothing — but withholds the upload, so the dry publisher is
 // not substituted here the way it is for images.
 func buildReleasePublisher(
-	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log obs.Logger,
+	ctx context.Context, env envconfig.Env, runner execx.Runner, gh *github.Client, log ports.Logger,
 ) ports.Publisher {
 	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)

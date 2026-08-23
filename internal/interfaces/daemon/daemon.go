@@ -26,6 +26,7 @@ import (
 	"sync"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/engine"
@@ -53,7 +54,7 @@ const BackgroundTimeout = 60 * time.Minute
 // Server is the HTTP surface.
 type Server struct {
 	Deps *boot.Deps
-	Log  obs.Logger
+	Log  ports.Logger
 
 	// Token authorizes the JSON API. Required.
 	Token string
@@ -69,7 +70,7 @@ type Server struct {
 var ErrNoToken = errors.New("KILN_TOKEN is required: kilnd builds and signs artifacts, so it never serves anonymously")
 
 // New builds a server, refusing to construct one that cannot authenticate.
-func New(deps *boot.Deps, token, webhookSecret string, log obs.Logger) (*Server, error) {
+func New(deps *boot.Deps, token, webhookSecret string, log ports.Logger) (*Server, error) {
 	if strings.TrimSpace(token) == "" {
 		return nil, ErrNoToken
 	}

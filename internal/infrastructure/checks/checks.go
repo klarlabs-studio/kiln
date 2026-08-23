@@ -57,7 +57,7 @@ func TaskSummary(err error, tolerated bool, output string) (ports.Conclusion, st
 // GitHub is the real reporter.
 type GitHub struct {
 	Client *github.Client
-	Log    obs.Logger
+	Log    ports.Logger
 
 	// runs maps name+sha to the check-run id opened by Start, so Complete can
 	// close the right one. It is per-process: a `kiln run` that crashes leaves
@@ -99,7 +99,7 @@ func statusState(c ports.Conclusion) string {
 }
 
 // NewGitHub builds a reporter.
-func NewGitHub(c *github.Client, log obs.Logger) *GitHub {
+func NewGitHub(c *github.Client, log ports.Logger) *GitHub {
 	if log == nil {
 		log = obs.Discard()
 	}

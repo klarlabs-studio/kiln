@@ -91,7 +91,7 @@ type Engine struct {
 	// work is not thrown away, it just needs a human to notice it.
 	GitHub *github.Client
 	Store  ports.Ledger
-	Log    obs.Logger
+	Log    ports.Logger
 	// ToolVersions pins the components whose behaviour affected the result,
 	// for the provenance predicate. Empty is acceptable — an unknown version
 	// is better recorded as absent than guessed.
@@ -245,7 +245,7 @@ func validate(req Request) error {
 // phase has to state in the attestation whether this build ran the checks or
 // inherited them — a fact only this phase knows.
 func (e *Engine) doProve(
-	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger,
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log ports.Logger,
 ) (ports.ProvenanceResult, error) {
 	if !req.Pipeline.Wants(req.Event.String(), config.StepProve) {
 		// A pipeline that routes an event to nothing is a pipeline that wants
@@ -294,7 +294,7 @@ func (e *Engine) doProve(
 // and only if, the policy also allows it.
 func (e *Engine) doPublish(
 	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
-	gate ports.ProvenanceResult, log obs.Logger,
+	gate ports.ProvenanceResult, log ports.Logger,
 ) error {
 	wanted := req.Pipeline.ArtifactsFor(req.Event.String())
 
@@ -342,7 +342,7 @@ func (e *Engine) doPublish(
 // before the failure is still recorded, so the operator can see how far it got.
 func (e *Engine) publishAll(
 	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact,
-	prov ports.AttestInput, sourceVSA []byte, log obs.Logger,
+	prov ports.AttestInput, sourceVSA []byte, log ports.Logger,
 ) ([]run.Artifact, error) {
 	produced := make([]run.Artifact, 0, len(artifacts))
 
@@ -400,7 +400,7 @@ func (e *Engine) publishAll(
 // logged, because "no source summary attached" is something an operator
 // enforcing one downstream needs to be able to find out about here rather than
 // at deploy time.
-func (e *Engine) sourceSummary(ctx context.Context, req Request, log obs.Logger) []byte {
+func (e *Engine) sourceSummary(ctx context.Context, req Request, log ports.Logger) []byte {
 	if e.SourceAttester == nil {
 		return nil
 	}
@@ -456,7 +456,7 @@ func (e *Engine) publisherFor(a config.Artifact) ports.Publisher {
 // A run that built and signed a correct artifact must not be recorded as
 // failed because GitHub was unreachable while Kiln tried to say so. The
 // artifact is the deliverable; the Check is the announcement.
-func (e *Engine) report(ctx context.Context, fn func() error, log obs.Logger, name string) {
+func (e *Engine) report(ctx context.Context, fn func() error, log ports.Logger, name string) {
 	if err := fn(); err != nil {
 		log.Warn("could not report to github", "check", name, "err", err)
 	}
@@ -517,7 +517,7 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 
 // startServices brings up the pipeline's service containers.
 func (e *Engine) startServices(
-	ctx context.Context, req Request, r *run.Run, log obs.Logger,
+	ctx context.Context, req Request, r *run.Run, log ports.Logger,
 ) (*service.Set, error) {
 	if e.Services == nil || len(req.Pipeline.Services) == 0 {
 		return &service.Set{}, nil
@@ -539,7 +539,7 @@ func (e *Engine) startServices(
 // broke would just hide the second problem behind the first. Every task
 // reports its own check, and the run fails if any intolerable one did.
 func (e *Engine) doTasks(
-	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log obs.Logger,
+	ctx context.Context, req Request, r *run.Run, policy isolation.Policy, log ports.Logger,
 ) error {
 	if e.Tasks == nil {
 		return nil
@@ -572,7 +572,7 @@ func (e *Engine) doTasks(
 // runTasks executes the routed tasks inside an already-prepared worktree.
 func (e *Engine) runTasks(
 	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
-	wanted []config.NamedTask, dir string, log obs.Logger,
+	wanted []config.NamedTask, dir string, log ports.Logger,
 ) error {
 	var failed []string
 	for _, nt := range wanted {
@@ -712,7 +712,7 @@ func orDiscard(w io.Writer) io.Writer {
 	return w
 }
 
-func (e *Engine) persist(r *run.Run, log obs.Logger) {
+func (e *Engine) persist(r *run.Run, log ports.Logger) {
 	if err := e.Store.Save(r); err != nil {
 		log.Warn("could not persist run", "err", err)
 	}
