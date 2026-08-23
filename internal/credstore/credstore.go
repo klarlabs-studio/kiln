@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"go.klarlabs.de/kiln/internal/execx"
 )
@@ -34,6 +35,12 @@ const (
 
 // ErrNotFound reports that no token has been stored.
 var ErrNotFound = errors.New("no stored token")
+
+// ErrKeychainBlocked reports that the keychain read timed out, which in
+// practice means it is waiting on a permission dialog. Separate from
+// ErrNotFound because the remedy is different — there IS a token, something is
+// standing between the process and it.
+var ErrKeychainBlocked = errors.New("keychain did not answer")
 
 // Store reads and writes the token.
 type Store struct {
@@ -88,8 +95,15 @@ func (s *Store) Set(ctx context.Context, token string) (Kind, error) {
 func (s *Store) Get(ctx context.Context) (string, Kind, error) {
 	switch s.platform() {
 	case "darwin":
-		if token, err := s.keychainGet(ctx); err == nil && token != "" {
+		token, err := s.keychainGet(ctx)
+		if err == nil && token != "" {
 			return token, KindKeychain, nil
+		}
+		// A blocked keychain is reported, not swallowed: falling through to
+		// "no token" would leave a box quietly treating every pull request as
+		// a fork and posting no checks, with nothing said about why.
+		if errors.Is(err, ErrKeychainBlocked) {
+			return "", "", err
 		}
 	case "linux":
 		if token, err := s.secretToolGet(ctx); err == nil && token != "" {
@@ -177,12 +191,37 @@ func (s *Store) trustedApps() []string {
 	return []string{"-T", exe}
 }
 
+// keychainReadTimeout bounds the read.
+//
+// A keychain lookup that is going to succeed returns in milliseconds. One that
+// is going to prompt never returns at all — `security` sits waiting for a
+// dialog, and on a schedule nobody is watching, that is a tick that hangs
+// forever rather than a box that reports something.
+//
+// Observed exactly that: a box's first tick blocked indefinitely on
+// `security find-generic-password`, having produced no output. The -T access
+// list below is supposed to prevent the prompt and did not, but the deeper
+// problem is that a credential lookup in an unattended process must not be
+// able to block without limit for ANY reason — a locked keychain, an OS
+// update that invalidates the ACL, a binary replaced by an upgrade.
+const keychainReadTimeout = 5 * time.Second
+
 func (s *Store) keychainGet(ctx context.Context) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, keychainReadTimeout)
+	defer cancel()
+
 	res, err := s.Runner.Run(ctx, execx.Cmd{
 		Name: "security",
 		Args: []string{"find-generic-password", "-s", Service, "-a", Account, "-w"},
 	})
 	if err != nil {
+		if ctx.Err() != nil {
+			// Distinguished from "no such item" because the operator's next
+			// move is different: not `kiln login`, but a keychain that is
+			// asking a question nobody can see.
+			return "", fmt.Errorf("%w: the keychain did not answer in %s — it is most likely showing a permission dialog; "+
+				"run `kiln login` again from this terminal, or set GITHUB_TOKEN for an unattended box", ErrKeychainBlocked, keychainReadTimeout)
+		}
 		return "", err
 	}
 	return strings.TrimSpace(res.Stdout), nil
