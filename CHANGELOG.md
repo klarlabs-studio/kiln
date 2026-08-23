@@ -6,6 +6,20 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kiln box status` reported a healthy box while the schedule was dead.**
+  The check added in 0.3.5 stat'd the binary kiln was running rather than the
+  one the installed unit names. After an upgrade those differ — the running
+  one is fine and the scheduled one has been deleted — which is precisely the
+  case it existed to catch, so it reported "last tick wrote ..." about a box
+  that had not run since.
+
+  It reads the program out of the unit now, anchored on the
+  `ProgramArguments` key: scanning for the first `<string>` in a plist returns
+  the *label*, which is not a file, so the check appeared to work while naming
+  the wrong thing.
+
 ## [0.3.5] - 2026-08-23
 
 ### Fixed
