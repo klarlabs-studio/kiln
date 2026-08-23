@@ -134,12 +134,12 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		w.runScheduled(ctx)
 	}
 
-	jobs, err := w.discover(ctx)
+	jobs, authoritative, err := w.discover(ctx)
 	if err != nil {
 		return Result{}, err
 	}
 
-	jobs, err = w.applyBaseline(jobs, dryRun)
+	jobs, err = w.applyBaseline(ctx, jobs, authoritative, dryRun)
 	if err != nil {
 		return Result{}, err
 	}
@@ -395,7 +395,7 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 // current work, and building them on the first tick is the point of installing
 // a box — it is also the only sign the operator gets that the pipeline runs at
 // all.
-func (w *Watcher) applyBaseline(jobs []Job, dryRun bool) ([]Job, error) {
+func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, dryRun bool) ([]Job, error) {
 	base, err := LoadBaseline(w.Dir)
 	if err != nil {
 		return nil, err
@@ -406,7 +406,11 @@ func (w *Watcher) applyBaseline(jobs []Job, dryRun bool) ([]Job, error) {
 			// underneath it would silence one that is mid-backoff.
 			return jobs, nil
 		}
-		base = baselineFrom(jobs, w.now())
+		pulls, err := w.pullRefs(ctx)
+		if err != nil {
+			return nil, err
+		}
+		base = baselineFrom(jobs, pulls, w.now())
 		if !dryRun && w.Dir != "" {
 			if err := SaveBaseline(w.Dir, base); err != nil {
 				return nil, err
@@ -422,7 +426,7 @@ func (w *Watcher) applyBaseline(jobs []Job, dryRun bool) ([]Job, error) {
 	kept := jobs[:0:0]
 	var skipped int
 	for _, j := range jobs {
-		if base.Covers(j) {
+		if base.Covers(j, authoritative) {
 			skipped++
 			continue
 		}
@@ -435,33 +439,36 @@ func (w *Watcher) applyBaseline(jobs []Job, dryRun bool) ([]Job, error) {
 }
 
 // discover builds the job list from local refs.
-func (w *Watcher) discover(ctx context.Context) ([]Job, error) {
+func (w *Watcher) discover(ctx context.Context) ([]Job, bool, error) {
 	jobs := make([]Job, 0, 8)
 
 	branchJob, err := w.branchJob(ctx)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	jobs = append(jobs, branchJob)
 
+	// No pull requests were consulted, so nothing claims to know their state.
 	if w.BranchesOnly {
-		return jobs, nil
+		return jobs, false, nil
 	}
 	if w.Pipeline.WatchTags() {
 		tagJobs, err := w.tagJobs(ctx)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		jobs = append(jobs, tagJobs...)
 	}
+	authoritative := false
 	if w.Pipeline.WatchPullRequests() {
-		prJobs, err := w.pullJobs(ctx, branchJob.SHA)
+		prJobs, ok, err := w.pullJobs(ctx, branchJob.SHA)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		authoritative = ok
 		jobs = append(jobs, prJobs...)
 	}
-	return jobs, nil
+	return jobs, authoritative, nil
 }
 
 // now is the clock, injectable so a test can state what "twenty minutes later"
@@ -599,7 +606,10 @@ func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
 // the API. Without one, every pull request is treated as a fork — the only
 // safe reading of "I cannot tell", since the alternative hands an unknown
 // author the operator's credentials.
-func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, error) {
+// pullRefs lists every parked pull request head, whatever its state. This is
+// deliberately unfiltered: the baseline has to record what a repository
+// already had, not the subset a token happened to say was open.
+func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
 	res, err := w.Runner.Run(ctx, execx.Cmd{
 		Name: "git",
 		Args: []string{"for-each-ref", "--format=%(refname)\t%(objectname)", PRRefNamespace},
@@ -607,6 +617,35 @@ func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, error)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
+	}
+	out := map[string]string{}
+	for line := range strings.SplitSeq(res.Output(), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		ref, sha, ok := strings.Cut(line, "\t")
+		if !ok {
+			continue
+		}
+		number, convErr := strconv.Atoi(strings.TrimPrefix(ref, PRRefNamespace))
+		if convErr != nil {
+			continue
+		}
+		// Keyed by the ref a Job carries, not the local parking namespace, so
+		// the baseline and the job list are talking about the same thing.
+		out[fmt.Sprintf("refs/pull/%d/head", number)] = sha
+	}
+	return out, nil
+}
+
+func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, error) {
+	res, err := w.Runner.Run(ctx, execx.Cmd{
+		Name: "git",
+		Args: []string{"for-each-ref", "--format=%(refname)\t%(objectname)", PRRefNamespace},
+		Dir:  w.Dir,
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
 
 	open, authoritative := w.forkStatus(ctx)
@@ -651,7 +690,7 @@ func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, error)
 			"count", closed, "built", len(jobs),
 			"why", "refs/pull/N/head outlives the pull request it belonged to")
 	}
-	return jobs, nil
+	return jobs, authoritative, nil
 }
 
 // forkStatus asks GitHub which open pull requests are same-repo. An empty map

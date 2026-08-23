@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"maps"
 	"os"
 	"path/filepath"
 	"time"
@@ -35,16 +36,44 @@ type Baseline struct {
 	// Tags maps a tag ref to the commit it pointed at. The SHA is kept so a
 	// moved tag is treated as new work, which it is.
 	Tags map[string]string `json:"tags"`
+	// Pulls maps a pull ref to the head it pointed at. Consulted only when
+	// GitHub could not be asked which pull requests are open — see
+	// Covers.
+	Pulls map[string]string `json:"pulls,omitempty"`
 }
 
 // Covers reports that a job is part of the history the box inherited rather
 // than work that has happened since.
-func (b *Baseline) Covers(j Job) bool {
-	if b == nil || j.Event != isolation.EventTag {
+//
+// authoritative says whether GitHub answered which pull requests are open. When
+// it did, pull refs are not consulted here at all: the open ones are current
+// work and the closed ones are already gone. When it did not — no token, or the
+// API failed — the baseline is the only thing standing between the box and the
+// repository's entire pull request history.
+//
+// That fallback matters more than it looks. `merge-base --is-ancestor` only
+// recognises a pull request merged by a merge commit; a squash or rebase merge
+// writes a new commit, so the head is never an ancestor and every merged pull
+// request reads as unmerged. Measured on dispatch, which squash-merges: with a
+// token 42 refs were skipped and none built, and the moment the token went
+// away it started gating #31, which had merged.
+func (b *Baseline) Covers(j Job, authoritative bool) bool {
+	if b == nil {
 		return false
 	}
-	sha, ok := b.Tags[j.Ref]
-	return ok && sha == j.SHA
+	switch j.Event {
+	case isolation.EventTag:
+		sha, ok := b.Tags[j.Ref]
+		return ok && sha == j.SHA
+	case isolation.EventPullRequest:
+		if authoritative {
+			return false
+		}
+		sha, ok := b.Pulls[j.Ref]
+		return ok && sha == j.SHA
+	default:
+		return false
+	}
 }
 
 // LoadBaseline reads a box's baseline. A missing file is not an error: it
@@ -80,14 +109,23 @@ func SaveBaseline(dir string, b *Baseline) error {
 	return nil
 }
 
-// baselineFrom records the tags among a freshly discovered job list.
-func baselineFrom(jobs []Job, at time.Time) *Baseline {
-	b := &Baseline{Recorded: at, Tags: map[string]string{}}
+// baselineFrom records the tags and pull refs among a freshly discovered job
+// list. Pull refs are always recorded, even when the box has a token today:
+// the token can go away — an expiry, a revoked scope, a keychain that stops
+// answering after an upgrade — and the baseline is what the box falls back on
+// when it does.
+func baselineFrom(jobs []Job, pulls map[string]string, at time.Time) *Baseline {
+	b := &Baseline{Recorded: at, Tags: map[string]string{}, Pulls: map[string]string{}}
 	for _, j := range jobs {
 		if j.Event == isolation.EventTag {
 			b.Tags[j.Ref] = j.SHA
 		}
 	}
+	// Every pull ref, not the subset that survived filtering: with a token
+	// only the open ones reach the job list, and those are exactly the ones a
+	// later tokenless tick would be right to skip. The closed ones are the
+	// bulk, and they are the ones that must not come back.
+	maps.Copy(b.Pulls, pulls)
 	return b
 }
 

@@ -285,6 +285,7 @@ func TestTagsCanBeDisabled(t *testing.T) {
 
 func TestPullRequestsAreDiscoveredFromTheParkedRefs(t *testing.T) {
 	f := newFixture(t)
+	f.alreadyWatching(t)
 	// GitHub publishes a pull request head as refs/pull/N/head on the origin.
 	// Creating one upstream is exactly the shape discovery fetches.
 	prSHA := f.upstream.Commit("pr work", "feature.txt", "x\n")
@@ -570,6 +571,7 @@ func TestResultFailures(t *testing.T) {
 
 func TestAClosedPullRequestStopsBeingBuilt(t *testing.T) {
 	f := newFixture(t)
+	f.alreadyWatching(t)
 	prSHA := f.upstream.Commit("pr work", "feature.txt", "x\n")
 	f.upstream.Git("update-ref", "refs/pull/7/head", prSHA)
 	f.upstream.Git("reset", "--hard", "HEAD~1")
@@ -582,9 +584,9 @@ func TestAClosedPullRequestStopsBeingBuilt(t *testing.T) {
 		t.Fatalf("the open pull request was not discovered: %+v", res.Discovered)
 	}
 
-	// GitHub removes refs/pull/N/head when a pull request is closed. The
-	// pruning fetch must carry that through, or a watch box keeps rebuilding a
-	// branch nobody is proposing any more.
+	// GitHub does not remove refs/pull/N/head when a pull request closes —
+	// that is what #29 was about. A ref genuinely disappearing from the remote
+	// is a different case, and the pruning fetch must still carry it through.
 	f.upstream.Git("update-ref", "-d", "refs/pull/7/head")
 
 	res, err = f.watcher.Once(t.Context(), true)
@@ -605,9 +607,10 @@ func hasRef(jobs []Job, ref string) bool {
 	return false
 }
 
-// alreadyWatching marks the box as having ticked before, with no tags on the
-// repository at the time. A tag created after this is new work rather than
-// history the box inherited, which is the case most tests mean to describe.
+// alreadyWatching marks the box as having ticked before, with nothing on the
+// repository at the time. A tag or pull request created after this is new work
+// rather than history the box inherited, which is the case most tests mean to
+// describe.
 func (f *fixture) alreadyWatching(t *testing.T) {
 	t.Helper()
 	if err := SaveBaseline(f.watcher.Dir, &Baseline{Tags: map[string]string{}}); err != nil {
