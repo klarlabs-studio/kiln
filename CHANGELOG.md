@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.5] - 2026-08-23
+
 ### Fixed
 
 - **`brew upgrade` silently stopped every installed box.** `kiln box install`
