@@ -1,11 +1,15 @@
 package watch
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/run"
 )
 
@@ -140,5 +144,127 @@ func TestDryRunDoesNotRecordABaseline(t *testing.T) {
 
 	if _, err := os.Stat(filepath.Join(f.watcher.Dir, BaselineFile)); !os.IsNotExist(err) {
 		t.Error("a dry run wrote state")
+	}
+}
+
+// A box that loses its token must not start gating the repository's whole
+// pull request history again.
+//
+// This is not hypothetical. dispatch squash-merges, so a merged pull request's
+// head is never an ancestor of main and `merge-base --is-ancestor` cannot see
+// it. With a token the box skipped 42 refs and built none; the moment the
+// token went away — a `brew upgrade` moved the binary out of the keychain ACL
+// — it started gating #31, which had merged.
+func TestATokenlessTickDoesNotReplayTheBaselinedPullRequests(t *testing.T) {
+	f := newFixture(t)
+	head := f.upstream.Commit("pr work", "feature.txt", "x\n")
+	f.upstream.Git("update-ref", "refs/pull/7/head", head)
+	// Squash-merge shape: the branch moves on with a *different* commit, so
+	// the pull head is not an ancestor of it.
+	f.upstream.Git("reset", "--hard", "HEAD~1")
+	f.upstream.Commit("the squashed version", "feature.txt", "x\n")
+
+	// First tick records the baseline.
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	f.watcher.GitHub = nil // the token goes away
+
+	res, err := f.watcher.Once(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, j := range res.Discovered {
+		if j.Ref == "refs/pull/7/head" {
+			t.Errorf("a tokenless tick replayed a baselined pull request: %+v", j)
+		}
+	}
+}
+
+// The baseline must not silence a pull request opened after the box started,
+// which is the only kind a tokenless box can still usefully gate.
+func TestATokenlessTickStillBuildsAPullRequestOpenedSinceTheBaseline(t *testing.T) {
+	f := newFixture(t)
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	head := f.upstream.Commit("new pr", "new.txt", "x\n")
+	f.upstream.Git("update-ref", "refs/pull/9/head", head)
+	f.upstream.Git("reset", "--hard", "HEAD~1")
+	f.watcher.GitHub = nil
+
+	res, err := f.watcher.Once(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, j := range res.Discovered {
+		if j.Ref == "refs/pull/9/head" {
+			found = true
+			if !j.Fork {
+				t.Error("a pull request that cannot be checked must be treated as a fork")
+			}
+		}
+	}
+	if !found {
+		t.Error("a pull request opened after the box started was never gated")
+	}
+}
+
+// With a token the API is the authority, and a pull request open at install
+// time must still be gated on every tick — the baseline must not reach it.
+func TestAnOpenPullRequestIsNotSilencedByTheBaseline(t *testing.T) {
+	f := newFixture(t)
+	head := f.upstream.Commit("pr work", "feature.txt", "x\n")
+	f.upstream.Git("update-ref", "refs/pull/7/head", head)
+	f.upstream.Git("reset", "--hard", "HEAD~1")
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"number": 7, "head": {"sha": "x", "ref": "f", "repo": {"full_name": "klarlabs-studio/kiln"}},
+			 "base": {"repo": {"full_name": "klarlabs-studio/kiln"}}}
+		]`))
+	}))
+	defer srv.Close()
+	c := github.NewClient("tok", github.Repo{Owner: "klarlabs-studio", Name: "kiln"}, obs.Discard())
+	c.BaseURL = srv.URL
+	f.watcher.GitHub = c
+
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := f.watcher.Once(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !hasRef(res.Discovered, "refs/pull/7/head") {
+		t.Errorf("the baseline silenced a pull request the API vouched for: %+v", res.Discovered)
+	}
+}
+
+// The baseline records every pull ref present, not the subset a token said was
+// open — otherwise the closed ones, which are the bulk, come back the moment
+// the token does not answer.
+func TestTheBaselineRecordsClosedPullRefsToo(t *testing.T) {
+	f := newFixture(t)
+	head := f.upstream.Commit("long merged", "old.txt", "x\n")
+	f.upstream.Git("update-ref", "refs/pull/3/head", head)
+	f.upstream.Git("reset", "--hard", "HEAD~1")
+
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LoadBaseline(f.watcher.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Pulls["refs/pull/3/head"] == "" {
+		t.Errorf("baseline did not record the pull ref: %+v", got)
 	}
 }

@@ -6,6 +6,29 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **A box that lost its token replayed every merged pull request.** The
+  tokenless fallback recognised a merged pull request by asking whether its
+  head was an ancestor of the watched branch. That only holds for a merge
+  commit: a squash or rebase merge writes a new commit, so the head is never an
+  ancestor and every merged pull request read as unmerged.
+
+  Found on a real box within the hour. dispatch squash-merges. With a token it
+  skipped 42 pull refs and built none; the moment the token went away it
+  started gating #31, which had merged. The token went away because
+  `brew upgrade` moved the binary to a new path and the keychain ACL still
+  trusted the old one — a box has no way to answer the approval dialog that
+  follows, so it silently degrades to no token.
+
+  The baseline now records every pull ref a repository already had, not just
+  the ones a token said were open, and a tick that could not ask GitHub falls
+  back to it. With a token nothing changes: the API is still the authority, and
+  a pull request open at install time is still gated on every tick. Without
+  one, a box gates a pull request as soon as anybody pushes to it — the head
+  moves, so the baseline stops covering it — which is the most a box that
+  cannot post a commit status could usefully do anyway.
+
 ## [0.3.2] - 2026-08-23
 
 0.3.0 and 0.3.1 were tagged but never published, and no artifacts exist for
