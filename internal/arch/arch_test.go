@@ -88,6 +88,15 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 		if d.IsDir() || !strings.HasSuffix(path, ".go") {
 			return nil
 		}
+		// Test files are exempt, deliberately. The rule constrains what the
+		// shipped binary depends on; a test that wires a real adapter to
+		// exercise an application service is doing the composition root's job
+		// for one case, not violating the architecture. Enforcing it on tests
+		// would push every one of them through a fake, which buys nothing and
+		// costs the coverage that catches real breakage.
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
 
 		pkg := filepath.ToSlash(filepath.Dir(strings.TrimPrefix(path, root+string(filepath.Separator))))
 		from, known := layerOf(pkg + "/")

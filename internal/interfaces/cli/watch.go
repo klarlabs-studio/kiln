@@ -14,6 +14,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
+	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 	"go.klarlabs.de/kiln/internal/poll"
 	"go.klarlabs.de/kiln/internal/watch"
 )
@@ -260,6 +261,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		// repository gains no new top-level clutter and the interval survives
 		// a restart.
 		Schedule:         schedule.NewStore(filepath.Dir(deps.Store.Path())),
+		Worktrees:        worktree.NewTrees(deps.Runner),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
 	}

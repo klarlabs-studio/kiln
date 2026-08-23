@@ -34,7 +34,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
-	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -95,6 +94,9 @@ type Watcher struct {
 	// Now is the clock, injectable so a test can state what "tomorrow" means
 	// rather than sleep through it.
 	Now func() time.Time
+	// Worktrees reaps checkouts a dying process left behind. Nil disables the
+	// sweep, which is what a caller with no repository — a test — should get.
+	Worktrees ports.Worktrees
 	// Pruner reclaims docker disk each tick. Nil disables it.
 	Pruner *prune.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
@@ -258,7 +260,10 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 // Never fatal. Housekeeping that could fail the tick would be the
 // housekeeping causing the outage it exists to prevent.
 func (w *Watcher) reap(ctx context.Context) {
-	removed, err := worktree.Reap(ctx, w.Runner, w.Dir, 0)
+	if w.Worktrees == nil {
+		return
+	}
+	removed, err := w.Worktrees.Reap(ctx, w.Dir, 0)
 	if err != nil {
 		w.logger().Warn("could not reap abandoned worktrees", "err", err)
 		return

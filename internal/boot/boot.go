@@ -159,6 +159,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
+		Worktrees:        worktree.NewTrees(runner),
 		GitHub:           deps.GitHub,
 		KeepRoot:         filepath.Dir(deps.Store.Path()),
 		Services:         service.New(runner, log),

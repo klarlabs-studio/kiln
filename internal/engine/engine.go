@@ -28,7 +28,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/service"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/task"
-	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 	"go.klarlabs.de/kiln/internal/version"
 )
 
@@ -83,6 +82,10 @@ type Engine struct {
 	// Tasks runs the pipeline's automation. Nil disables tasks entirely, which
 	// is what a caller that only wants prove-and-publish gets by default.
 	Tasks *task.Runner
+	// Worktrees hands out the disposable checkout every phase runs in. The
+	// engine used to reach through Tasks.Exec for this, which meant it could
+	// not run a phase without a task runner it might not need.
+	Worktrees ports.Worktrees
 	// GitHub opens the pull requests tasks propose. Nil pushes the branch and
 	// stops there, which is the right behaviour on a box with no token: the
 	// work is not thrown away, it just needs a human to notice it.
@@ -495,7 +498,10 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	// bit is off regardless: RunScheduled never publishes.
 	policy := isolation.Policy{Secrets: true, Skip: true}
 
-	err := worktree.With(ctx, e.Tasks.Exec, req.Dir, req.SHA, func(dir string) error {
+	if e.Worktrees == nil {
+		return r, fmt.Errorf("engine: no worktree provider configured")
+	}
+	err := e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
 		return e.runTasks(ctx, req, r, policy, tasks, dir, log)
 	})
 	if err != nil {
@@ -558,7 +564,7 @@ func (e *Engine) doTasks(
 	// The task runner's own execer, rather than a second one on the engine:
 	// there is exactly one subprocess seam in this path and duplicating it
 	// would mean a test could stub one and not the other.
-	return worktree.With(ctx, e.Tasks.Exec, req.Dir, req.SHA, func(dir string) error {
+	return e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
 		return e.runTasks(ctx, req, r, policy, wanted, dir, log)
 	})
 }

@@ -19,6 +19,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
+	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
 // fixture is a watcher over a real clone of a real repository, driven by an
@@ -54,13 +55,14 @@ func newFixture(t *testing.T) *fixture {
 		Log:   obs.Discard(),
 	})
 	f.watcher = &Watcher{
-		Engine:   eng,
-		Store:    f.store,
-		Runner:   execx.NewSystem(),
-		Log:      obs.Discard(),
-		Dir:      local.Dir,
-		Repo:     "klarlabs-studio/kiln",
-		Pipeline: defaultPipeline(t),
+		Worktrees: worktree.NewTrees(execx.NewSystem()),
+		Engine:    eng,
+		Store:     f.store,
+		Runner:    execx.NewSystem(),
+		Log:       obs.Discard(),
+		Dir:       local.Dir,
+		Repo:      "klarlabs-studio/kiln",
+		Pipeline:  defaultPipeline(t),
 		// Retry backoff is exercised by fortify's own tests; here it would only
 		// add seconds to every negative case.
 		FetchAttempts: 1,
