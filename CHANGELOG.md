@@ -6,6 +6,27 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`brew upgrade` silently stopped every installed box.** `kiln box install`
+  resolved the running binary through `EvalSymlinks` and wrote the result into
+  the schedule, which under Homebrew is
+  `/opt/homebrew/Caskroom/kiln/<version>/kiln`. Upgrading deletes that
+  directory. The job stayed loaded, `launchctl list` still showed it, and
+  nothing ran again — no log line, no status, no non-zero exit to alert on.
+
+  A box exists so nobody has to remember to check, so one that stops quietly
+  is worse than no box: the operator believes commits are being gated when
+  they are not. It happened to a real box here the moment 0.3.4 landed.
+
+  The schedule now names the stable path the package manager repoints —
+  `/opt/homebrew/bin/kiln` — and only when it resolves to the same binary
+  that is running, so a box installed from a local build is never quietly
+  scheduled against a different kiln.
+
+  `kiln box status` also reports a schedule whose binary has gone, since that
+  is the check which would have caught this without anyone going to look.
+
 ## [0.3.4] - 2026-08-23
 
 ### Fixed
