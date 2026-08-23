@@ -6,13 +6,19 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
-## [0.3.1] - 2026-08-23
+## [0.3.2] - 2026-08-23
 
-0.3.0 was tagged but never published: its release build ran `go test` before
-installing cosign, and a doctor test added in 0.3.0 needed it. The test is now
-environment-independent. No 0.3.0 artifacts exist, and the tag is left where it
-is rather than moved — quietly re-pointing a public ref is worse than
-explaining it.
+0.3.0 and 0.3.1 were tagged but never published, and no artifacts exist for
+either. Both release builds died on a doctor test that read the runner's
+environment instead of describing its own: `release.yml` grants
+`id-token: write` so cosign can sign keylessly, which means an OIDC identity is
+present there and nowhere else the test had ever run. The test asserts the
+warning doctor gives a box with *no* identity, so it passed locally, in CI and
+on `main`, and failed only once a tag was pushed — the one moment the mistake
+is expensive. Fixed in #33; the environment gap that hid it is #34.
+
+Both tags are left where they are. Quietly re-pointing a public ref to tidy up
+is worse than explaining it.
 
 ### Added
 
