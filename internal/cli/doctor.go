@@ -398,11 +398,36 @@ func (r *doctorReport) checkArtifacts(ctx context.Context, deps *boot.Deps, comm
 	}
 }
 
+// planRef picks the ref to plan an artifact against.
+//
+// Doctor runs on whatever is checked out, which is usually a branch. An
+// artifact published only `on: [tag]` can never be built from a branch, so
+// planning it there describes a build that cannot happen — and for the common
+// `tags: [sha, semver]` it reports "no moving tag" and advises publishing
+// semver only on tag events, which is exactly what the config already says. Six
+// of those made doctor exit non-zero on a correct pipeline, which is worse than
+// no check: the one signal before a release was all noise.
+//
+// So a tag-only artifact is planned against a tag. The current one if doctor is
+// standing on it, otherwise a representative version, labelled as hypothetical.
+func planRef(artifact config.Artifact, ref string) (planned string, hypothetical bool) {
+	if !artifact.TagOnly() || strings.HasPrefix(ref, "refs/tags/") {
+		return ref, false
+	}
+	return "refs/tags/v0.0.0", true
+}
+
 func (r *doctorReport) checkImagePlan(artifact config.Artifact, sha, ref string) {
-	plan, err := publish.BuildPlan(artifact, sha, ref)
+	planned, hypothetical := planRef(artifact, ref)
+	plan, err := publish.BuildPlan(artifact, sha, planned)
 	if err != nil {
 		r.fail("%v", err)
 		return
+	}
+	if hypothetical {
+		// Say the plan is for a tag that does not exist. A version number in
+		// the output that nobody recognises is otherwise alarming.
+		fmt.Fprintf(&r.b, "    (planned against %s — this artifact only publishes on a tag)\n", planned)
 	}
 	for line := range strings.SplitSeq(strings.TrimRight(plan.String(), "\n"), "\n") {
 		fmt.Fprintf(&r.b, "    %s\n", line)

@@ -6,6 +6,20 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kiln doctor` failed every tag-only pipeline.** It planned each artifact
+  against whatever ref is checked out — a branch, normally — even for an
+  artifact declared `on: [tag]`, which can never be built from one. For the
+  common `tags: [sha, semver]` that produced "no moving tag ... publish semver
+  only on tag events", advising the operator to do exactly what the config
+  already said. On senat-os that was six failures and a non-zero exit on a
+  correct pipeline, which is worse than no check: the one signal before a
+  release was entirely noise, and it was the run that should have reported the
+  signing problem. A tag-only artifact is now planned against a tag, labelled
+  as hypothetical when doctor is not standing on one. A branch build that
+  really has no moving tag still fails, and a test pins that.
+
 ## [0.3.0] - 2026-08-23
 
 ### Added
