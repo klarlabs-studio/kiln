@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-08-23
+
 ### Fixed
 
 - **kiln reported "gate failed" when warden said it could not run the gate.**
