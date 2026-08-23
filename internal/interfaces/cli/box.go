@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -116,10 +117,7 @@ func newAgent(repo string, every time.Duration, branchesOnly bool) (*agent, erro
 	if err != nil {
 		return nil, fmt.Errorf("cannot find the kiln binary: %w", err)
 	}
-	exe, err = filepath.EvalSymlinks(exe)
-	if err != nil {
-		return nil, err
-	}
+	exe = scheduledPath(exe)
 
 	a := &agent{repo: repo, every: every, exe: exe, goos: runtime.GOOS, branchesOnly: branchesOnly}
 	a.label = "de.klarlabs.kiln." + sanitise(filepath.Base(repo))
@@ -181,6 +179,20 @@ func (a *agent) status(io IO) error {
 		return nil
 	}
 	io.print("installed: " + a.unit + "\n")
+
+	// A schedule whose binary has been deleted keeps its unit file, stays
+	// listed by launchctl, and simply never runs again — no log line, no
+	// status, nothing to alert on. Upgrading kiln used to do exactly that, so
+	// "installed" on its own is not a useful thing to say.
+	if a.exe != "" {
+		if _, err := os.Stat(a.exe); err != nil {
+			io.printf("PROBLEM: the scheduled binary no longer exists: %s\n"+
+				"  the schedule is loaded and will never run. This is what an\n"+
+				"  upgrade does to a box installed by an older build.\n\n"+
+				"Run: kiln box install --dir %s\n", a.exe, a.repo)
+			return nil
+		}
+	}
 
 	info, err := os.Stat(a.logPath())
 	if err != nil {
@@ -355,4 +367,42 @@ func sanitise(name string) string {
 		return "repo"
 	}
 	return out
+}
+
+// scheduledPath is the binary a schedule should name.
+//
+// Not the resolved one. os.Executable() run through EvalSymlinks gives the
+// real file, which is precisely wrong for a plist expected to outlive an
+// upgrade: under Homebrew that is Caskroom/kiln/<version>/kiln, and
+// `brew upgrade` deletes the directory. The job stays loaded, launchctl still
+// lists it, and nothing runs again — no log line, no status, nothing to alert
+// on. A box that stops silently is worse than no box, because the operator
+// believes commits are being gated when they are not.
+//
+// The stable name is whatever the package manager put on PATH and repoints on
+// upgrade. It is only borrowed when it resolves to the binary actually
+// running, so a box installed from a local build is never quietly scheduled
+// against a different kiln.
+func scheduledPath(exe string) string {
+	onPath, err := exec.LookPath(filepath.Base(exe))
+	if err != nil {
+		return exe
+	}
+	if sameFile(onPath, exe) {
+		return onPath
+	}
+	return exe
+}
+
+// sameFile reports that two paths reach the same binary, following symlinks.
+func sameFile(a, b string) bool {
+	ai, err := os.Stat(a)
+	if err != nil {
+		return false
+	}
+	bi, err := os.Stat(b)
+	if err != nil {
+		return false
+	}
+	return os.SameFile(ai, bi)
 }
