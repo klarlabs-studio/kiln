@@ -23,11 +23,11 @@ import (
 	"go.klarlabs.de/fortify/retry"
 
 	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/domain/forge"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
-	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
@@ -60,7 +60,7 @@ type Job struct {
 // pullDecision.
 type Forge interface {
 	Enabled() bool
-	ListOpenPulls(ctx context.Context) ([]github.Pull, error)
+	ListOpenPulls(ctx context.Context) ([]forge.Pull, error)
 }
 
 // Watcher discovers and executes work.

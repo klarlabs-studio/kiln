@@ -21,6 +21,7 @@ import (
 	"unicode/utf8"
 
 	"go.klarlabs.de/fortify/retry"
+	"go.klarlabs.de/kiln/internal/domain/forge"
 
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -186,23 +187,6 @@ func (c *Client) CompleteCheckRun(ctx context.Context, id int64, conclusion, tit
 	return c.do(ctx, http.MethodPatch, c.path(fmt.Sprintf("check-runs/%d", id)), payload, nil)
 }
 
-// Pull is what Kiln needs to know about a pull request.
-type Pull struct {
-	Number int
-	// HeadSHA is the commit to build.
-	HeadSHA string
-	// HeadRef is the source branch name.
-	HeadRef string
-	// Fork reports that the head lives in a different repository. This is the
-	// input to the isolation policy, and getting it wrong in the permissive
-	// direction hands a stranger the operator's credentials — so callers that
-	// cannot reach the API must assume true, not false.
-	Fork bool
-	// Draft pull requests are still proven; the flag is reported so a caller
-	// can choose to skip them.
-	Draft bool
-}
-
 type pullPayload struct {
 	Number int  `json:"number"`
 	Draft  bool `json:"draft"`
@@ -221,12 +205,12 @@ type pullPayload struct {
 }
 
 // LookupPull fetches one pull request.
-func (c *Client) LookupPull(ctx context.Context, number int) (Pull, error) {
+func (c *Client) LookupPull(ctx context.Context, number int) (forge.Pull, error) {
 	var p pullPayload
 	if err := c.do(ctx, http.MethodGet, c.path(fmt.Sprintf("pulls/%d", number)), nil, &p); err != nil {
-		return Pull{}, err
+		return forge.Pull{}, err
 	}
-	return Pull{
+	return forge.Pull{
 		Number:  p.Number,
 		HeadSHA: p.Head.SHA,
 		HeadRef: p.Head.Ref,
@@ -248,14 +232,14 @@ func isFork(p pullPayload) bool {
 }
 
 // ListOpenPulls returns the open pull requests, for watch discovery.
-func (c *Client) ListOpenPulls(ctx context.Context) ([]Pull, error) {
+func (c *Client) ListOpenPulls(ctx context.Context) ([]forge.Pull, error) {
 	var payload []pullPayload
 	if err := c.do(ctx, http.MethodGet, c.path("pulls?state=open&per_page=100"), nil, &payload); err != nil {
 		return nil, err
 	}
-	out := make([]Pull, 0, len(payload))
+	out := make([]forge.Pull, 0, len(payload))
 	for _, p := range payload {
-		out = append(out, Pull{
+		out = append(out, forge.Pull{
 			Number:  p.Number,
 			HeadSHA: p.Head.SHA,
 			HeadRef: p.Head.Ref,
@@ -347,9 +331,9 @@ func truncateDescription(s string) string {
 // daily remediation run pushes to the same branch and updates its existing
 // pull request rather than opening one per day until somebody notices thirty
 // of them.
-func (c *Client) OpenPullRequest(ctx context.Context, head, base, title, body string) (Pull, bool, error) {
+func (c *Client) OpenPullRequest(ctx context.Context, head, base, title, body string) (forge.Pull, bool, error) {
 	if existing, found, err := c.pullForHead(ctx, head); err != nil {
-		return Pull{}, false, err
+		return forge.Pull{}, false, err
 	} else if found {
 		return existing, false, nil
 	}
@@ -361,26 +345,26 @@ func (c *Client) OpenPullRequest(ctx context.Context, head, base, title, body st
 
 	var p pullPayload
 	if err := c.do(ctx, http.MethodPost, c.path("pulls"), payload, &p); err != nil {
-		return Pull{}, false, fmt.Errorf("github: open pull request for %s: %w", head, err)
+		return forge.Pull{}, false, fmt.Errorf("github: open pull request for %s: %w", head, err)
 	}
-	return Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
+	return forge.Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
 }
 
 // pullForHead finds an open pull request whose head is this branch.
-func (c *Client) pullForHead(ctx context.Context, head string) (Pull, bool, error) {
+func (c *Client) pullForHead(ctx context.Context, head string) (forge.Pull, bool, error) {
 	// Qualified with the owner, because GitHub's head filter matches
 	// `owner:branch` and an unqualified name silently matches nothing.
 	query := fmt.Sprintf("pulls?state=open&head=%s:%s", url.QueryEscape(c.Repo.Owner), url.QueryEscape(head))
 
 	var payload []pullPayload
 	if err := c.do(ctx, http.MethodGet, c.path(query), nil, &payload); err != nil {
-		return Pull{}, false, fmt.Errorf("github: look for an existing pull request on %s: %w", head, err)
+		return forge.Pull{}, false, fmt.Errorf("github: look for an existing pull request on %s: %w", head, err)
 	}
 	if len(payload) == 0 {
-		return Pull{}, false, nil
+		return forge.Pull{}, false, nil
 	}
 	p := payload[0]
-	return Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
+	return forge.Pull{Number: p.Number, HeadSHA: p.Head.SHA, HeadRef: p.Head.Ref, Draft: p.Draft}, true, nil
 }
 
 // LabelPull adds labels to a pull request. Labels are an issue-level concept

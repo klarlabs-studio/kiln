@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/domain/forge"
 )
 
 // fakeForge is what a concrete *github.Client could not be: substitutable.
@@ -13,7 +13,7 @@ import (
 // decision was to extract it as a pure function and test that in isolation,
 // which left the path through discovery itself uncovered.
 type fakeForge struct {
-	open    []github.Pull
+	open    []forge.Pull
 	err     error
 	off     bool
 	queried int
@@ -21,7 +21,7 @@ type fakeForge struct {
 
 func (f *fakeForge) Enabled() bool { return !f.off }
 
-func (f *fakeForge) ListOpenPulls(context.Context) ([]github.Pull, error) {
+func (f *fakeForge) ListOpenPulls(context.Context) ([]forge.Pull, error) {
 	f.queried++
 	if f.err != nil {
 		return nil, f.err
@@ -40,7 +40,7 @@ func TestDiscovery_SkipsAPullRequestTheForgeDoesNotList(t *testing.T) {
 	f.upstream.Git("update-ref", "refs/pull/6/head", closedSHA)
 	f.upstream.Git("reset", "--hard", "HEAD~2")
 
-	forge := &fakeForge{open: []github.Pull{{Number: 5, Fork: false}}}
+	forge := &fakeForge{open: []forge.Pull{{Number: 5, Fork: false}}}
 	f.watcher.Forge = forge
 
 	res, err := f.watcher.Once(t.Context(), true)
@@ -68,7 +68,7 @@ func TestDiscovery_CarriesForkNessFromTheForge(t *testing.T) {
 	f.upstream.Git("update-ref", "refs/pull/8/head", sha)
 	f.upstream.Git("reset", "--hard", "HEAD~1")
 
-	f.watcher.Forge = &fakeForge{open: []github.Pull{{Number: 8, Fork: true}}}
+	f.watcher.Forge = &fakeForge{open: []forge.Pull{{Number: 8, Fork: true}}}
 
 	res, err := f.watcher.Once(t.Context(), true)
 	if err != nil {
