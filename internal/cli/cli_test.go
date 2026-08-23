@@ -204,12 +204,51 @@ func TestDoctorWarnsAboutTheMissingToken(t *testing.T) {
 	}
 }
 
+// noAmbientOIDC describes the box this warning is about: one with no identity
+// for keyless cosign to prove. Without it the test asserts nothing on a CI
+// runner, where ACTIONS_ID_TOKEN_REQUEST_URL is set and keyless is correct —
+// which is how it passed locally and failed the release.
+func noAmbientOIDC(t *testing.T) {
+	t.Helper()
+	for _, v := range []string{
+		"ACTIONS_ID_TOKEN_REQUEST_URL",
+		"SIGSTORE_ID_TOKEN",
+		"GITLAB_CI",
+		"BUILDKITE_AGENT_ACCESS_TOKEN",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+	} {
+		t.Setenv(v, "") // registers the restore
+		if err := os.Unsetenv(v); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// TestDoctorAcceptsKeylessWhereAnIdentityExists is the other half: on a runner
+// with an OIDC identity, keyless is the right mode and warning would tell the
+// operator to configure a key they do not need.
+func TestDoctorAcceptsKeylessWhereAnIdentityExists(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	noAmbientOIDC(t)
+	t.Setenv("ACTIONS_ID_TOKEN_REQUEST_URL", "https://token.actions.example/")
+
+	out, _, _ := capture(t, "doctor")
+
+	if strings.Contains(out, "keyless signing with no OIDC identity") {
+		t.Errorf("keyless is correct where an identity exists:\n%s", out)
+	}
+	if !strings.Contains(out, "GitHub Actions provides the identity") {
+		t.Errorf("doctor should name the identity provider it found:\n%s", out)
+	}
+}
+
 // TestDoctorWarnsAboutUnattendedKeylessSigning covers the mode that cost a
 // release: keyless signing on a box with no OIDC identity does not fail, it
 // blocks on a browser device flow until the code expires, part-way through a
 // multi-image tag.
 func TestDoctorWarnsAboutUnattendedKeylessSigning(t *testing.T) {
 	repoWith(t, publishingPipeline)
+	noAmbientOIDC(t)
 
 	out, _, _ := capture(t, "doctor")
 
