@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-23
+
 ### Added
 
 - **`prove.materialize`, so a box can gate a Node project at all.** A gate runs
