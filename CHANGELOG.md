@@ -6,6 +6,26 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The release workflow runs the test suite in the environment CI runs it
+  in.** `release.yml` grants `id-token: write` so cosign can sign keylessly,
+  and a workflow-level permission reaches every job — which sets
+  `ACTIONS_ID_TOKEN_REQUEST_URL`, a variable CI never sets. A test that reads
+  the ambient environment therefore passed locally, on pull requests and on
+  `main`, and failed only once a tag was pushed. That is the worst moment to
+  find out, and it cost two tags: `v0.3.0` and `v0.3.1` are tagged with no
+  release attached.
+
+  The suite now runs in its own job that overrides permissions down to
+  `contents: read`, with the release job depending on it. The tag's own commit
+  is still tested — a tag can be moved, and that is the last check before
+  artifacts exist that anyone will trust — but in the same environment that
+  vouched for it on `main`.
+
+  A test asserts it, because the alternative is a comment in a YAML file that
+  nothing reads.
+
 ### Fixed
 
 - **`brew upgrade` locked every box out of its own token.** `kiln login` put

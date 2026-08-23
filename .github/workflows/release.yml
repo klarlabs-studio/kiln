@@ -23,10 +23,42 @@ permissions:
   # Keyless cosign. Fulcio issues a short-lived certificate against this
   # workflow's OIDC identity, which is what makes the signature traceable to
   # this repository and this tag rather than to a key somebody holds.
+  #
+  # Granted at the workflow level, so every job gets it unless it says
+  # otherwise — which is why `test` below says otherwise. See its comment.
   id-token: write
 
 jobs:
+  # The tag's own commit, tested in the environment CI tests in.
+  #
+  # A separate job for one reason: permissions. This workflow grants
+  # id-token: write so cosign can sign keylessly, and that sets
+  # ACTIONS_ID_TOKEN_REQUEST_URL for every step in the job. CI has no such
+  # permission and no such variable, so a test that reads the ambient
+  # environment — "is there an OIDC identity?" — passed everywhere a developer
+  # or a pull request would ever look, and failed only once a tag was pushed.
+  #
+  # That is the worst possible moment to find out, and it cost two tags:
+  # v0.3.0 and v0.3.1 are tagged with no release attached. Overriding
+  # permissions here makes this job's environment the same one CI runs, so a
+  # test that passes on main passes here.
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # CI already ran on the commit this tag points at. Running the suite
+      # again is not redundancy for its own sake: a tag can be moved, and this
+      # is the last point before artifacts exist that anyone will trust.
+      - run: go test -race ./...
+
   release:
+    needs: test
     runs-on: ubuntu-latest
     # Generous next to CI's ten minutes: this cross-compiles four archives and
     # catalogues an SBOM for each. Still a bound, because a release wedged on a
@@ -45,12 +77,6 @@ jobs:
           # day the module's minimum moves, and a release built on a toolchain
           # the tests never ran on is not the thing that was tested.
           go-version-file: go.mod
-
-      # CI already ran on the commit this tag points at. Running the suite
-      # again here is not redundancy for its own sake: a tag can be moved, and
-      # this is the last point before artifacts exist that anyone will trust.
-      - name: Test
-        run: go test -race ./...
 
       # cosign is named explicitly rather than left to the action's default.
       # The default moved from v2 to v3 between installer releases, and v3
