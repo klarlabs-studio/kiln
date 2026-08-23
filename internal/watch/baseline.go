@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/store"
 )
 

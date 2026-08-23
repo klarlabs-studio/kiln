@@ -10,15 +10,15 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/execx"
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/gittest"
-	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/prove"
 	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
 )
 

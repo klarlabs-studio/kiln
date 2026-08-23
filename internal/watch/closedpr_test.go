@@ -3,7 +3,7 @@ package watch
 import (
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 )
 
 // GitHub keeps refs/pull/N/head forever, for every pull request ever opened,

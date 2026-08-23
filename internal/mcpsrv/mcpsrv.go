@@ -21,8 +21,8 @@ import (
 
 	"go.klarlabs.de/mcp"
 
-	"go.klarlabs.de/kiln/internal/isolation"
-	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
 // Facade is the subset of Kiln the MCP surface needs. The CLI wires the real

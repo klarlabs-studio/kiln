@@ -9,12 +9,12 @@ import (
 
 	"go.klarlabs.de/kiln/internal/checks"
 	"go.klarlabs.de/kiln/internal/config"
-	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/obs"
 	"go.klarlabs.de/kiln/internal/prove"
 	"go.klarlabs.de/kiln/internal/provenance"
 	"go.klarlabs.de/kiln/internal/publish"
-	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
 )
 

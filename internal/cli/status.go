@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/store"
 )
 

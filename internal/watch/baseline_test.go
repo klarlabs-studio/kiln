@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/github"
-	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/run"
 )
 
 // A tag is a publishing event. A fresh box that builds every tag it finds

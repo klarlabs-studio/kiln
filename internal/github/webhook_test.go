@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 )
 
 const secret = "s3cr3t"

@@ -5,7 +5,7 @@ import (
 	"math"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/store"
 )
 

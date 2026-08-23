@@ -10,10 +10,10 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/lock"
 	"go.klarlabs.de/kiln/internal/poll"
 	"go.klarlabs.de/kiln/internal/prune"
-	"go.klarlabs.de/kiln/internal/run"
 	"go.klarlabs.de/kiln/internal/schedule"
 	"go.klarlabs.de/kiln/internal/watch"
 )

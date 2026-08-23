@@ -18,8 +18,8 @@ import (
 	"fmt"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/isolation"
 )
 
 // Decision is the verdict for one commit.

@@ -19,7 +19,7 @@ import (
 	"sort"
 	"sync"
 
-	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
 // ErrNotFound reports that no run has the requested id.

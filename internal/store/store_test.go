@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
 // Both implementations satisfy the same contract, so both run the same suite.

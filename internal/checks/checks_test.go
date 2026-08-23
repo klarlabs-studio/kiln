@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/run"
 )
 
 // The names are a contract with branch protection and with RollOps' PR

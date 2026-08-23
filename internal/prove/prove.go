@@ -21,8 +21,8 @@ import (
 	"os"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/worktree"
 )
 

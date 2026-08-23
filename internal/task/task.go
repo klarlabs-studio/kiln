@@ -25,8 +25,8 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/isolation"
 )
 
 // Request is one task to run.

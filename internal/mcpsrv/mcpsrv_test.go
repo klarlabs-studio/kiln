@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/isolation"
-	"go.klarlabs.de/kiln/internal/run"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
 // fake is a scripted Facade.

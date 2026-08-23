@@ -9,8 +9,8 @@ import (
 
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/engine"
-	"go.klarlabs.de/kiln/internal/isolation"
 	"go.klarlabs.de/kiln/internal/mcpsrv"
 	"go.klarlabs.de/kiln/internal/publish"
 	"go.klarlabs.de/kiln/internal/store"

@@ -17,9 +17,9 @@ import (
 	"strings"
 	"sync"
 
+	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/github"
 	"go.klarlabs.de/kiln/internal/obs"
-	"go.klarlabs.de/kiln/internal/run"
 )
 
 // The check-run names Kiln posts. Do not rename without a migration note.

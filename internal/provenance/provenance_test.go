@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/execx"
-	"go.klarlabs.de/kiln/internal/isolation"
 )
 
 const sha = "abc1234def5678"

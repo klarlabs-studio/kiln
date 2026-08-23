@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/isolation"
+	"go.klarlabs.de/kiln/internal/domain/isolation"
 )
 
 // SignatureHeader is the header GitHub signs its deliveries with.
