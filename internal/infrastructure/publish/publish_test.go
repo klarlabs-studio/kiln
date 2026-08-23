@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
@@ -415,8 +416,8 @@ func metadataPath(args []string) string {
 	return ""
 }
 
-func imageProvenance() attest.Input {
-	return attest.Input{
+func imageProvenance() ports.AttestInput {
+	return ports.AttestInput{
 		Repo: "felixgeelhaar/glossa", Ref: "refs/heads/main", Event: "push",
 		GateReproved: true, GateReason: "checks ran", KilnVersion: "v0.1.0",
 		InvocationID: "run-1", StartedOn: time.Unix(0, 0).UTC(),
@@ -712,7 +713,7 @@ func TestNoSummaryStillPublishes(t *testing.T) {
 	prov := imageProvenance()
 	prov.SHA = head
 
-	// A repository still adopting warden must not be unable to publish.
+	// A repository still adopting warden must not be unable to
 	res, err := newPublisher(fake).Publish(t.Context(), Request{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
 		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,

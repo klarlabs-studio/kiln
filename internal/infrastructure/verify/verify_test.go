@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
@@ -17,9 +18,9 @@ const (
 	commit = "c3f7aca23fa4bfa8d65b3741f46c509713cd618e"
 )
 
-func statement(t *testing.T, mutate func(*attest.Input)) attest.Statement {
+func statement(t *testing.T, mutate func(*ports.AttestInput)) attest.Statement {
 	t.Helper()
-	in := attest.Input{
+	in := ports.AttestInput{
 		SubjectName:   "ghcr.io/felixgeelhaar/glossa-api",
 		SubjectDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		Repo:          "felixgeelhaar/glossa", SHA: commit, Ref: "refs/heads/main",
@@ -227,7 +228,7 @@ func TestUnpinnedNoteVerificationSaysSo(t *testing.T) {
 }
 
 func TestAnInheritedGateIsReported(t *testing.T) {
-	s := statement(t, func(in *attest.Input) {
+	s := statement(t, func(in *ports.AttestInput) {
 		in.GateReproved = false
 		in.GateReason = "warden note is signed by a trusted key"
 	})

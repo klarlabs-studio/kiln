@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 )
 
@@ -18,7 +19,7 @@ var examplePath = filepath.Join("..", "..", "..", "examples", "provenance.exampl
 // the file is byte-stable and a diff means the wire format actually changed.
 func canonical(t *testing.T) attest.Statement {
 	t.Helper()
-	s, err := attest.Build(attest.Input{
+	s, err := attest.Build(ports.AttestInput{
 		SubjectName:   "ghcr.io/felixgeelhaar/glossa-api",
 		SubjectDigest: "sha256:9f2c1e4a7b3d5086c1f9a2b4d6e8103b5c7d9e1f2a3b4c5d6e7f8091a2b3c4d5",
 		Repo:          "felixgeelhaar/glossa",

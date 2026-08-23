@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
@@ -17,7 +18,6 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 )
@@ -47,7 +47,7 @@ func newFixture(t *testing.T) *fixture {
 
 	f := &fixture{upstream: upstream, local: local, store: store.NewMemory()}
 	eng := engine.New(engine.Engine{
-		Prover: prove.Func(func(context.Context, prove.Request) error { return nil }),
+		Prover: ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
 		Publisher: publish.Func(func(_ context.Context, req publish.Request) (publish.Result, error) {
 			return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 		}),
@@ -146,7 +146,7 @@ func TestSecondTickSkipsAnAlreadyBuiltHead(t *testing.T) {
 func TestAFailedRunBacksOffAndIsRetriedLater(t *testing.T) {
 	f := newFixture(t)
 	failing := *f.watcher.Engine
-	failing.Prover = prove.Func(func(context.Context, prove.Request) error {
+	failing.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		return errors.New("gate failed")
 	})
 	f.watcher.Engine = &failing
@@ -188,7 +188,7 @@ func TestAFailedRunBacksOffAndIsRetriedLater(t *testing.T) {
 func TestTheBackoffGrowsWithRepeatedFailures(t *testing.T) {
 	f := newFixture(t)
 	failing := *f.watcher.Engine
-	failing.Prover = prove.Func(func(context.Context, prove.Request) error {
+	failing.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		return errors.New("gate failed")
 	})
 	f.watcher.Engine = &failing
@@ -440,7 +440,7 @@ func TestOneFailingJobDoesNotStopTheTick(t *testing.T) {
 
 	failFirst := true
 	eng := *f.watcher.Engine
-	eng.Prover = prove.Func(func(context.Context, prove.Request) error {
+	eng.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		if failFirst {
 			failFirst = false
 			return errors.New("first job fails")
@@ -500,7 +500,7 @@ func TestCancellationStopsTheTick(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 	eng := *f.watcher.Engine
-	eng.Prover = prove.Func(func(context.Context, prove.Request) error {
+	eng.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		cancel()
 		return nil
 	})

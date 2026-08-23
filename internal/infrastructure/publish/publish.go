@@ -22,6 +22,7 @@ import (
 
 	"go.klarlabs.de/fortify/retry"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
@@ -48,7 +49,7 @@ type Request struct {
 	// commit, which gate verdict, which builder. The publisher fills in the
 	// subject once the digest exists, because the digest is the one field
 	// nobody knows until the artifact is built.
-	Provenance attest.Input
+	Provenance ports.AttestInput
 	// SourceVSA is Warden's own verification summary for the commit, carried
 	// verbatim. Empty when the commit has no note.
 	//

@@ -18,14 +18,13 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
-	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/service"
@@ -72,7 +71,7 @@ type SourceAttester interface {
 
 // Engine runs the phase sequence.
 type Engine struct {
-	Prover prove.Prover
+	Prover ports.Prover
 	// Publisher builds images; ReleasePublisher builds binary releases. Two
 	// fields rather than a registry because there are two kinds, and a map
 	// would be indirection without a second caller to justify it.
@@ -267,7 +266,7 @@ func (e *Engine) doProve(
 		r.Skipped = true
 	} else {
 		err = e.withPhaseTimeout(ctx, "prove", func(ctx context.Context) error {
-			return e.Prover.Prove(ctx, prove.Request{
+			return e.Prover.Prove(ctx, ports.ProveRequest{
 				RepoDir:    req.Dir,
 				SHA:        req.SHA,
 				Policy:     policy,
@@ -342,7 +341,7 @@ func (e *Engine) doPublish(
 // before the failure is still recorded, so the operator can see how far it got.
 func (e *Engine) publishAll(
 	ctx context.Context, req Request, r *run.Run, artifacts []config.Artifact,
-	prov attest.Input, sourceVSA []byte, log obs.Logger,
+	prov ports.AttestInput, sourceVSA []byte, log obs.Logger,
 ) ([]run.Artifact, error) {
 	produced := make([]run.Artifact, 0, len(artifacts))
 
@@ -417,8 +416,8 @@ func (e *Engine) sourceSummary(ctx context.Context, req Request, log obs.Logger)
 // known until the artifact exists.
 func (e *Engine) provenanceInput(
 	req Request, r *run.Run, policy isolation.Policy, gate provenance.Result,
-) attest.Input {
-	return attest.Input{
+) ports.AttestInput {
+	return ports.AttestInput{
 		Repo:  req.Repo,
 		SHA:   req.SHA,
 		Ref:   req.Ref,

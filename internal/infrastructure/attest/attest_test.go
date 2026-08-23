@@ -5,10 +5,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"go.klarlabs.de/kiln/internal/application/ports"
 )
 
-func input() Input {
-	return Input{
+func input() ports.AttestInput {
+	return ports.AttestInput{
 		SubjectName:   "ghcr.io/felixgeelhaar/glossa-api",
 		SubjectDigest: "sha256:1111111111111111111111111111111111111111111111111111111111111111",
 		Repo:          "felixgeelhaar/glossa",
@@ -28,7 +30,7 @@ func input() Input {
 	}
 }
 
-func build(t *testing.T, in Input) Statement {
+func build(t *testing.T, in ports.AttestInput) Statement {
 	t.Helper()
 	s, err := Build(in)
 	if err != nil {

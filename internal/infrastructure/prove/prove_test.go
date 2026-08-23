@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
+
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
@@ -41,7 +43,7 @@ func TestProveRunsTheGateInAWorktree(t *testing.T) {
 		return execx.NewSystem().Run(t.Context(), c)
 	}})
 
-	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: repo.Dir, SHA: sha, Policy: trusted,
 	}); err != nil {
 		t.Fatalf("Prove: %v", err)
@@ -58,13 +60,13 @@ func TestProveRunsTheGateInAWorktree(t *testing.T) {
 func TestGateFailureIsDistinguishable(t *testing.T) {
 	fake := fakeRepo().On("warden run pre-push", execx.Response{ExitCode: 1, Stderr: "lint failed"})
 
-	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 
 	// "your change did not pass" must not read the same as "kiln broke".
-	if !errors.Is(err, ErrGateFailed) {
-		t.Fatalf("err = %v, want ErrGateFailed", err)
+	if !errors.Is(err, ports.ErrGateFailed) {
+		t.Fatalf("err = %v, want ports.ErrGateFailed", err)
 	}
 	if !strings.Contains(err.Error(), "lint failed") {
 		t.Errorf("error should quote the gate, got %v", err)
@@ -74,7 +76,7 @@ func TestGateFailureIsDistinguishable(t *testing.T) {
 func TestMissingWardenIsAFailureNotASkip(t *testing.T) {
 	fake := fakeRepo().Absent("warden")
 
-	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 
@@ -91,7 +93,7 @@ func TestMissingWardenIsAFailureNotASkip(t *testing.T) {
 func TestNoxEnabledButMissingIsAFailure(t *testing.T) {
 	fake := fakeRepo().Absent("nox")
 
-	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Nox: true,
 	})
 
@@ -112,7 +114,7 @@ func TestNoxDisabledDoesNotRequireNox(t *testing.T) {
 		return execx.NewSystem().Run(t.Context(), c)
 	}})
 
-	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: repo.Dir, SHA: sha, Policy: trusted, Nox: false,
 	}); err != nil {
 		t.Fatalf("Prove: %v", err)
@@ -131,7 +133,7 @@ func TestNoxRunsAfterTheGate(t *testing.T) {
 		return execx.NewSystem().Run(t.Context(), c)
 	}})
 
-	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: repo.Dir, SHA: sha, Policy: trusted, Nox: true,
 	}); err != nil {
 		t.Fatalf("Prove: %v", err)
@@ -148,18 +150,18 @@ func TestNoxRunsAfterTheGate(t *testing.T) {
 func TestNoxFindingsFailTheProve(t *testing.T) {
 	fake := fakeRepo().On("nox scan", execx.Response{ExitCode: 1, Stderr: "1 critical finding"})
 
-	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Nox: true,
 	})
 
-	if !errors.Is(err, ErrGateFailed) {
-		t.Fatalf("err = %v, want ErrGateFailed", err)
+	if !errors.Is(err, ports.ErrGateFailed) {
+		t.Fatalf("err = %v, want ports.ErrGateFailed", err)
 	}
 }
 
 func TestTrustedRunInheritsTheEnvironment(t *testing.T) {
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 
@@ -181,7 +183,7 @@ func TestForkRunGetsAScrubbedEnvironment(t *testing.T) {
 	t.Setenv("HOME", "/home/build")
 
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: untrusted,
 	})
 
@@ -210,7 +212,7 @@ func TestForkScanAlsoRunsScrubbed(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "ghp_secret")
 
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: untrusted, Nox: true,
 	})
 
@@ -226,14 +228,14 @@ func TestForkScanAlsoRunsScrubbed(t *testing.T) {
 }
 
 func TestProveRejectsAnEmptySHA(t *testing.T) {
-	if err := NewWarden(fakeRepo(), "warden", "nox").Prove(t.Context(), Request{RepoDir: "/repo"}); err == nil {
+	if err := NewWarden(fakeRepo(), "warden", "nox").Prove(t.Context(), ports.ProveRequest{RepoDir: "/repo"}); err == nil {
 		t.Error("Prove accepted an empty commit")
 	}
 }
 
 func TestCustomBinariesAreHonoured(t *testing.T) {
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden-next", "nox-next").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden-next", "nox-next").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Nox: true,
 	})
 
@@ -251,13 +253,13 @@ func TestEmptyBinaryNamesDefault(t *testing.T) {
 
 func TestFuncAdapter(t *testing.T) {
 	called := false
-	var p Prover = Func(func(_ context.Context, _ Request) error {
+	var p ports.Prover = ports.ProveFunc(func(_ context.Context, _ ports.ProveRequest) error {
 		called = true
 		return nil
 	})
 
-	if err := p.Prove(t.Context(), Request{}); err != nil || !called {
-		t.Errorf("Func adapter did not delegate (err=%v)", err)
+	if err := p.Prove(t.Context(), ports.ProveRequest{}); err != nil || !called {
+		t.Errorf("ports.ProveFunc adapter did not delegate (err=%v)", err)
 	}
 }
 
@@ -267,7 +269,7 @@ func TestFuncAdapter(t *testing.T) {
 // "branch changed mid-run". Warden's CI mode is the only correct invocation.
 func TestGateIsInvokedInAttestOnlyMode(t *testing.T) {
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 
@@ -286,7 +288,7 @@ func TestGateRunsWithNoStdin(t *testing.T) {
 	// "no refs at all" as gatable, so this must stay a real run rather than a
 	// silent pass. Asserting kiln sends nothing keeps that contract visible.
 	fake := fakeRepo()
-	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), Request{
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
 		RepoDir: "/repo", SHA: "abc123", Policy: trusted,
 	})
 

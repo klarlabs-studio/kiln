@@ -7,12 +7,12 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
@@ -35,7 +35,7 @@ type harness struct {
 	proveErr    error
 	pubErr      error
 	releaseErr  error
-	lastProve   prove.Request
+	lastProve   ports.ProveRequest
 	lastPub     publish.Request
 	lastRelease publish.Request
 	verdict     provenance.Result
@@ -49,7 +49,7 @@ func newHarness(t *testing.T) *harness {
 		verdict: provenance.Result{Decision: provenance.Reprove, Reason: "no keys pinned"},
 	}
 	h.engine = New(Engine{
-		Prover: prove.Func(func(_ context.Context, req prove.Request) error {
+		Prover: ports.ProveFunc(func(_ context.Context, req ports.ProveRequest) error {
 			h.proved++
 			h.lastProve = req
 			return h.proveErr
@@ -481,7 +481,7 @@ func TestAlreadyBuilt(t *testing.T) {
 
 func TestNewDefaultsOptionalCollaborators(t *testing.T) {
 	e := New(Engine{
-		Prover:    prove.Func(func(context.Context, prove.Request) error { return nil }),
+		Prover:    ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil }),
 		Publisher: publish.Func(func(context.Context, publish.Request) (publish.Result, error) { return publish.Result{}, nil }),
 	})
 
@@ -645,7 +645,7 @@ func TestMissingReleasePublisherIsAFailure(t *testing.T) {
 func TestAHangingPhaseTimesOut(t *testing.T) {
 	h := newHarness(t)
 	h.engine.PhaseTimeout = 80 * time.Millisecond
-	h.engine.Prover = prove.Func(func(ctx context.Context, _ prove.Request) error {
+	h.engine.Prover = ports.ProveFunc(func(ctx context.Context, _ ports.ProveRequest) error {
 		<-ctx.Done()
 		return ctx.Err()
 	})
@@ -658,7 +658,7 @@ func TestAHangingPhaseTimesOut(t *testing.T) {
 	// A failing gate means fix the code; a hanging one means look at the
 	// machine. Reporting both the same way sends an operator to the wrong
 	// place.
-	if errors.Is(err, prove.ErrGateFailed) {
+	if errors.Is(err, ports.ErrGateFailed) {
 		t.Error("a timeout must not read as a gate rejection")
 	}
 	if !strings.Contains(err.Error(), "KILN_PHASE_TIMEOUT") {
@@ -699,7 +699,7 @@ func TestEachArtifactGetsItsOwnBudget(t *testing.T) {
 func TestZeroTimeoutMeansUnbounded(t *testing.T) {
 	h := newHarness(t)
 	h.engine.PhaseTimeout = 0
-	h.engine.Prover = prove.Func(func(_ context.Context, _ prove.Request) error {
+	h.engine.Prover = ports.ProveFunc(func(_ context.Context, _ ports.ProveRequest) error {
 		time.Sleep(120 * time.Millisecond)
 		return nil
 	})
@@ -714,7 +714,7 @@ func TestCallerCancellationIsNotATimeout(t *testing.T) {
 	h := newHarness(t)
 	h.engine.PhaseTimeout = time.Hour
 	ctx, cancel := context.WithCancel(t.Context())
-	h.engine.Prover = prove.Func(func(ctx context.Context, _ prove.Request) error {
+	h.engine.Prover = ports.ProveFunc(func(ctx context.Context, _ ports.ProveRequest) error {
 		cancel()
 		<-ctx.Done()
 		return ctx.Err()

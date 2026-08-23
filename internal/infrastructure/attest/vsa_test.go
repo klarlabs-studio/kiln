@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 )
 
@@ -134,7 +135,7 @@ func TestAFailedVerdictIsNotAPass(t *testing.T) {
 }
 
 func TestBuildProvenanceIsNotAVerificationSummary(t *testing.T) {
-	build, err := attest.Build(attest.Input{
+	build, err := attest.Build(ports.AttestInput{
 		SubjectName: "ghcr.io/x/y", SubjectDigest: "sha256:aaa", SHA: "abc",
 	})
 	if err != nil {

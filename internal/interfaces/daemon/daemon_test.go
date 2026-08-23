@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
-	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 )
 
@@ -53,7 +53,7 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 	}
 	// The gate and the publisher are stubbed: this package's job is the HTTP
 	// contract, not the build.
-	deps.Engine.Prover = prove.Func(func(context.Context, prove.Request) error { return nil })
+	deps.Engine.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error { return nil })
 	deps.Engine.Publisher = publish.Func(func(_ context.Context, r publish.Request) (publish.Result, error) {
 		return publish.Result{Digest: "sha256:abc", Tags: []string{"ghcr.io/x/y:latest"}, Signed: true}, nil
 	})
@@ -236,7 +236,7 @@ func TestRunRejectsAnUnresolvableCommit(t *testing.T) {
 
 func TestAFailedBuildIsA200WithSucceededFalse(t *testing.T) {
 	srv, _ := newServer(t)
-	srv.Deps.Engine.Prover = prove.Func(func(context.Context, prove.Request) error {
+	srv.Deps.Engine.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		return errors.New("lint failed")
 	})
 
@@ -451,7 +451,7 @@ func TestShutdownWaitsForInFlightBuilds(t *testing.T) {
 	srv, repo := newServer(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	srv.Deps.Engine.Prover = prove.Func(func(context.Context, prove.Request) error {
+	srv.Deps.Engine.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
 		close(started)
 		<-release
 		return nil

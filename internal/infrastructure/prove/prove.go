@@ -17,38 +17,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
-
-// Request is one prove invocation.
-type Request struct {
-	// RepoDir is the repository to check the commit out of.
-	RepoDir string
-	// SHA is the commit to gate.
-	SHA string
-	// Policy decides whether the gate sees the operator's secrets.
-	Policy isolation.Policy
-	// Nox runs the optional scanner after the gate passes.
-	Nox bool
-	// Output, when set, receives the gate's live stdout/stderr so an operator
-	// watching `kiln run` sees progress rather than a long silence.
-	Output io.Writer
-	// ServiceEnv carries the addresses of the run's service containers. The
-	// gate is usually what needs them — a test suite talking to the database
-	// beside it — so they have to survive the environment scrubbing below.
-	ServiceEnv []string
-}
-
-// Prover gates a commit.
-type Prover interface {
-	Prove(ctx context.Context, req Request) error
-}
 
 // Warden is the real prover: a disposable worktree plus
 // `warden run pre-push --attest-only` plus an optional `nox scan`.
@@ -70,11 +45,6 @@ func NewWarden(r execx.Runner, wardenBin, noxBin string) *Warden {
 	return &Warden{Runner: r, WardenBin: wardenBin, NoxBin: noxBin}
 }
 
-// ErrGateFailed reports that the gate ran and rejected the commit. It is
-// distinct from an infrastructure failure so the Check summary can say
-// "your change did not pass" rather than "kiln broke".
-var ErrGateFailed = errors.New("warden gate failed")
-
 // ErrToolMissing reports that a required binary is not installed.
 //
 // This is a prove *failure*, never a skip. A missing `warden` means the checks
@@ -85,7 +55,7 @@ var ErrToolMissing = errors.New("required tool missing")
 
 // Prove gates the commit. It returns nil only if the gate actually ran and
 // actually passed.
-func (w *Warden) Prove(ctx context.Context, req Request) error {
+func (w *Warden) Prove(ctx context.Context, req ports.ProveRequest) error {
 	if strings.TrimSpace(req.SHA) == "" {
 		return errors.New("prove: no commit")
 	}
@@ -109,7 +79,7 @@ func (w *Warden) Prove(ctx context.Context, req Request) error {
 	})
 }
 
-func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
+func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string) error {
 	env := w.env(req)
 
 	if _, err := w.Runner.Run(ctx, execx.Cmd{
@@ -136,7 +106,7 @@ func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
 		Stderr: req.Output,
 	}); err != nil {
 		if _, isExit := execx.ExitCode(err); isExit {
-			return fmt.Errorf("%w: %w", ErrGateFailed, err)
+			return fmt.Errorf("%w: %w", ports.ErrGateFailed, err)
 		}
 		return fmt.Errorf("prove: %w", err)
 	}
@@ -157,7 +127,7 @@ func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
 		Stderr: req.Output,
 	}); err != nil {
 		if _, isExit := execx.ExitCode(err); isExit {
-			return fmt.Errorf("%w: nox scan reported findings: %w", ErrGateFailed, err)
+			return fmt.Errorf("%w: nox scan reported findings: %w", ports.ErrGateFailed, err)
 		}
 		return fmt.Errorf("prove: nox scan: %w", err)
 	}
@@ -174,7 +144,7 @@ func (w *Warden) runGate(ctx context.Context, req Request, dir string) error {
 // concrete meaning of the fork row in the isolation matrix: the code about to
 // execute was authored by whoever opened the pull request, so the environment
 // it executes in must not contain a registry password to steal.
-func (w *Warden) env(req Request) []string {
+func (w *Warden) env(req ports.ProveRequest) []string {
 	if req.Policy.Secrets {
 		if len(req.ServiceEnv) == 0 {
 			return nil
@@ -193,9 +163,3 @@ func (w *Warden) env(req Request) []string {
 	// on this box — and a fork's tests need the database as much as anyone's.
 	return append(scrubbed, req.ServiceEnv...)
 }
-
-// Func adapts a function to the Prover interface, for tests and for the dry
-// surfaces that report a plan without gating anything.
-type Func func(ctx context.Context, req Request) error
-
-func (f Func) Prove(ctx context.Context, req Request) error { return f(ctx, req) }

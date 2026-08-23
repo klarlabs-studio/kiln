@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
@@ -359,8 +360,8 @@ func (u *recordingUploader) UploadReleaseAssetByTag(_ context.Context, tag, name
 	return u.err
 }
 
-func provenanceInput() attest.Input {
-	return attest.Input{
+func provenanceInput() ports.AttestInput {
+	return ports.AttestInput{
 		Repo: "klarlabs-studio/kiln", SHA: "c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
 		Ref: "refs/tags/v1.4.0", Event: "tag", GateReproved: true, KilnVersion: "v0.1.0",
 		InvocationID: "run-1", StartedOn: time.Unix(0, 0).UTC(),

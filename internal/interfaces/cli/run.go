@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
@@ -168,7 +169,7 @@ func classify(err error) error {
 		// A machine problem, not a code problem: the same bucket as a missing
 		// toolchain, so an operator alerting on 3 hears about it.
 		return wrapExit(ExitConfig, err)
-	case errors.Is(err, prove.ErrGateFailed):
+	case errors.Is(err, ports.ErrGateFailed):
 		return wrapExit(ExitFailed, err)
 	case errors.Is(err, prove.ErrToolMissing), errors.Is(err, publish.ErrToolMissing):
 		return wrapExit(ExitConfig, err)

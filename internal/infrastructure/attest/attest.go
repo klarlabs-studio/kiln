@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"go.klarlabs.de/kiln/internal/application/ports"
 )
 
 // The in-toto and SLSA type URIs this package emits. They are protocol
@@ -153,52 +155,13 @@ type ResourceDescriptor struct {
 	Name   string            `json:"name,omitempty"`
 }
 
-// Input is everything needed to describe one build. It is a plain struct
-// rather than a reference to the engine's types so this package stays
-// independent of them — a predicate format should not move when an internal
-// field is renamed.
-type Input struct {
-	// SubjectName and SubjectDigest identify the artifact. The digest is the
-	// full "sha256:..." form.
-	SubjectName   string
-	SubjectDigest string
-
-	Repo  string
-	SHA   string
-	Ref   string
-	Event string
-
-	// ArtifactKind is image or binaries; Config names the file that drove it.
-	ArtifactKind string
-	Config       string
-	// BuildArgs are the docker build arguments the image was built with, if
-	// any. Recorded so two images from one commit and one Dockerfile are
-	// distinguishable in their attestations.
-	BuildArgs map[string]string
-
-	// Isolated reports a credential-free build (a fork pull request).
-	Isolated bool
-	// GateTool, GateReproved and GateReason describe the source gate.
-	GateTool     string
-	GateReproved bool
-	GateReason   string
-
-	// KilnVersion and ToolVersions pin the builder.
-	KilnVersion  string
-	ToolVersions map[string]string
-
-	InvocationID string
-	StartedOn    time.Time
-	FinishedOn   time.Time
-}
-
 // Build assembles the statement.
 //
 // It never fails on missing optional context: a build with no known repository
 // still produces a valid statement, because a predicate that refuses to exist
 // teaches a verifier nothing. It does insist on a subject, since a statement
 // about nothing is not a statement.
-func Build(in Input) (Statement, error) {
+func Build(in ports.AttestInput) (Statement, error) {
 	alg, hex, ok := splitDigest(in.SubjectDigest)
 	if !ok {
 		return Statement{}, fmt.Errorf("attest: %q is not a digest of the form sha256:<hex>", in.SubjectDigest)
@@ -263,7 +226,7 @@ func Build(in Input) (Statement, error) {
 // sourceDependency pins the commit the artifact came from. gitCommit is the
 // digest algorithm SLSA reserves for exactly this, and it is what lets a
 // verifier walk from the artifact back to Warden's note.
-func sourceDependency(in Input) []ResourceDescriptor {
+func sourceDependency(in ports.AttestInput) []ResourceDescriptor {
 	if in.SHA == "" {
 		return nil
 	}
