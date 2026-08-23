@@ -777,3 +777,61 @@ func TestAnUnreadableSummaryDoesNotBlockTheBuild(t *testing.T) {
 		}
 	}
 }
+
+// TestKeyedSigningUsesTheConfiguredKey covers the signing mode a self-hosted
+// builder has to run in. Keyless needs an OIDC identity to prove; on a box with
+// none, cosign drops to the browser device flow and blocks until the code
+// expires — which on a multi-image tag leaves some images signed and some not.
+func TestKeyedSigningUsesTheConfiguredKey(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	d := newPublisher(fake)
+	d.SigningKey = "cosign.key"
+
+	if _, err := d.Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head,
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	sign := fake.Find("cosign sign")
+	if sign == nil {
+		t.Fatalf("nothing was signed: %s", fake.Transcript())
+	}
+	if !strings.Contains(sign.String(), "--key cosign.key") {
+		t.Errorf("cosign sign = %q, want the configured key", sign.String())
+	}
+	// The signature and the provenance must be made by the same signer. A
+	// keyed signature next to a keyless attestation is two claims by two
+	// identities about one artifact, and a verifier pinned to one of them
+	// silently rejects the other.
+	attest := fake.Find("cosign attest")
+	if attest == nil {
+		t.Fatalf("no provenance was attached: %s", fake.Transcript())
+	}
+	if !strings.Contains(attest.String(), "--key cosign.key") {
+		t.Errorf("cosign attest = %q, want the same key the signature used", attest.String())
+	}
+}
+
+// TestKeylessSigningStaysTheDefault pins the no-key path, so configuring keyed
+// signing for one box cannot quietly change what every other box does.
+func TestKeylessSigningStaysTheDefault(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	if _, err := newPublisher(fake).Publish(t.Context(), Request{
+		RepoDir: repo.Dir, SHA: head,
+		Ref: "refs/heads/main", Artifact: cfg(config.TagSHA, config.TagLatest),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if sign := fake.Find("cosign sign"); sign == nil || strings.Contains(sign.String(), "--key") {
+		t.Errorf("cosign sign = %v, want no key", sign)
+	}
+}

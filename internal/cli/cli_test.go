@@ -139,6 +139,72 @@ func TestDoctorWarnsAboutTheMissingToken(t *testing.T) {
 	}
 }
 
+// TestDoctorWarnsAboutUnattendedKeylessSigning covers the mode that cost a
+// release: keyless signing on a box with no OIDC identity does not fail, it
+// blocks on a browser device flow until the code expires, part-way through a
+// multi-image tag.
+func TestDoctorWarnsAboutUnattendedKeylessSigning(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "keyless signing with no OIDC identity") {
+		t.Errorf("doctor should warn that keyless cannot run unattended here:\n%s", out)
+	}
+	if !strings.Contains(out, "KILN_COSIGN_KEY") {
+		t.Errorf("doctor should name the variable that fixes it:\n%s", out)
+	}
+}
+
+func TestDoctorReportsKeyedSigning(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "awskms://alias/kiln")
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "keyed signing") || !strings.Contains(out, "awskms://") {
+		t.Errorf("doctor should report the signing mode in effect:\n%s", out)
+	}
+	if strings.Contains(out, "COSIGN_PASSWORD") {
+		t.Errorf("a KMS key needs no passphrase; doctor should not ask for one:\n%s", out)
+	}
+}
+
+// TestDoctorWarnsAboutAnUnpasswordedKeyFile covers the second hang: cosign
+// prompts for an encrypted key's passphrase, and an unattended run cannot
+// answer.
+func TestDoctorWarnsAboutAnUnpasswordedKeyFile(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "cosign.key")
+	// t.Setenv registers the restore; unsetting after it is how a test reaches
+	// the genuinely-absent case, which is the only one that prompts.
+	t.Setenv("COSIGN_PASSWORD", "")
+	if err := os.Unsetenv("COSIGN_PASSWORD"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "COSIGN_PASSWORD is unset") {
+		t.Errorf("doctor should warn about the passphrase prompt:\n%s", out)
+	}
+}
+
+// TestDoctorAcceptsAnEmptyCosignPassword pins the distinction the warning
+// depends on: an unencrypted key is configured by setting the variable empty,
+// and warning there would send the operator to fix a working setup.
+func TestDoctorAcceptsAnEmptyCosignPassword(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "cosign.key")
+	t.Setenv("COSIGN_PASSWORD", "")
+
+	out, _, _ := capture(t, "doctor")
+
+	if strings.Contains(out, "COSIGN_PASSWORD is unset") {
+		t.Errorf("an empty passphrase is set, not unset:\n%s", out)
+	}
+}
+
 func TestDoctorWithoutAPipelineIsAWarningNotAFailure(t *testing.T) {
 	repoWith(t, "")
 

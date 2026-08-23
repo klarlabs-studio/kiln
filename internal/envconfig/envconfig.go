@@ -44,6 +44,25 @@ type Env struct {
 	// TrustedKeys are the signer keys a warden note must match before Kiln will
 	// skip a re-prove. Operator-pinned; never sourced from a PR head.
 	TrustedKeys []string
+	// CosignKey is the signing key for publish (KILN_COSIGN_KEY). Empty selects
+	// keyless signing, which mints an ephemeral key against an OIDC identity.
+	//
+	// Keyless is the better default where an OIDC identity exists to prove —
+	// a CI runner with a workload identity. It is unusable on a self-hosted
+	// box: with no identity to present, cosign falls back to the device flow
+	// and blocks on a browser nobody is in front of, which is a hang rather
+	// than a failure and eventually expires mid-publish, leaving a tag with
+	// some images signed and some not.
+	//
+	// The value is passed to cosign's --key, so it takes any form cosign does:
+	// a file path, env://VAR, k8s://namespace/secret, or a KMS URI
+	// (awskms://, gcpkms://, azurekms://, hashivault://). A KMS URI is the way
+	// to keep the private key off the build box entirely.
+	//
+	// An encrypted key file additionally needs COSIGN_PASSWORD in the
+	// environment; cosign reads that itself, and prompts without it — the same
+	// hang in a different place.
+	CosignKey string
 	// Token authorizes GitHub Checks and the PR fork lookup. Without it, Kiln
 	// posts no Checks and treats every pull request as a fork.
 	Token string
@@ -83,6 +102,7 @@ func Load() Env {
 		Nox:           firstNonEmpty(os.Getenv("KILN_NOX"), DefaultNox),
 		Goreleaser:    firstNonEmpty(os.Getenv("KILN_GORELEASER"), DefaultGoreleaser),
 		TrustedKeys:   splitList(os.Getenv("KILN_TRUSTED_KEYS")),
+		CosignKey:     strings.TrimSpace(os.Getenv("KILN_COSIGN_KEY")),
 		Token:         firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
 		Repository:    os.Getenv("GITHUB_REPOSITORY"),
 		MCPAllowRun:   truthy(os.Getenv("KILN_MCP_ALLOW_RUN")),

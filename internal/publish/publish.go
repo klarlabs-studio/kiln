@@ -111,6 +111,10 @@ type Docker struct {
 	// the defaults, which are tuned for a registry having a bad minute rather
 	// than for a registry that is down.
 	PushRetries int
+	// SigningKey selects keyed signing (KILN_COSIGN_KEY). Empty stays keyless.
+	// See envconfig.Env.CosignKey for what the value may be and why a
+	// self-hosted builder needs one.
+	SigningKey string
 }
 
 // NewDocker builds a publisher.
@@ -119,6 +123,22 @@ func NewDocker(r execx.Runner, log obs.Logger) *Docker {
 		log = obs.Discard()
 	}
 	return &Docker{Runner: r, Log: log, Docker: "docker", Cosign: "cosign", PushRetries: 3}
+}
+
+// signingArgs prefixes a cosign signing invocation with the configured key.
+//
+// Keyed and keyless are the same command with one flag between them, so the
+// two paths share every retry, every error and every test — a keyed signature
+// cannot silently take a different route through this package than the keyless
+// one it replaced.
+func (d *Docker) signingArgs(args ...string) []string {
+	if d.SigningKey == "" {
+		return args
+	}
+	// After the subcommand, before the reference: cosign accepts flags in any
+	// position, but keeping them adjacent to the subcommand keeps the logged
+	// command readable.
+	return append([]string{args[0], "--key", d.SigningKey}, args[1:]...)
 }
 
 // Publish builds the image from a fresh checkout, pushes every tag, resolves
@@ -225,12 +245,12 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	err = d.withRetry(ctx, "cosign attest", func(ctx context.Context) error {
 		_, e := d.Runner.Run(ctx, execx.Cmd{
 			Name: d.Cosign,
-			Args: []string{
+			Args: d.signingArgs(
 				"attest", "--yes",
 				"--type", attest.CosignType,
 				"--predicate", path,
 				reference,
-			},
+			),
 			Dir:    req.RepoDir,
 			Stdout: req.Output, Stderr: req.Output,
 		})
@@ -491,7 +511,7 @@ func (d *Docker) sign(ctx context.Context, reference string, req Request) error 
 			Name: d.Cosign,
 			// --yes suppresses the keyless confirmation prompt; an unattended
 			// watch tick has no terminal to answer it on.
-			Args:   []string{"sign", "--yes", reference},
+			Args:   d.signingArgs("sign", "--yes", reference),
 			Dir:    req.RepoDir,
 			Stdout: req.Output, Stderr: req.Output,
 		})
