@@ -6,6 +6,19 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The internals are layered.** `internal/` is now
+  `domain`, `application`, `infrastructure` and `interfaces`, with `boot` as
+  the composition root. `internal/arch` walks every non-test file and fails
+  the build if an import points the wrong way, so the layering is checked
+  rather than merely intended.
+
+  Nothing users can see changed, and no behaviour with it. It is listed here
+  because every internal import path moved: a branch opened before this will
+  conflict across most files, and rebasing it is mostly a matter of
+  `internal/x` becoming `internal/<layer>/x`.
+
 ## [0.3.3] - 2026-08-23
 
 ### Fixed
