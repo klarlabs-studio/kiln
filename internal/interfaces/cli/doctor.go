@@ -11,12 +11,12 @@ import (
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/boot"
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/policyfile"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/task"
-	"go.klarlabs.de/kiln/internal/policy"
 )
 
 // runDoctor validates without executing.
@@ -469,7 +469,7 @@ func resolveCommit(ctx context.Context, deps *boot.Deps, commitish string) (stri
 // is the failure a silently-ignored field would otherwise cause at the worst
 // possible time.
 func checkPolicy(io IO, path string) error {
-	p, err := policy.Load(path)
+	p, err := policyfile.Load(path)
 	if err != nil {
 		return wrapExit(ExitConfig, err)
 	}

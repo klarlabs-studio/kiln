@@ -1,9 +1,6 @@
 package config
 
 import (
-	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -209,36 +206,6 @@ func TestWrongAPIVersionRejected(t *testing.T) {
 func TestEmptyDocumentRejected(t *testing.T) {
 	if err := parseErr(t, ""); !strings.Contains(err.Error(), "empty pipeline") {
 		t.Errorf("want empty rejection, got %v", err)
-	}
-}
-
-func TestLoadDirMissingFileIsNotFound(t *testing.T) {
-	p, err := LoadDir(t.TempDir())
-
-	if !errors.Is(err, ErrNotFound) {
-		t.Fatalf("err = %v, want ErrNotFound", err)
-	}
-	// A library repo with no pipeline still proves and still reports a Check.
-	if !p.Wants("push", StepProve) {
-		t.Error("default pipeline must prove")
-	}
-	if p.WantsPublish() {
-		t.Error("default pipeline must not publish")
-	}
-}
-
-func TestLoadDirReadsFile(t *testing.T) {
-	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, FileName), []byte(minimal), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	p, err := LoadDir(dir)
-	if err != nil {
-		t.Fatalf("LoadDir: %v", err)
-	}
-	if p.Publish[0].Image != "ghcr.io/klarlabs-studio/kiln" {
-		t.Errorf("image = %q", p.Publish[0].Image)
 	}
 }
 

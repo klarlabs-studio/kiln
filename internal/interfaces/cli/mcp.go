@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	"go.klarlabs.de/kiln/internal/boot"
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"

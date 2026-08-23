@@ -15,15 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
 	"gopkg.in/yaml.v3"
-
-	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 )
 
 // FileName is the pipeline file Kiln looks for at the repository root.
@@ -286,6 +283,13 @@ func (d Duration) Std() time.Duration { return time.Duration(d) }
 
 // Default is the pipeline used when a repository has no `.kiln.yaml`: prove
 // every event, publish nothing.
+// DefaultKeep is how many of an image's sha-tagged builds stay on the box.
+//
+// Ten is enough to cover a bad afternoon — a bisect, a few rollbacks, a
+// release gone sideways — without holding a month of images nobody will look
+// at. Anything older is still in the registry.
+const DefaultKeep = 10
+
 func Default() Pipeline {
 	p := Pipeline{
 		APIVersion: APIVersion,
@@ -299,31 +303,6 @@ func Default() Pipeline {
 	}
 	p.Watch.applyDefaults()
 	return p
-}
-
-// LoadDir reads `.kiln.yaml` from a repository root. A missing file returns
-// ErrNotFound alongside Default(), so a caller that does not care about the
-// distinction can ignore the error and still get a usable pipeline.
-func LoadDir(dir string) (Pipeline, error) {
-	return LoadFile(filepath.Join(dir, FileName))
-}
-
-// LoadFile reads a pipeline from an explicit path.
-func LoadFile(path string) (Pipeline, error) {
-	f, err := os.Open(path) //nolint:gosec // operator-supplied pipeline path
-	if err != nil {
-		if os.IsNotExist(err) {
-			return Default(), fmt.Errorf("%w at %s", ErrNotFound, path)
-		}
-		return Pipeline{}, fmt.Errorf("open %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
-	p, err := Parse(f)
-	if err != nil {
-		return Pipeline{}, fmt.Errorf("%s: %w", path, err)
-	}
-	return p, nil
 }
 
 // Parse decodes and validates a pipeline from any reader.
@@ -443,7 +422,7 @@ func (a *Artifact) applyDefaults() {
 	switch a.Kind {
 	case KindImage:
 		if a.Keep == nil {
-			a.Keep = intPtr(prune.DefaultKeep)
+			a.Keep = intPtr(DefaultKeep)
 		}
 		if len(a.Tags) == 0 {
 			a.Tags = []Tag{TagSHA, TagLatest}
@@ -859,7 +838,7 @@ func (p Pipeline) PrunableImages() map[string]int {
 		if a.Kind != KindImage || a.Image == "" {
 			continue
 		}
-		keep := prune.DefaultKeep
+		keep := DefaultKeep
 		if a.Keep != nil {
 			keep = *a.Keep
 		}

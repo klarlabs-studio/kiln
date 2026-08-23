@@ -7,9 +7,10 @@ import (
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/domain/policy"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/policyfile"
 	"go.klarlabs.de/kiln/internal/infrastructure/verify"
-	"go.klarlabs.de/kiln/internal/policy"
 )
 
 // runVerify walks a published artifact's provenance chain.
@@ -63,7 +64,7 @@ func runVerify(ctx context.Context, args []string, io IO) error {
 				"--policy already says whose signature counts; remove the conflicting flags "+
 					"(--key/--identity/--issuer/--trusted-keys) or drop --policy")
 		}
-		p, err := policy.Load(*policyPath)
+		p, err := policyfile.Load(*policyPath)
 		if err != nil {
 			return wrapExit(ExitError, err)
 		}

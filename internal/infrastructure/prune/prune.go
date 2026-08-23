@@ -31,16 +31,15 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 )
 
-// DefaultKeep is how many of an image's sha-tagged builds stay on the box.
-//
-// Ten is enough to cover a bad afternoon — a bisect, a few rollbacks, a
-// release gone sideways — without holding a month of images nobody will look
-// at. Anything older is still in the registry.
-const DefaultKeep = 10
+// DefaultKeep is re-exported so callers of this package need not reach past it
+// for the number. It is declared in the domain because how many builds to keep
+// is a decision about the product, not about docker.
+const DefaultKeep = config.DefaultKeep
 
 // DefaultBuildCacheMaxAge bounds how long build cache lives.
 //

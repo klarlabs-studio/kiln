@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"

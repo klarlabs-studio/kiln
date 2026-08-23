@@ -16,7 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/engine"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/credstore"
@@ -24,6 +24,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
+	"go.klarlabs.de/kiln/internal/infrastructure/pipelinefile"
 	"go.klarlabs.de/kiln/internal/infrastructure/prove"
 	"go.klarlabs.de/kiln/internal/infrastructure/provenance"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -213,14 +214,14 @@ func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
 	if explicit != "" {
 		// An explicitly named pipeline that does not exist is a mistake worth
 		// stopping for; a missing default one is not.
-		p, err := config.LoadFile(explicit)
+		p, err := pipelinefile.LoadFile(explicit)
 		if err != nil {
 			return config.Pipeline{}, false, err
 		}
 		return p, true, nil
 	}
 
-	p, err := config.LoadDir(dir)
+	p, err := pipelinefile.LoadDir(dir)
 	switch {
 	case errors.Is(err, config.ErrNotFound):
 		return p, false, nil

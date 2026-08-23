@@ -19,7 +19,7 @@ import (
 	"strings"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 )

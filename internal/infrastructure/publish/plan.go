@@ -7,7 +7,7 @@ import (
 	"sort"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 )
 
 // Plan is the set of references a publish will produce, resolved before

@@ -17,8 +17,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -82,21 +80,6 @@ type Source struct {
 	// source gate at all is a normal thing to verify, and reporting it as
 	// broken would train people to ignore the tool.
 	Required bool `yaml:"required,omitempty"`
-}
-
-// Load reads a policy from disk.
-func Load(path string) (Policy, error) {
-	f, err := os.Open(filepath.Clean(path))
-	if err != nil {
-		return Policy{}, fmt.Errorf("policy: open %s: %w", path, err)
-	}
-	defer func() { _ = f.Close() }()
-
-	p, err := Parse(f)
-	if err != nil {
-		return Policy{}, fmt.Errorf("%s: %w", path, err)
-	}
-	return p, nil
 }
 
 // Parse reads and validates a policy.

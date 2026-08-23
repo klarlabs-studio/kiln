@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 )
 
 // Three of senat-os's six images share one Dockerfile and differ only by a

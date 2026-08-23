@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/config"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"

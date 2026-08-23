@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"go.klarlabs.de/kiln/internal/policy"
+	"go.klarlabs.de/kiln/internal/domain/policy"
 )
 
 const minimal = `
