@@ -6,6 +6,26 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-23
+
+### Fixed
+
+- **`kiln login` panicked before it reached the API.** `WhoAmI` built a
+  `Client` literal instead of calling `NewClient`, leaving `HTTP` nil and
+  `BaseURL` empty, so the first request dereferenced a nil pointer. That is
+  step two of the three-command quick start, and it failed on every path —
+  interactive and `--with-token` alike. A box could not be set up at all
+  without writing the keychain by hand.
+
+  It shipped because `WhoAmI` had no test: every other call site goes through
+  the constructor that sets those fields, so nothing exercised the one place
+  that did not.
+
+  Note for whoever installs a box: **log in with the same binary the box will
+  run.** The keychain item names the permitted reader with `-T`, so a token
+  stored by a different build makes every unattended tick block on an invisible
+  permission dialog.
+
 ## [0.2.0] - 2026-08-22
 
 Putting kiln in front of a real fleet, and fixing what that exposed.
