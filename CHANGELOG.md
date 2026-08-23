@@ -6,6 +6,22 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`brew upgrade` locked every box out of its own token.** `kiln login` put
+  the running binary on the keychain item's trusted-application list after
+  resolving it through `EvalSymlinks` — under Homebrew,
+  `Caskroom/kiln/<version>/kiln`. Upgrading deletes that, so the next build is
+  not on the list, and a background schedule cannot read the token: it needs an
+  approval dialog it has no way to answer. The box then runs credential-less,
+  which means no commit statuses and every pull request treated as a fork,
+  announced by one `warn` line.
+
+  This is the same mistake as the launchd plist, in a second place, so the
+  answer now lives in one place — `binpath.Stable`, used by both. The access
+  list names the path the package manager repoints, and the resolved binary as
+  well when they differ.
+
 ## [0.4.0] - 2026-08-23
 
 ### Added

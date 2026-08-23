@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/infrastructure/binpath"
+
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
 
@@ -185,10 +187,31 @@ func (s *Store) trustedApps() []string {
 	if err != nil {
 		return nil
 	}
-	if resolved, err := filepath.EvalSymlinks(exe); err == nil {
-		exe = resolved
+	return trustedFor(exe)
+}
+
+// trustedFor is the access list for the running binary.
+//
+// It names the stable path first — the one a package manager repoints on
+// upgrade. Resolving instead, which is what this did, wrote
+// Caskroom/kiln/<version>/kiln under Homebrew; `brew upgrade` deletes that
+// directory, the next build is not on the list, and a background schedule
+// cannot read the token because it needs an approval dialog it has no way to
+// answer. Exactly the launchd plist's bug, in a second place.
+//
+// The resolved binary is listed too when it differs. The stable name is what
+// survives an upgrade; the concrete one is what this process actually is, and
+// listing both costs nothing.
+func trustedFor(exe string) []string {
+	stable := binpath.Stable(exe)
+	args := []string{"-T", stable}
+	// Compared as text, because that is what the access list stores. The two
+	// can name one file — a symlink and its target do — and listing both is
+	// harmless, where listing only the resolved one is the bug being fixed.
+	if resolved, err := filepath.EvalSymlinks(exe); err == nil && resolved != stable {
+		args = append(args, "-T", resolved)
 	}
-	return []string{"-T", exe}
+	return args
 }
 
 // keychainReadTimeout bounds the read.
