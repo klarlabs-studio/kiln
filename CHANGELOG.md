@@ -33,6 +33,14 @@ All notable changes to kiln are documented here. The format follows
   Together with the closed pull request fix, a first tick on senat-os goes
   from 523 jobs to 3.
 
+### Changed
+
+- **`docs/operating.md` said GitHub deletes `refs/pull/N/head` when a pull
+  request closes.** It does not, and that belief is what produced the bug
+  above. The tick description now says what actually happens, and a new
+  section describes what a box installed on an existing repository does *not*
+  do with that repository's history.
+
 ### Fixed
 
 - **A box gated every pull request the repository had ever had.** Discovery
