@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-23
+
 ### Fixed
 
 - **A box that lost its token replayed every merged pull request.** The
