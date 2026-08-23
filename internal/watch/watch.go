@@ -399,7 +399,7 @@ func (w *Watcher) discover(ctx context.Context) ([]Job, error) {
 		jobs = append(jobs, tagJobs...)
 	}
 	if w.Pipeline.WatchPullRequests() {
-		prJobs, err := w.pullJobs(ctx)
+		prJobs, err := w.pullJobs(ctx, branchJob.SHA)
 		if err != nil {
 			return nil, err
 		}
@@ -543,7 +543,7 @@ func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
 // the API. Without one, every pull request is treated as a fork — the only
 // safe reading of "I cannot tell", since the alternative hands an unknown
 // author the operator's credentials.
-func (w *Watcher) pullJobs(ctx context.Context) ([]Job, error) {
+func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, error) {
 	res, err := w.Runner.Run(ctx, execx.Cmd{
 		Name: "git",
 		Args: []string{"for-each-ref", "--format=%(refname)\t%(objectname)", PRRefNamespace},
@@ -553,10 +553,11 @@ func (w *Watcher) pullJobs(ctx context.Context) ([]Job, error) {
 		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
 
-	forks := w.forkStatus(ctx)
+	open, authoritative := w.forkStatus(ctx)
 	log := w.logger()
 
 	var jobs []Job
+	var closed int
 	for line := range strings.SplitSeq(res.Output(), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -571,11 +572,12 @@ func (w *Watcher) pullJobs(ctx context.Context) ([]Job, error) {
 			continue
 		}
 
-		fork, known := forks[number]
-		if !known {
-			// Either there is no token, or the pull request has since closed.
-			// Fail closed.
-			fork = true
+		fork, build := pullDecision(number, open, authoritative, func() bool {
+			return w.mergedIntoBranch(ctx, sha, branchTip)
+		})
+		if !build {
+			closed++
+			continue
 		}
 		jobs = append(jobs, Job{
 			SHA:   sha,
@@ -585,27 +587,86 @@ func (w *Watcher) pullJobs(ctx context.Context) ([]Job, error) {
 			Label: fmt.Sprintf("PR #%d", number),
 		})
 	}
+	// Said out loud: a box that quietly builds nothing looks identical to a
+	// box that is broken, and "why is my pull request not being gated" is the
+	// question this number answers.
+	if closed > 0 {
+		log.Info("skipped closed pull requests",
+			"count", closed, "built", len(jobs),
+			"why", "refs/pull/N/head outlives the pull request it belonged to")
+	}
 	return jobs, nil
 }
 
 // forkStatus asks GitHub which open pull requests are same-repo. An empty map
 // means "unknown", which pullJobs reads as "assume fork".
-func (w *Watcher) forkStatus(ctx context.Context) map[int]bool {
+// pullDecision says whether a discovered pull ref should be built, and whether
+// it must be treated as a fork.
+//
+// GitHub keeps refs/pull/N/head forever, for every pull request ever opened, so
+// the refs on a remote are the repository's whole history of them — 390 against
+// 2 still open, on one repo here. Building them all re-gates that history on a
+// box's first tick and posts a status on every long-merged commit.
+//
+// merged is a thunk because it costs a git call: it is only consulted when
+// there is no authoritative answer to be had.
+func pullDecision(number int, open map[int]bool, authoritative bool, merged func() bool) (fork, build bool) {
+	fork, isOpen := open[number]
+	switch {
+	case isOpen:
+		// The API listed it: build it, with the fork-ness it reported.
+		return fork, true
+	case authoritative:
+		// The API answered and this number is not in it — closed or merged.
+		return false, false
+	case merged():
+		// No authoritative list, but the head is already contained in the
+		// watched branch, so it has certainly been merged.
+		return false, false
+	default:
+		// Unknown and unmerged: build it, failing closed as a fork. The
+		// alternative hands an unknown author the operator's credentials.
+		return true, true
+	}
+}
+
+// forkStatus reports fork-ness per OPEN pull request, and whether that list is
+// authoritative. Authoritative means the API answered: a number missing from
+// the map is then known to be closed, rather than merely unknown.
+func (w *Watcher) forkStatus(ctx context.Context) (map[int]bool, bool) {
 	if w.GitHub == nil || !w.GitHub.Enabled() {
 		w.logger().Warn("no github token: treating every pull request as a fork",
 			"effect", "no secrets, no publish, no provenance skip on any PR")
-		return nil
+		return nil, false
 	}
 	pulls, err := w.GitHub.ListOpenPulls(ctx)
 	if err != nil {
 		w.logger().Warn("could not list pull requests: treating every one as a fork", "err", err)
-		return nil
+		return nil, false
 	}
 	out := make(map[int]bool, len(pulls))
 	for _, p := range pulls {
 		out[p.Number] = p.Fork
 	}
-	return out
+	return out, true
+}
+
+// mergedIntoBranch reports that a pull request head is already contained in the
+// watched branch.
+//
+// The fallback for a box with no token: a head that is an ancestor of the
+// branch has been merged, whatever the API would have said. It costs one
+// merge-base per ref and no network.
+func (w *Watcher) mergedIntoBranch(ctx context.Context, sha, branchTip string) bool {
+	if sha == "" || branchTip == "" {
+		return false
+	}
+	_, err := w.Runner.Run(ctx, execx.Cmd{
+		Name: "git",
+		Args: []string{"merge-base", "--is-ancestor", sha, branchTip},
+		Dir:  w.Dir,
+	})
+	return err == nil
 }
 
 func (w *Watcher) logger() obs.Logger {
