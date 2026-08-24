@@ -6,6 +6,24 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Security
+
+- **Releases were built with a Go toolchain fourteen patch releases behind.**
+  CI resolves the toolchain from `go.mod`, and `setup-go` reads the `go`
+  directive as an exact version — so every build used `go1.25.0`. `kiln 0.4.1`
+  reports it under `go version -m`.
+
+  govulncheck has been reporting this across the fleet and nobody could see it:
+  the failing step's log is not retrievable, so the findings only appear in the
+  check's annotations. They are all reachable call paths into the standard
+  library — `net/url`, `html/template`, `crypto/tls`, `net/http` — fixed in
+  `go1.25.13`.
+
+  A `toolchain` directive fixes the artifact rather than silencing the check.
+  The `go` directive stays at `1.25.0`, so nothing importing this module has
+  its floor raised; the Go command builds with `go1.25.14` everywhere,
+  including a developer's laptop.
+
 ## [0.4.1] - 2026-08-24
 
 ### Changed
