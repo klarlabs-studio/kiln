@@ -2,6 +2,19 @@ module go.klarlabs.de/kiln
 
 go 1.25.0
 
+// The language floor above is what consumers must meet. This is what the Go
+// command actually builds with, and it is a different question: go1.25.0 is
+// fourteen patch releases behind, and govulncheck reports reachable call paths
+// into its standard library — asn1.Unmarshal, tls.Conn.Write,
+// template.Template.Execute among them.
+//
+// CI resolves the toolchain from this file, so without this line every
+// release carries those vulnerabilities: kiln 0.4.1 reports go1.25.0 under
+// `go version -m`. Raising the go directive instead would fix the artifact
+// and raise the floor for anything importing this module, which is a cost
+// with no matching benefit.
+toolchain go1.25.14
+
 require (
 	go.klarlabs.de/bolt v1.6.0
 	go.klarlabs.de/fortify v1.10.0
