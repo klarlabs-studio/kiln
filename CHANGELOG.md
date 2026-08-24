@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-08-24
+
 ### Changed
 
 - **The release workflow runs the test suite in the environment CI runs it
