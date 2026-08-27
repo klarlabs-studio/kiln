@@ -61,10 +61,12 @@ the checksum manifest, signed keylessly by the release workflow, plus a
 CycloneDX SBOM per archive:
 
 ```bash
+VERSION=v0.4.1   # the release you downloaded
+
 cosign verify-blob \
   --bundle checksums.txt.bundle \
   --certificate-identity \
-    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0" \
+    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   checksums.txt
 sha256sum --check --ignore-missing checksums.txt
@@ -72,6 +74,18 @@ sha256sum --check --ignore-missing checksums.txt
 
 The identity is the point: the signature names the workflow and the tag that
 produced the file, so it cannot be reused for a build made anywhere else.
+That is also why `$VERSION` has to match the release you actually downloaded
+— this command used to carry a hardcoded `v0.1.0`, so running it against any
+later release failed with
+
+```
+failed to verify certificate identity: no matching CertificateIdentity found,
+expected SAN value "...@refs/tags/v0.1.0", got "...@refs/tags/v0.4.1"
+```
+
+which reads exactly like a forged artifact and is nothing of the sort. An
+instruction that makes a good release look tampered with costs more trust
+than it buys.
 
 Kiln shells out to tools that must already be on the box:
 
@@ -283,6 +297,16 @@ cosign verify-blob-attestation --key cosign.pub \
   --type https://slsa.dev/provenance/v1 \
   --bundle provenance.intoto.jsonl checksums.txt
 ```
+
+That is for a release **kiln published** — its publisher writes
+`provenance.intoto.jsonl` beside the checksums and signs with the key you
+gave it.
+
+Kiln's own releases are not among them: they are cut by goreleaser in
+`release.yml` and signed keylessly, so they carry `checksums.txt.bundle` and
+no `cosign.pub`. Verifying those is the `cosign verify-blob` command at the
+top of this README. Pointing the command above at a kiln release fails on a
+missing file, which looks like a verification failure and is not one.
 
 ### Verifying without kiln
 
