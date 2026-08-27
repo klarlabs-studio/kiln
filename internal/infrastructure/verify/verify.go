@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
 
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
@@ -570,8 +571,43 @@ func orNone(s string) string {
 // verbose on failure and the actionable part is at the end.
 func condense(err error) string {
 	msg := err.Error()
-	if i := strings.LastIndex(msg, ": "); i > 0 && i < len(msg)-2 {
-		return msg[i+2:]
+	i := strings.LastIndex(msg, ": ")
+	if i <= 0 || i >= len(msg)-2 {
+		return msg
 	}
-	return msg
+	tail := msg[i+2:]
+
+	// Keep the segment before it when the tail cannot stand alone.
+	//
+	// Real example, from cosign refusing a signature with no transparency-log
+	// entry: "…: not enough verified log entries from transparency log: 0 < 1".
+	// The last segment is "0 < 1", so the operator was shown
+	//
+	//     FAIL     signature    0 < 1
+	//
+	// which names neither what failed nor what to do about it. A verification
+	// tool that cannot explain a refusal teaches people to route around it,
+	// and that costs more trust than the refusal buys.
+	//
+	// The rule is deliberately narrow: a tail carrying no letters at all is
+	// a bare comparison, count or code, and means nothing without its clause.
+	// Anything that reads as a sentence is left exactly as it was.
+	if !hasLetter(tail) {
+		if j := strings.LastIndex(msg[:i], ": "); j > 0 {
+			return msg[j+2:]
+		}
+		return msg
+	}
+	return tail
+}
+
+// hasLetter reports whether s contains any letter, i.e. whether it says
+// something rather than merely showing a number.
+func hasLetter(s string) bool {
+	for _, r := range s {
+		if unicode.IsLetter(r) {
+			return true
+		}
+	}
+	return false
 }

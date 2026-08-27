@@ -444,3 +444,58 @@ func TestTheOnlyAttestationIsReportedEvenIfWeak(t *testing.T) {
 		t.Errorf("source gate = %+v, want the missing commit reported", got)
 	}
 }
+
+// TestCondenseKeepsTheClauseWhenTheTailIsBare pins the message an operator
+// actually reads when verification refuses something.
+//
+// The string below is verbatim from cosign 3.1.3 declining a signature with no
+// transparency-log entry. condense used to take everything after the last
+// ": ", which here is "0 < 1" — so kiln printed
+//
+//	FAIL     signature    0 < 1
+//
+// naming neither what failed nor what to do. That is a trust problem, not a
+// cosmetic one: a verifier that cannot explain a refusal teaches people to
+// route around it, and a refusal nobody understands is worth less than no
+// refusal at all.
+func TestCondenseKeepsTheClauseWhenTheTailIsBare(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   string
+		want string
+	}{
+		{
+			name: "cosign transparency log, verbatim",
+			in: "no matching attestations: failed to verify log inclusion: " +
+				"not enough verified log entries from transparency log: 0 < 1",
+			want: "not enough verified log entries from transparency log: 0 < 1",
+		},
+		{
+			// The weakest case the narrow rule permits: "exit status 1" has
+			// letters, so it survives alone. It is thin, but the Link beside
+			// it already names which check failed, and widening the rule to
+			// catch it would start expanding messages that are fine.
+			name: "a tail with letters survives even when thin",
+			in:   "publish: cosign attest failed: exit status 1",
+			want: "exit status 1",
+		},
+		{
+			// "exit status 1" contains letters, so it survives on its own —
+			// this is the case the old rule handled correctly and must keep.
+			name: "a sentence tail is left alone",
+			in:   "prove: warden run pre-push: permission denied",
+			want: "permission denied",
+		},
+		{
+			name: "no separator at all is returned whole",
+			in:   "cosign is not installed",
+			want: "cosign is not installed",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := condense(errors.New(tc.in)); got != tc.want {
+				t.Errorf("condense:\n got %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+}
