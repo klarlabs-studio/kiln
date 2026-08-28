@@ -25,16 +25,40 @@ REG_NAME=kiln-e2e-reg
 WORK=$(mktemp -d)
 trap 'docker rm -f "$REG_NAME" >/dev/null 2>&1 || true; rm -rf "$WORK"' EXIT
 
+missing=""
 for tool in docker cosign go; do
-  command -v "$tool" >/dev/null || { echo "SKIP: $tool not installed"; exit 0; }
+  command -v "$tool" >/dev/null 2>&1 || missing="$missing $tool"
 done
-docker info >/dev/null 2>&1 || { echo "SKIP: docker is not running"; exit 0; }
+if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1; then
+  missing="$missing docker-daemon"
+fi
+
+# Skip on a laptop that lacks the tools; FAIL when the caller says the
+# environment was prepared.
+#
+# The order matters and got this wrong once: the skip used to come first, so a
+# CI run whose cosign install had failed would skip every check and report
+# green. A skip is a pass as far as CI is concerned, which makes "skipped
+# everything" the most dangerous outcome this script has.
+if [ -n "$missing" ]; then
+  if [ -n "${KILN_E2E_REGISTRY_RUNNING:-}" ]; then
+    echo "FAIL: prepared environment is missing:$missing"
+    exit 1
+  fi
+  echo "SKIP: not installed:$missing"
+  exit 0
+fi
 
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 go build -o "$WORK/kiln" "$REPO_ROOT/cmd/kiln"
 
-docker rm -f "$REG_NAME" >/dev/null 2>&1 || true
-docker run -d --name "$REG_NAME" -p "$REG_PORT:5000" registry:2 >/dev/null
+# In CI the registry is a service container that already holds the port, so
+# starting a second one just fails on the bind. KILN_E2E_REGISTRY_RUNNING says
+# "one is already there, use it and do not clean it up".
+if [ -z "${KILN_E2E_REGISTRY_RUNNING:-}" ]; then
+  docker rm -f "$REG_NAME" >/dev/null 2>&1 || true
+  docker run -d --name "$REG_NAME" -p "$REG_PORT:5000" registry:2 >/dev/null
+fi
 cd "$WORK"
 
 export COSIGN_PASSWORD=""

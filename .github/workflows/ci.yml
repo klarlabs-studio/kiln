@@ -72,3 +72,40 @@ jobs:
             echo "== $f (pipeline)"
             ./bin/kiln doctor --config-only --pipeline "$f"
           done
+
+  verify-e2e:
+    name: Verify (real cosign)
+    runs-on: ubuntu-latest
+    # Every unit test of the verify path scripts cosign with a fake, which
+    # proves "given cosign says X, kiln concludes Y" and cannot prove "cosign,
+    # run with kiln's arguments, says X". This job is the second half, and it
+    # found a defect the first time it ran: a refusal rendered as
+    # "FAIL signature 0 < 1", explanation discarded.
+    #
+    # It runs here rather than behind an opt-in env var on purpose. A test
+    # nobody runs is worse than no test, because it reads as coverage.
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    services:
+      # The script starts its own registry when run by hand; in CI a service
+      # container is more reliable than docker-in-docker timing.
+      registry:
+        image: registry:2
+        ports:
+          - 5555:5000
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      - name: kiln verify against real cosign
+        env:
+          # The service container above already holds the port, so the script
+          # must not try to start a second registry.
+          KILN_E2E_REGISTRY_RUNNING: "1"
+        run: ./scripts/e2e-verify.sh
