@@ -426,6 +426,7 @@ func (e *Engine) provenanceInput(
 		// should not have to infer it from the event name.
 		Isolated:     !policy.Secrets,
 		GateTool:     "warden",
+		GateVerified: true, // kiln does not reach a publish otherwise
 		GateReproved: !r.Skipped,
 		GateReason:   gate.Reason,
 		KilnVersion:  e.KilnVersion,

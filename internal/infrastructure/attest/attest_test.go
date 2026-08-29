@@ -20,6 +20,7 @@ func input() ports.AttestInput {
 		ArtifactKind:  "image",
 		Config:        "Dockerfile",
 		GateTool:      "warden",
+		GateVerified:  true, // as engine.go sets it: kiln publishes nothing ungated
 		GateReproved:  true,
 		GateReason:    "checks ran",
 		KilnVersion:   "v0.1.0",

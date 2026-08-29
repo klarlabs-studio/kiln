@@ -81,6 +81,7 @@ Usage:
   kiln watch --repos /srv/*             the same, across a fleet, from one process
   kiln poll [--once | --every D]        watch, restricted to the tracked branch
   kiln status [run-id]                  show the latest run, or a named one
+  kiln attest --subject S --commit C    emit provenance for an artifact built elsewhere
   kiln verify <ref> [--key k]           check a published artifact's whole chain
   kiln prune [--dry-run]                reclaim local docker disk for this pipeline
   kiln mcp serve                        MCP server over stdio
@@ -143,6 +144,8 @@ func Main(ctx context.Context, args []string, io IO) int {
 		return report(io, runWatch(ctx, rest, io, true))
 	case "status":
 		return report(io, runStatus(ctx, rest, io))
+	case "attest":
+		return report(io, runAttest(ctx, rest, io))
 	case "verify":
 		return report(io, runVerify(ctx, rest, io))
 	case "prune":

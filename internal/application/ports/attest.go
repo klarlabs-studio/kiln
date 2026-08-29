@@ -19,6 +19,16 @@ type AttestInput struct {
 	Ref   string
 	Event string
 
+	// BuilderID overrides the build platform recorded in the provenance.
+	//
+	// Empty means kiln built it, and kiln says so. It is set when something
+	// else did — a GitLab pipeline, a Jenkins job — because the builder id is
+	// the field a verifier pins its trust on (RollOps calls it AllowedBuilders),
+	// and a foreign CI claiming to be kiln would be claiming a gate it never
+	// ran. Whoever signs decides what they claim; the verifier decides whose
+	// claims it accepts.
+	BuilderID string
+
 	// ArtifactKind is image or binaries; Config names the file that drove it.
 	ArtifactKind string
 	Config       string
@@ -29,8 +39,16 @@ type AttestInput struct {
 
 	// Isolated reports a credential-free build (a fork pull request).
 	Isolated bool
-	// GateTool, GateReproved and GateReason describe the source gate.
+	// GateTool, GateVerified, GateReproved and GateReason describe the source
+	// gate.
+	//
+	// GateVerified used to be assumed: kiln only reaches a publish after the
+	// gate is satisfied, so the predicate hardcoded verified: true. That holds
+	// for kiln and breaks the moment anything else builds the predicate — a
+	// pipeline that ran no gate would still emit a verdict saying one passed,
+	// which is the single claim this field exists to make checkable.
 	GateTool     string
+	GateVerified bool
 	GateReproved bool
 	GateReason   string
 
