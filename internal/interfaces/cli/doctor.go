@@ -283,15 +283,51 @@ func (r *doctorReport) checkSigningMode(deps *boot.Deps) {
 	}
 
 	if scheme, _, ok := strings.Cut(key, "://"); ok {
-		r.ok("keyed signing: %s, so the private key never sits on this box", scheme+"://")
-		return
+		switch scheme {
+		case "env":
+			// env:// is a reference in syntax and material in fact: cosign
+			// reads the key out of this process's environment. Reporting it
+			// beside the KMS schemes as "never sits on this box" was a false
+			// reassurance about the one remote-looking form that is not
+			// remote — and it is inherited by every child process kiln spawns
+			// unless the isolation policy scrubs it.
+			r.warn("keyed signing from the environment: the private key is IN this process, " +
+				"not held remotely — a KMS URI (awskms://, gcpkms://, azurekms://, " +
+				"hashivault://) or k8s:// keeps it off the box")
+			r.warnIfNoCosignPassword()
+			return
+		case "k8s":
+			// Documented here because the failure is unrecognisable: cosign
+			// reads the passphrase from the secret's own cosign.password
+			// field, which is what `cosign generate-key-pair k8s://…` writes,
+			// and does NOT consult COSIGN_PASSWORD on this path. A secret
+			// carrying it under another name fails with a bare "decryption
+			// failed" that reads like a wrong key.
+			r.ok("keyed signing: k8s://, so the private key never sits on this box " +
+				"(the passphrase comes from the secret's own cosign.password field, " +
+				"not COSIGN_PASSWORD)")
+			return
+		default:
+			r.ok("keyed signing: %s, so the private key never sits on this box", scheme+"://")
+			return
+		}
 	}
 	r.ok("keyed signing with the key file %s", key)
-	// LookupEnv, not Getenv: an unencrypted key is used by setting
-	// COSIGN_PASSWORD to the empty string, so "set and empty" is a valid
-	// configuration and only "unset" is the one that prompts.
+	r.warnIfNoCosignPassword()
+}
+
+// warnIfNoCosignPassword reports the prompt an unattended run cannot answer.
+//
+// LookupEnv, not Getenv: an unencrypted key is used by setting COSIGN_PASSWORD
+// to the empty string, so "set and empty" is a valid configuration and only
+// "unset" is the one that prompts.
+//
+// Shared by the key-file and env:// paths because both hold material that may
+// be encrypted. The KMS and k8s schemes do not: the former never sees a
+// passphrase, and the latter reads one from the secret itself.
+func (r *doctorReport) warnIfNoCosignPassword() {
 	if _, set := os.LookupEnv("COSIGN_PASSWORD"); !set {
-		r.warn("COSIGN_PASSWORD is unset: an encrypted key file makes cosign prompt for the " +
+		r.warn("COSIGN_PASSWORD is unset: an encrypted key makes cosign prompt for the " +
 			"passphrase, which an unattended run cannot answer (set it to an empty value for " +
 			"an unencrypted key)")
 	}
