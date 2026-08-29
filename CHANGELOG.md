@@ -6,6 +6,99 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-08-29
+
+A private key that reached the ledger, a form of key storage doctor called
+safe, and a way to build against a private dependency without publishing the
+credential.
+
+### Added
+
+- **Build secrets, for images whose dependencies are private.** An image that
+  fetches a private dependency needs a credential to do it, and there was no
+  way to supply one. `args` is not that way: a build argument is recorded in
+  image history, so a token in one ships with the artifact.
+
+  ```yaml
+  publish:
+    - kind: image
+      image: ghcr.io/acme/web
+      secrets:
+        node_auth: env://NODE_AUTH_TOKEN
+  ```
+
+  Each entry becomes `--secret id=<key>,env=<VAR>`. BuildKit keeps the value
+  out of the image and its history by construction, and kiln sets
+  `DOCKER_BUILDKIT=1` for any build that uses one, since `--secret` is a
+  BuildKit flag and an older daemon would fail on an unknown argument.
+
+  This is not the passthrough `args` refuses. That rule protects
+  reproducibility — a build argument changes what goes *into* the image, so
+  sourcing one from the box would make the artifact depend on something the
+  commit does not record. A secret is permission to *fetch* what the commit
+  already pins, and never enters the image. `env://` only: a literal would be
+  a credential committed to the repository, a path would tie the pipeline to
+  one box's layout.
+
+### Fixed
+
+- **`doctor` called `env://` remote, and it is not.** Any `KILN_COSIGN_KEY`
+  containing `://` was reported as "the private key never sits on this box".
+  True for `awskms://`, `gcpkms://`, `azurekms://`, `hashivault://` and
+  `k8s://`. False for `env://`, where cosign reads the key out of this
+  process's environment — so the one remote-looking form that is not remote
+  was the one being called safest.
+
+  It matters past the wording: material in the environment is inherited by
+  every child kiln spawns unless the isolation policy scrubs it, and an
+  operator choosing between forms was told they were equivalent. The same
+  grouping also skipped the `COSIGN_PASSWORD` warning for `env://`, so the
+  unattended hang doctor exists to predict went unreported for that form.
+  `k8s://` now names where its passphrase comes from — the secret's own
+  `cosign.password` field — because cosign does not consult
+  `COSIGN_PASSWORD` there and a secret carrying it under another name fails
+  with a bare "decryption failed" that reads like a wrong key.
+
+### Security
+
+- **`KILN_COSIGN_KEY` holding key material was a disclosure, not an error.**
+  Setting it to the contents of a private key rather than a reference is
+  operator error, and kiln turned it into a leak. cosign treated the PEM as a
+  filename, failed with "file name too long", and kiln wrote the failing
+  argument into the retry warnings, the publish error, stderr, and the error
+  field of the run record in `.kiln/state.json` — a git-tracked file, one
+  `git add -A` from committing a private key.
+
+  Boot now refuses a value beginning with a PEM header, or its base64 form,
+  which is how a key arrives from a secret store. That happens before the
+  logger exists and before anything is handed to a subprocess, so the material
+  never becomes data kiln holds; the message names the four forms that do work
+  and deliberately does not quote the value back. Behind it, `Cmd.String`
+  redacts material in every rendered command, covering callers that do not go
+  through `Load`. Only material is redacted — a path, a KMS URI and a
+  `k8s://` reference still render, because they are what makes a failure
+  legible.
+
+- **The ledger recorded what the command printed.** `.kiln/state.json` is
+  git-tracked and keeps one error string per failed run, forever. `Run.Fail`
+  stored `err.Error()`, and `ExitError.Error()` appends the last five lines of
+  the failing command's stderr — so the ledger accumulated whatever any tool
+  kiln shells out to happened to print. That is how key material reached it,
+  and the same shape carries a registry token out of a docker error or a
+  connection string out of a migration.
+
+  `ExitError` gains `Summary()`: the failure without the subprocess's own
+  words. `Error()` keeps the stderr tail, because a person reading a terminal
+  needs it; `Summary` is for the places that *keep* text rather than show it.
+  Nothing diagnostic is lost — commands already stream stdout and stderr to
+  the run's output writer as they go. The ledger now records
+
+  ```
+  warden gate failed: warden run pre-push --attest-only: exit 1
+  ```
+
+  and a token printed by that command appears nowhere in `state.json`.
+
 ## [0.5.0] - 2026-08-29
 
 Provenance for artifacts kiln did not build, contents alongside origin, and a
@@ -692,7 +785,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/klarlabs-studio/kiln/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/klarlabs-studio/kiln/compare/v0.4.1...v0.5.0
 [0.1.3]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.3
 [0.1.2]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.2
