@@ -1055,3 +1055,65 @@ func TestAGlobThatMatchesNothingIsAUsageError(t *testing.T) {
 		t.Errorf("code = %d, stderr = %q", code, errOut)
 	}
 }
+
+// env:// is a reference in syntax and key material in fact: cosign reads the
+// key out of this process's environment. doctor used to group it with the KMS
+// schemes and report "the private key never sits on this box", which is a
+// false reassurance about the one remote-looking form that is not remote — and
+// the material is inherited by every child kiln spawns unless the isolation
+// policy scrubs it.
+func TestDoctorSaysAnEnvKeyIsOnTheBox(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "env://COSIGN_PRIVATE_KEY")
+
+	out, _, _ := capture(t, "doctor")
+
+	if strings.Contains(out, "never sits on this box") {
+		t.Errorf("env:// keeps the key IN the process; doctor claimed otherwise:\n%s", out)
+	}
+	if !strings.Contains(out, "IN this process") {
+		t.Errorf("doctor should say where the key actually is:\n%s", out)
+	}
+	// And it should point at the forms that do keep it off the box.
+	if !strings.Contains(out, "awskms://") {
+		t.Errorf("doctor should name a form that holds the key remotely:\n%s", out)
+	}
+}
+
+// An encrypted key in an environment variable prompts exactly as an encrypted
+// file does. Skipping the warning for env:// — as grouping it with KMS did —
+// left the unattended hang unreported for that form.
+func TestDoctorWarnsAboutAnUnpasswordedEnvKey(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "env://COSIGN_PRIVATE_KEY")
+	if err := os.Unsetenv("COSIGN_PASSWORD"); err != nil {
+		t.Fatal(err)
+	}
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "COSIGN_PASSWORD is unset") {
+		t.Errorf("an encrypted env key prompts too; doctor should warn:\n%s", out)
+	}
+}
+
+// k8s:// does keep the key off the box, and takes its passphrase from the
+// secret's own cosign.password field rather than COSIGN_PASSWORD. A secret
+// carrying it under another name fails with a bare "decryption failed" that
+// reads like a wrong key, so doctor names the field.
+func TestDoctorExplainsTheK8sPassphraseField(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_COSIGN_KEY", "k8s://kiln-system/cosign")
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "never sits on this box") {
+		t.Errorf("k8s:// does hold the key remotely:\n%s", out)
+	}
+	if !strings.Contains(out, "cosign.password") {
+		t.Errorf("doctor should name the field the passphrase must live in:\n%s", out)
+	}
+	if strings.Contains(out, "COSIGN_PASSWORD is unset") {
+		t.Errorf("COSIGN_PASSWORD is not consulted on the k8s path; warning about it misleads:\n%s", out)
+	}
+}
