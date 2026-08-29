@@ -32,12 +32,32 @@ developer
 | **Nox** | Optional scanner Kiln may invoke. Not CI. |
 | **RollOps** | CD. `imagePolicy`, plan, apply, drift-verify, rollback. Kiln never applies. |
 
-> **Who checks the signature.** Kiln signs; something has to verify. RollOps does
-> not — its `verification:` setting is drift-detection depth (checksum stamp,
-> live diff, auto-reconcile), and its cosign code verifies *plugins*, not
-> deployed images. Until that changes, run `kiln verify` in the step before you
-> deploy, or at admission. This was measured against a live cluster: an unsigned
-> image deployed cleanly, which is the honest state of the chain today.
+> **Who checks the signature.** Kiln signs; something has to verify. RollOps
+> does, and it is off until you configure it.
+>
+> Given a key and a builder policy, `rollopsd` enforces the chain before apply
+> and fails closed: the cosign signature, then SLSA provenance from a builder
+> you name, then the source gate — checking that the commit the gate vouched
+> for is the commit the artifact was built from. Not the `verification:`
+> setting, which is drift-detection depth (checksum stamp, live diff,
+> auto-reconcile) and a different thing entirely.
+>
+> ```
+> ROLLOPS_COSIGN_KEY=cosign.pub            # or _IDENTITY + _ISSUER for keyless
+> ROLLOPS_PROVENANCE_BUILDERS=https://github.com/klarlabs-studio/kiln@
+> ROLLOPS_SOURCE_GATES=https://warden.klarlabs.de
+> ROLLOPS_SOURCE_KEYS=<warden key show>
+> ```
+>
+> With none of it set no gate is wired at all, and RollOps deploys whatever Git
+> points at — unsigned included. That is what was measured against a live
+> cluster: an unsigned image deployed cleanly. It was a true measurement of an
+> unconfigured daemon, and this note previously reported it as a missing
+> capability, which it is not. The gap is a default, not an absence.
+>
+> Verifying somewhere else is still reasonable — `kiln verify --policy` in the
+> step before you deploy, or at admission — and needs no kiln in the pipeline
+> that built the artifact.
 
 Status: OSS MVP, MIT, module `go.klarlabs.de/kiln`, Go 1.25.
 
