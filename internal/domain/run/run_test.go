@@ -3,6 +3,7 @@ package run
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -125,5 +126,82 @@ func TestDurationOfOpenRun(t *testing.T) {
 
 	if r.Duration() < time.Second {
 		t.Errorf("Duration = %v, want the elapsed time of an open run", r.Duration())
+	}
+}
+
+// exitErr mimics the shape infrastructure builds for a failed subprocess: a
+// detailed rendering for a person reading a terminal, and a summary for
+// anything that keeps the text.
+type exitErr struct {
+	cmd    string
+	code   int
+	stderr string
+}
+
+func (e *exitErr) Error() string   { return e.Summary() + ": " + e.stderr }
+func (e *exitErr) Summary() string { return fmt.Sprintf("%s: exit %d", e.cmd, e.code) }
+
+// The ledger is git-tracked and keeps one error string per failed run forever.
+// Storing err.Error() put whatever the failing command printed into it — which
+// is how cosign key material reached .kiln/state.json (#56).
+func TestTheLedgerKeepsNoSubprocessOutput(t *testing.T) {
+	leaked := "Error: reading key: open -----BEGIN ENCRYPTED SIGSTORE PRIVATE KEY-----\n" +
+		"eyJrZGYiOnsibmFtZSI6InNjcnlwdCJ9fQ==: file name too long"
+	err := fmt.Errorf("publish: cosign sign ghcr.io/acme/app: %w",
+		&exitErr{cmd: "cosign sign ghcr.io/acme/app", code: 1, stderr: leaked})
+
+	var r Run
+	r.Fail(err)
+
+	if strings.Contains(r.Error, "eyJrZGYi") || strings.Contains(r.Error, "BEGIN ENCRYPTED") {
+		t.Errorf("the ledger recorded the command's output:\n%s", r.Error)
+	}
+	// What kiln concluded has to survive, or the record stops explaining the
+	// failure it exists to record.
+	for _, want := range []string{"publish", "cosign sign", "exit 1"} {
+		if !strings.Contains(r.Error, want) {
+			t.Errorf("ledger lost %q, leaving nothing to diagnose from:\n%s", want, r.Error)
+		}
+	}
+}
+
+// An error with no subprocess behind it is kiln's own words and is kept whole.
+func TestAPlainErrorIsRecordedAsWritten(t *testing.T) {
+	var r Run
+	r.Fail(errors.New("pipeline: on.push names no artifact to publish"))
+
+	if r.Error != "pipeline: on.push names no artifact to publish" {
+		t.Errorf("error = %q, want it kept verbatim", r.Error)
+	}
+}
+
+// When the wrapping does not embed the detailed form verbatim, the outer text
+// cannot be assumed free of the output — so the safe half is kept rather than
+// guessing which to trust.
+func TestAnUnrecognisedWrappingFallsBackToTheSummary(t *testing.T) {
+	inner := &exitErr{cmd: "docker push acme/app", code: 1, stderr: "denied: token abc123"}
+	// %v, not %w-at-the-end: the detailed text is reformatted, so a substring
+	// replacement cannot find it.
+	err := fmt.Errorf("publish: %w (while pushing)", inner)
+
+	var r Run
+	r.Fail(err)
+
+	if strings.Contains(r.Error, "abc123") {
+		t.Errorf("the ledger recorded a token from the command's output:\n%s", r.Error)
+	}
+	if !strings.Contains(r.Error, "exit 1") {
+		t.Errorf("ledger lost the exit status:\n%s", r.Error)
+	}
+}
+
+// A nil error still fails the run: a failed run with no explanation would be
+// indistinguishable from a successful one.
+func TestANilErrorStillFailsTheRun(t *testing.T) {
+	var r Run
+	r.Fail(nil)
+
+	if r.Phase != PhaseFailed || r.Error == "" {
+		t.Errorf("phase=%s error=%q, want a failed run with a placeholder", r.Phase, r.Error)
 	}
 }

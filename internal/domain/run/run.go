@@ -10,7 +10,9 @@ package run
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -158,11 +160,50 @@ func (r *Run) Succeed() {
 func (r *Run) Fail(err error) {
 	r.Phase = PhaseFailed
 	if err != nil {
-		r.Error = err.Error()
+		r.Error = ledgerMessage(err)
 	} else if r.Error == "" {
 		r.Error = "failed"
 	}
 	r.FinishedAt = time.Now().UTC()
+}
+
+// summarizable is an error that can render itself without the output of the
+// command it describes.
+//
+// Declared structurally, as a shape rather than a named type, because the
+// domain imports nothing: the errors that satisfy it are built in
+// infrastructure, and this package must not know that.
+type summarizable interface {
+	error
+	// Summary is the failure without the subprocess's own words.
+	Summary() string
+}
+
+// ledgerMessage renders err for the run record.
+//
+// The ledger is a git-tracked file that keeps one error string per failed run,
+// forever. Storing err.Error() put whatever the failing command printed into
+// it — up to five lines of arbitrary stderr, from any tool kiln shells out to.
+// That is how cosign key material reached .kiln/state.json (#56), and the same
+// shape would carry a registry token out of a docker error or a connection
+// string out of a migration.
+//
+// Nothing diagnostic is lost. Commands stream their output to the run's writer
+// as they go, so the detail is already in the log the operator reads. What the
+// ledger keeps is what kiln concluded: which command failed, and how.
+func ledgerMessage(err error) string {
+	var s summarizable
+	if !errors.As(err, &s) {
+		return err.Error()
+	}
+	full, detailed, summary := err.Error(), s.Error(), s.Summary()
+	if trimmed := strings.Replace(full, detailed, summary, 1); trimmed != full {
+		return trimmed
+	}
+	// The wrapping did not embed the detailed form verbatim, so the outer text
+	// cannot be assumed free of the output. Keep the part known to be safe
+	// rather than guessing which half to trust.
+	return summary
 }
 
 // Duration is how long the run took; for an open run, how long it has been
