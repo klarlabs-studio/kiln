@@ -5,7 +5,13 @@
 # these steps by shelling out to `warden run pre-push`.
 hooks: { pre_commit: true, pre_push: true }
 commands:
-  lint: "golangci-lint run --allow-parallel-runners ./..."
+  # --allow-parallel-runners: the lock golangci-lint takes is machine-global,
+  # so a lint in any other checkout blocks this one and the gate exits 75 on a
+  # tree it never evaluated. --timeout=15m: the default is one minute of WALL
+  # CLOCK, and a box running several gates at once blows through it while the
+  # linter is still starting. Neither flag loosens a check; they stop the gate
+  # reporting contention and starvation as a verdict on the code.
+  lint: "golangci-lint run --allow-parallel-runners --timeout=15m ./..."
   test: "go test -race ./..."
   vet: "go vet ./..."
 steps:
