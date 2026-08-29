@@ -47,7 +47,38 @@ func (c Cmd) String() string {
 	if len(c.Args) == 0 {
 		return c.Name
 	}
-	return c.Name + " " + strings.Join(c.Args, " ")
+	args := make([]string, len(c.Args))
+	for i, a := range c.Args {
+		args[i] = redactKeyMaterial(a)
+	}
+	return c.Name + " " + strings.Join(args, " ")
+}
+
+// redactKeyMaterial replaces an argument that is a private key with a marker.
+//
+// This rendering is what reaches the retry warnings, the publish error, stderr
+// and the `error` field of the run record in .kiln/state.json — a git-tracked
+// file. An operator who set KILN_COSIGN_KEY to a PEM body rather than a path
+// had the key written to all four, one `git add -A` from being committed (#56).
+//
+// envconfig.ValidateCosignKey refuses that value before anything runs, which
+// is the better fix because it keeps the material out of the process
+// entirely. This is the second line: it covers any path that does not go
+// through Load — a library caller passing Options.Env, a future flag — and
+// costs nothing.
+//
+// Only material is redacted, not references. A file path, a KMS URI or a
+// warden key fingerprint is not secret, and blanking them would remove the
+// evidence that the RIGHT key was used, which several tests check and an
+// operator debugging a signing failure needs.
+func redactKeyMaterial(arg string) string {
+	trimmed := strings.TrimSpace(arg)
+	for _, p := range []string{"-----BEGIN", "LS0tLS1CRUdJTi"} {
+		if strings.HasPrefix(trimmed, p) {
+			return "[REDACTED key material]"
+		}
+	}
+	return arg
 }
 
 // Result is what a finished subprocess left behind.

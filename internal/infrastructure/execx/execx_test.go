@@ -195,3 +195,50 @@ func pathEnv(t *testing.T) string {
 	t.Helper()
 	return "/usr/bin:/bin:/usr/local/bin"
 }
+
+const pemArg = `-----BEGIN ENCRYPTED SIGSTORE PRIVATE KEY-----
+eyJrZGYiOnsibmFtZSI6InNjcnlwdCJ9fQ==
+-----END ENCRYPTED SIGSTORE PRIVATE KEY-----`
+
+// Cmd.String is what reaches the retry warnings, the publish error, stderr and
+// the error field of the run record in .kiln/state.json — a git-tracked file.
+// A key that arrives here despite envconfig.ValidateCosignKey (a library
+// caller passing Options.Env, say) must not be written to any of them (#56).
+func TestKeyMaterialIsNotRenderedIntoACommandString(t *testing.T) {
+	c := Cmd{Name: "cosign", Args: []string{"sign", "--key", pemArg, "ghcr.io/x/y@sha256:aaa"}}
+
+	got := c.String()
+
+	if strings.Contains(got, "eyJrZGYi") {
+		t.Errorf("the command string carries key material:\n%s", got)
+	}
+	if !strings.Contains(got, "[REDACTED key material]") {
+		t.Errorf("no redaction marker, so a reader cannot tell a key was there:\n%s", got)
+	}
+	// The rest of the command has to survive, or the log stops being useful
+	// for the failure it was written to explain.
+	for _, want := range []string{"cosign", "sign", "--key", "ghcr.io/x/y@sha256:aaa"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("redaction removed %q from %s", want, got)
+		}
+	}
+}
+
+// References are not secret, and blanking them would remove the evidence that
+// the RIGHT key was used — which is what an operator debugging a signing
+// failure needs, and what several tests in this repository assert.
+func TestKeyReferencesAreLeftReadable(t *testing.T) {
+	for _, ref := range []string{
+		"cosign.key",
+		"/etc/kiln/cosign.key",
+		"env://COSIGN_PRIVATE_KEY",
+		"k8s://kiln-system/cosign",
+		"awskms:///alias/kiln",
+		"139e6eb9e2611c76", // a warden signer fingerprint
+	} {
+		c := Cmd{Name: "cosign", Args: []string{"sign", "--key", ref}}
+		if !strings.Contains(c.String(), ref) {
+			t.Errorf("reference %q was redacted; it is not secret and its absence hides which key ran", ref)
+		}
+	}
+}
