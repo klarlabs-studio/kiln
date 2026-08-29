@@ -29,6 +29,7 @@ func canonical(t *testing.T) attest.Statement {
 		ArtifactKind:  "image",
 		Config:        "Dockerfile",
 		GateTool:      "warden",
+		GateVerified:  true, // as engine.go sets it: kiln publishes nothing ungated
 		GateReproved:  true,
 		GateReason:    "warden gate passed: vet, test, lint",
 		KilnVersion:   "v0.1.0",

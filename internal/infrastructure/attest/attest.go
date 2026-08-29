@@ -155,6 +155,24 @@ type ResourceDescriptor struct {
 	Name   string            `json:"name,omitempty"`
 }
 
+// builderID names the platform that produced the artifact.
+//
+// Kiln's own id when kiln built it. When something else did, that platform
+// says so under its own name: this field is what a verifier pins (RollOps
+// AllowedBuilders, kiln's own --policy), so a foreign CI recording kiln's id
+// would be borrowing a reputation and a source gate it never ran.
+//
+// Nothing here is a security boundary on its own — an attestation is only
+// worth what its signature is worth, and a verifier that trusts the wrong
+// key has already lost. This keeps an HONEST pipeline from misrepresenting
+// itself, which is most of them.
+func builderID(in ports.AttestInput) string {
+	if id := strings.TrimSpace(in.BuilderID); id != "" {
+		return id
+	}
+	return BuilderIDPrefix + "@" + orUnknown(in.KilnVersion)
+}
+
 // Build assembles the statement.
 //
 // It never fails on missing optional context: a build with no known repository
@@ -170,8 +188,13 @@ func Build(in ports.AttestInput) (Statement, error) {
 		return Statement{}, fmt.Errorf("attest: no subject name")
 	}
 
+	// Defaulting the tool name to "warden" is right where a gate ran and the
+	// caller did not bother to name it, and wrong where none ran: an
+	// unverified verdict attributed to warden reads as "warden looked and was
+	// unhappy" rather than "nothing looked". Name it only when there is a
+	// verdict to attribute.
 	gateTool := in.GateTool
-	if gateTool == "" {
+	if gateTool == "" && in.GateVerified {
 		gateTool = "warden"
 	}
 
@@ -197,10 +220,13 @@ func Build(in ports.AttestInput) (Statement, error) {
 					Isolated: in.Isolated,
 					SourceGate: SourceGate{
 						Tool: gateTool,
-						// Kiln only reaches a publish after the gate is
-						// satisfied, so a statement exists at all only when
-						// the commit was gated one way or the other.
-						Verified: true,
+						// Stated by the caller, not assumed. Kiln's own path
+						// sets it because kiln only reaches a publish after
+						// the gate is satisfied; a foreign builder using this
+						// package must say whether a gate actually ran, and a
+						// predicate claiming a gate nobody ran is worse than
+						// one claiming none.
+						Verified: in.GateVerified,
 						Reproved: in.GateReproved,
 						Reason:   in.GateReason,
 					},
@@ -209,7 +235,7 @@ func Build(in ports.AttestInput) (Statement, error) {
 			},
 			RunDetails: RunDetails{
 				Builder: Builder{
-					ID:      BuilderIDPrefix + "@" + orUnknown(in.KilnVersion),
+					ID:      builderID(in),
 					Version: in.ToolVersions,
 				},
 				Metadata: Metadata{
