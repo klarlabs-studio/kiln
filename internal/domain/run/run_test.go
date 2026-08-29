@@ -145,6 +145,10 @@ func (e *exitErr) Summary() string { return fmt.Sprintf("%s: exit %d", e.cmd, e.
 // Storing err.Error() put whatever the failing command printed into it — which
 // is how cosign key material reached .kiln/state.json (#56).
 func TestTheLedgerKeepsNoSubprocessOutput(t *testing.T) {
+	// The stderr cosign produced in #56, verbatim, because a fixture that
+	// softened it would not prove the thing under test: this exact shape is
+	// what used to be written to a git-tracked file.
+	// nox:ignore SEC-004 -- fixture: the leaked stderr this test proves is dropped
 	leaked := "Error: reading key: open -----BEGIN ENCRYPTED SIGSTORE PRIVATE KEY-----\n" +
 		"eyJrZGYiOnsibmFtZSI6InNjcnlwdCJ9fQ==: file name too long"
 	err := fmt.Errorf("publish: cosign sign ghcr.io/acme/app: %w",
