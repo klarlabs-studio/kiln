@@ -113,11 +113,21 @@ type ExitError struct {
 }
 
 func (e *ExitError) Error() string {
-	msg := fmt.Sprintf("%s: exit %d", e.Cmd, e.Code)
+	msg := e.Summary()
 	if detail := strings.TrimSpace(e.Stderr); detail != "" {
 		msg += ": " + lastLines(detail, 5)
 	}
 	return msg
+}
+
+// Summary is the failure without the command's own output: what ran and how it
+// exited, and nothing the subprocess chose to print.
+//
+// Error() carries the stderr tail because a person reading a terminal needs
+// it. Summary exists for everywhere that text is KEPT rather than shown —
+// see Summarize and the run ledger.
+func (e *ExitError) Summary() string {
+	return fmt.Sprintf("%s: exit %d", e.Cmd, e.Code)
 }
 
 // ExitCode extracts a subprocess exit code from err, reporting ok=false if err
