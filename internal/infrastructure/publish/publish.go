@@ -173,6 +173,8 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	// build arguments; without recording them the attestations are identical
 	// while the images are not.
 	in.BuildArgs = req.Artifact.Args
+	// Ids only — a provenance statement is published beside the image.
+	in.SecretIDs = req.Artifact.SecretIDs()
 
 	stmt, err := attest.Build(in)
 	if err != nil {
@@ -381,11 +383,50 @@ func writeBytes(data []byte) (path string, cleanup func(), err error) {
 	return name, cleanup, nil
 }
 
+// buildEnv prepares the environment a build runs under, and refuses to start a
+// build whose secrets are not actually present.
+//
+// CHECKED BEFORE THE BUILD, not left to docker. An unset variable reaches
+// BuildKit as an empty secret, and what happens next depends entirely on the
+// Dockerfile: `npm ci` against a private registry 401s several minutes in with
+// a message about the registry, while a Dockerfile that tolerates an empty
+// credential would publish a signed artifact built without it. Naming the
+// missing variable up front costs nothing and cannot be misread.
+//
+// Nil env (inherit the parent's) when there are no secrets, which is what every
+// build did before this existed.
+func buildEnv(plan Plan) ([]string, error) {
+	if len(plan.Secrets) == 0 {
+		return nil, nil
+	}
+
+	var missing []string
+
+	for _, id := range plan.SecretIDs() {
+		name := plan.Secrets[id]
+		if os.Getenv(name) == "" {
+			missing = append(missing, name)
+		}
+	}
+
+	if len(missing) > 0 {
+		return nil, fmt.Errorf(
+			"publish: build secret(s) unset in the environment: %s — the pipeline names them, the box supplies them",
+			strings.Join(missing, ", "))
+	}
+
+	// BuildKit is required for --secret and is the default in current docker,
+	// but an older daemon or DOCKER_BUILDKIT=0 in the operator's shell would
+	// otherwise fail on an unknown flag. Explicit beats inherited here.
+	return append(os.Environ(), "DOCKER_BUILDKIT=1"), nil
+}
+
 // classicBuildPush is the single-platform path: plain `docker build`, one push
 // per tag, then read the digest the registry assigned.
 func (d *Docker) classicBuildPush(ctx context.Context, req ports.PublishRequest, plan Plan, dir string) (string, error) {
 	args := []string{"build", "--platform", plan.Platforms[0], "-f", plan.Dockerfile}
 	args = append(args, plan.BuildArgFlags()...)
+	args = append(args, plan.SecretFlags()...)
 	for _, ref := range plan.Refs() {
 		args = append(args, "-t", ref)
 	}
@@ -396,8 +437,13 @@ func (d *Docker) classicBuildPush(ctx context.Context, req ports.PublishRequest,
 		"--label", "org.opencontainers.image.source="+plan.Image,
 		plan.Context)
 
+	env, err := buildEnv(plan)
+	if err != nil {
+		return "", err
+	}
+
 	if _, err := d.Runner.Run(ctx, execx.Cmd{
-		Name: d.Docker, Args: args, Dir: dir,
+		Name: d.Docker, Args: args, Dir: dir, Env: env,
 		Stdout: req.Output, Stderr: req.Output,
 	}); err != nil {
 		return "", fmt.Errorf("publish: docker build: %w", err)
@@ -432,14 +478,20 @@ func (d *Docker) buildxPush(ctx context.Context, req ports.PublishRequest, plan 
 		"--push",
 	}
 	args = append(args, plan.BuildArgFlags()...)
+	args = append(args, plan.SecretFlags()...)
 	for _, ref := range plan.Refs() {
 		args = append(args, "-t", ref)
 	}
 	args = append(args, plan.Context)
 
+	env, err := buildEnv(plan)
+	if err != nil {
+		return "", err
+	}
+
 	if err := d.withRetry(ctx, "docker buildx build", func(ctx context.Context) error {
 		_, err := d.Runner.Run(ctx, execx.Cmd{
-			Name: d.Docker, Args: args, Dir: dir,
+			Name: d.Docker, Args: args, Dir: dir, Env: env,
 			Stdout: req.Output, Stderr: req.Output,
 		})
 		return err

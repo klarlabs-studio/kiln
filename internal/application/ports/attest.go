@@ -36,6 +36,13 @@ type AttestInput struct {
 	// any. Recorded so two images from one commit and one Dockerfile are
 	// distinguishable in their attestations.
 	BuildArgs map[string]string
+	// SecretIDs names the BuildKit build secrets the image was built with —
+	// the ids only, never the values.
+	//
+	// Which credentials a build needed is part of how it was produced, and it
+	// is the question asked when one is rotated or leaked: "what did this
+	// token build?" A provenance that omitted it could not answer.
+	SecretIDs []string
 
 	// Isolated reports a credential-free build (a fork pull request).
 	Isolated bool

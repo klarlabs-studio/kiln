@@ -28,6 +28,10 @@ type Plan struct {
 	Context    string
 	// Args are the build arguments, as explicit key=value pairs.
 	Args map[string]string
+	// Secrets are BuildKit build secrets, as id -> environment variable name.
+	// The VALUES are never held here: the plan is printed to operators and
+	// folded into provenance, and a credential must survive neither.
+	Secrets map[string]string
 	// Notes records decisions worth telling the operator about — a semver tag
 	// that could not be derived, a tag character that had to be rewritten.
 	Notes []string
@@ -55,6 +59,46 @@ func (p Plan) BuildArgFlags() []string {
 	return out
 }
 
+// SecretFlags renders the build secrets as docker flags, sorted by id.
+//
+// Sorted for the same reason build args are: the plan is shown to an operator
+// and folded into provenance, and map iteration order would make two identical
+// builds render differently.
+//
+// `env=` rather than `src=`: the value is passed from kiln's own environment to
+// BuildKit, never written to a file that another process on the box could read
+// and no cleanup could be trusted to remove.
+func (p Plan) SecretFlags() []string {
+	if len(p.Secrets) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(p.Secrets))
+	for id := range p.Secrets {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	out := make([]string, 0, 2*len(ids))
+	for _, id := range ids {
+		out = append(out, "--secret", "id="+id+",env="+p.Secrets[id])
+	}
+
+	return out
+}
+
+// SecretIDs returns the configured secret ids, sorted, for the operator-facing
+// plan summary. Never the values: the plan is printed.
+func (p Plan) SecretIDs() []string {
+	ids := make([]string, 0, len(p.Secrets))
+	for id := range p.Secrets {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+
+	return ids
+}
+
 // Refs returns every fully qualified reference, sha tag first.
 func (p Plan) Refs() []string {
 	out := make([]string, 0, 1+len(p.MovingTags))
@@ -79,10 +123,33 @@ func (p Plan) String() string {
 		}
 		fmt.Fprintf(&b, "  args %s\n", strings.Join(pairs, " "))
 	}
+	if ids := p.SecretIDs(); len(ids) > 0 {
+		// Ids only. The whole point of a secret is that its value does not
+		// appear in the things a build leaves behind, and the plan is printed.
+		fmt.Fprintf(&b, "  secrets %s\n", strings.Join(ids, " "))
+	}
 	for _, n := range p.Notes {
 		fmt.Fprintf(&b, "  note %s\n", n)
 	}
 	return b.String()
+}
+
+// secretEnvs resolves each configured secret to the environment variable it
+// reads from. The config loader has already rejected any other form.
+func secretEnvs(cfg config.Artifact) map[string]string {
+	if len(cfg.Secrets) == 0 {
+		return nil
+	}
+
+	out := make(map[string]string, len(cfg.Secrets))
+
+	for id := range cfg.Secrets {
+		if name, ok := cfg.SecretEnv(id); ok {
+			out[id] = name
+		}
+	}
+
+	return out
 }
 
 // semverRef matches the tag names Kiln will turn into a version tag. Build
@@ -111,6 +178,7 @@ func BuildPlan(cfg config.Artifact, sha, ref string) (Plan, error) {
 		Dockerfile: cfg.Dockerfile,
 		Context:    cfg.Context,
 		Args:       cfg.Args,
+		Secrets:    secretEnvs(cfg),
 	}
 	if len(plan.Platforms) == 0 {
 		plan.Platforms = []string{"linux/amd64"}

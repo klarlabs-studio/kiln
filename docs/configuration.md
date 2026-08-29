@@ -44,6 +44,8 @@ publish:                          # a LIST of artifacts
     context: .
     args:                         # docker build arguments, optional
       BIN: api
+    secrets:                      # BuildKit build secrets, optional
+      node_auth: env://NODE_AUTH_TOKEN
 
   - kind: binaries
     from: goreleaser              # only accepted value
@@ -218,6 +220,74 @@ Build args belong to `kind: image`. On a `kind: binaries` entry they are a load
 error — goreleaser owns that build.
 
 ---
+
+
+## `secrets` — credentials a build needs, that the image must not keep
+
+A private dependency needs a token to fetch. `args` cannot carry one: a build
+argument is recorded in image history, so a token in one is published with the
+artifact.
+
+```yaml
+publish:
+  - kind: image
+    image: ghcr.io/acme/web
+    dockerfile: web/Dockerfile
+    context: ./web
+    tags: [sha, latest]
+    secrets:
+      node_auth: env://NODE_AUTH_TOKEN
+```
+
+Each entry becomes `--secret id=<key>,env=<VAR>`, which the Dockerfile reads:
+
+```dockerfile
+RUN --mount=type=secret,id=node_auth \
+    NODE_AUTH_TOKEN=$(cat /run/secrets/node_auth) npm ci
+```
+
+BuildKit keeps the value out of the image and its history by construction, and
+kiln sets `DOCKER_BUILDKIT=1` for any build that uses one — `--secret` is a
+BuildKit flag, and an older daemon or `DOCKER_BUILDKIT=0` in the operator's
+shell would otherwise fail on an unknown argument.
+
+### Why this is not the env passthrough `args` refuses
+
+`args` deliberately has no `--build-arg FOO`-from-the-environment form, because
+a build whose *output* depends on the box's environment is not reproducible
+from the commit. A secret is the other case: it is permission to **fetch** what
+the commit already pins — a package named in `package-lock.json`, a module
+behind a proxy — and it never enters the image. The output still follows from
+the commit; only the right to fetch it comes from the box.
+
+### `env://` only
+
+The same scheme as the cosign signing key. A literal value would be a
+credential committed to the repository, and a file path would tie the pipeline
+to one box's layout. Both are load errors, not warnings.
+
+An id containing a comma, an equals sign or a space is rejected too: it reaches
+docker as `id=<id>,env=<VAR>`, where either character silently changes what the
+flag means.
+
+### Unset variables fail before the build starts
+
+A missing variable reaches BuildKit as an *empty* secret, and what happens next
+is the Dockerfile's business — `npm ci` 401s several minutes in with a message
+about the registry, while a more forgiving Dockerfile would publish a signed
+image built without the credential. Kiln checks first and names the variable.
+
+### Fork pull requests never see them
+
+Publishing is suppressed for untrusted heads by the isolation policy
+([isolation.md](isolation.md)), so a fork build has no publish step to carry a
+secret into. Nothing here changes that.
+
+### What the provenance records
+
+The secret **ids**, never the values. Which credentials a build needed is part
+of how it was produced, and it is the question asked when one is rotated or
+leaked: *what did this token build?*
 
 ## `kind: binaries`
 
