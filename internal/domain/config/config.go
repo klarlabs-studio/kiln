@@ -237,6 +237,24 @@ type Artifact struct {
 	// BIN= — are otherwise indistinguishable in their attestations.
 	Args map[string]string `yaml:"args"`
 
+	// SBOM attaches a CycloneDX bill of materials to the published digest,
+	// alongside the provenance.
+	//
+	// Provenance says where an artifact came from. It says nothing about what
+	// is inside it, and "which of our deployed images contains this library"
+	// is the question an incident actually opens with. Both attestations hang
+	// off the same digest, so a consumer joins them without a build system,
+	// a clone, or kiln.
+	//
+	// Off by default. It costs a scan at publish time and requires nox on the
+	// box, and an artifact without one is a normal thing to publish.
+	//
+	// Scope worth knowing before trusting it: the scan reads the source tree,
+	// so the inventory is the dependencies this repository declares. For a
+	// distroless or scratch image that is very nearly everything; for one
+	// built FROM a distro base, the base's own packages are not in it.
+	SBOM bool `yaml:"sbom"`
+
 	// Binaries fields. From names the tool, for the same reason prove.from
 	// does: the coupling is explicit in the file, and there is one value.
 	From   string `yaml:"from"`

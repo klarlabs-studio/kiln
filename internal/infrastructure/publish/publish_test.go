@@ -4,7 +4,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -835,4 +837,163 @@ func TestKeylessSigningStaysTheDefault(t *testing.T) {
 	if sign := fake.Find("cosign sign"); sign == nil || strings.Contains(sign.String(), "--key") {
 		t.Errorf("cosign sign = %v, want no key", sign)
 	}
+}
+
+// sbomArtifact is the image config with the inventory switched on.
+func sbomArtifact() config.Artifact {
+	a := cfg(config.TagSHA, config.TagLatest)
+	a.SBOM = true
+	return a
+}
+
+// A publish that was not asked for an SBOM must not run the scanner. The
+// switch exists because the scan costs time and requires nox on the box.
+func TestNoSBOMIsAskedForAndNoneIsBuilt(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t)
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: cfg(config.TagSHA, config.TagLatest), Provenance: prov,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if fake.Ran("nox") {
+		t.Errorf("the scanner ran for an artifact that never asked for an sbom:\n%s", fake.Transcript())
+	}
+	if sbomAttestation(fake) != nil {
+		t.Error("an sbom attestation was attached to an artifact that did not request one")
+	}
+}
+
+// With sbom: true the inventory is scanned from the checked-out source and
+// attached to the same digest the provenance hangs off — which is what lets a
+// consumer join "where did this come from" to "what is inside it" with cosign
+// and nothing else.
+func TestAnSBOMIsScannedAndAttachedToTheDigest(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+
+	fake := dockerFake(t)
+	// The scanner writes where it is told; the publisher then attests that file.
+	fake.On("nox scan", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		return execx.Result{}, writeSBOMForArgs(c.Args)
+	}})
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: sbomArtifact(), Provenance: prov,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	cmd := sbomAttestation(fake)
+	if cmd == nil {
+		t.Fatalf("no sbom attestation was attached:\n%s", fake.Transcript())
+	}
+	// The digest, not a tag: an attestation on a moving reference describes
+	// whatever that reference points at later, which is not this artifact.
+	if !strings.Contains(cmd.String(), digest) {
+		t.Errorf("sbom attached to %q, want the digest", cmd.String())
+	}
+}
+
+// The scan reads the worktree this publish built from, not whatever happens to
+// be checked out on the box. An inventory of a different tree would describe a
+// different artifact while claiming to describe this one.
+func TestTheSBOMIsScannedFromTheCommitThatWasBuilt(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+
+	fake := dockerFake(t)
+	fake.On("nox scan", execx.Response{Fn: func(c execx.Cmd) (execx.Result, error) {
+		if c.Dir != repo.Dir {
+			return execx.Result{}, fmt.Errorf("scanned %q, want the publish worktree %q", c.Dir, repo.Dir)
+		}
+		return execx.Result{}, writeSBOMForArgs(c.Args)
+	}})
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	if _, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: sbomArtifact(), Provenance: prov,
+	}); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+}
+
+// A scanner that fails must fail the publish. Attaching provenance and quietly
+// skipping the inventory ships an artifact that looks complete and is missing
+// the half somebody will later assume is there.
+func TestAFailedSBOMScanFailsThePublish(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t).On("nox scan", execx.Response{ExitCode: 1, Stderr: "boom"})
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: sbomArtifact(), Provenance: prov,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "nox scan") {
+		t.Errorf("err = %v, want the scan failure to stop the publish", err)
+	}
+}
+
+// A scanner that exits 0 and writes nothing is the quieter version of the same
+// problem: cosign would be handed a path that does not exist.
+func TestASilentlyMissingSBOMFailsThePublish(t *testing.T) {
+	repo := gittest.New(t)
+	head := repo.Commit("first", "Dockerfile", "FROM scratch\n")
+	fake := dockerFake(t).On("nox scan", execx.Response{}) // exits 0, writes nothing
+
+	prov := imageProvenance()
+	prov.SHA = head
+
+	_, err := newPublisher(fake).Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/heads/main",
+		Artifact: sbomArtifact(), Provenance: prov,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "no sbom") {
+		t.Errorf("err = %v, want a publish that refuses to attest a file that is not there", err)
+	}
+}
+
+// sbomAttestation finds the cyclonedx attest call. Fake.Find matches a prefix
+// and cosign puts --yes before --type, so the flags cannot be matched as one
+// contiguous string.
+func sbomAttestation(f *execx.Fake) *execx.Cmd {
+	for _, c := range f.Calls() {
+		if strings.Contains(c.String(), "cosign attest") && strings.Contains(c.String(), "cyclonedx") {
+			cp := c
+			return &cp
+		}
+	}
+	return nil
+}
+
+// writeSBOMForArgs mimics `nox scan --format cdx --output DIR` by writing a
+// minimal CycloneDX document where the publisher will look for it.
+func writeSBOMForArgs(args []string) error {
+	for i, a := range args {
+		if a == "--output" && i+1 < len(args) {
+			return os.WriteFile(filepath.Join(args[i+1], "sbom.cdx.json"),
+				[]byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}`), 0o600)
+		}
+	}
+	return fmt.Errorf("nox scan was called without --output: %v", args)
 }

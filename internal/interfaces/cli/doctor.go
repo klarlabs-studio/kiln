@@ -185,6 +185,30 @@ func (r *doctorReport) checkPipeline(deps *boot.Deps) {
 	if deps.Pipeline.Prove.Nox {
 		r.ok("prove.nox enabled")
 	}
+	for i, a := range deps.Pipeline.Publish {
+		if !a.SBOM {
+			continue
+		}
+		// Say what the SBOM will and will not contain. A consumer who reads
+		// "sbom attached" and assumes the base image is in it has been misled
+		// by a true statement.
+		r.ok("publish[%d] attaches an sbom — the source tree's declared "+
+			"dependencies, not a distro base image's own packages", i)
+	}
+}
+
+// noxWantedBy reports whether anything in the pipeline needs the scanner, and
+// which setting asked for it.
+func noxWantedBy(deps *boot.Deps) (bool, string) {
+	if deps.Pipeline.Prove.Nox {
+		return true, "prove.nox is on"
+	}
+	for _, a := range deps.Pipeline.Publish {
+		if a.SBOM {
+			return true, "an artifact sets sbom: true"
+		}
+	}
+	return false, ""
 }
 
 func (r *doctorReport) checkToolchain(deps *boot.Deps) {
@@ -197,10 +221,12 @@ func (r *doctorReport) checkToolchain(deps *boot.Deps) {
 		r.ok("%s at %s", deps.Env.Warden, path)
 	}
 
-	if deps.Pipeline.Prove.Nox {
+	// nox is needed by two separate switches, and reporting it twice would be
+	// noise. Say which one asked for it, because the remedy differs: one is
+	// turned off in prove, the other on an artifact.
+	if want, why := noxWantedBy(deps); want {
 		if _, err := deps.Runner.LookPath(deps.Env.Nox); err != nil {
-			r.fail("prove.nox is on but %s is not installed (install nox, set KILN_NOX, or set prove.nox: false)",
-				deps.Env.Nox)
+			r.fail("%s is not installed but %s (install nox, set KILN_NOX, or turn it off)", deps.Env.Nox, why)
 		} else {
 			r.ok("%s installed", deps.Env.Nox)
 		}

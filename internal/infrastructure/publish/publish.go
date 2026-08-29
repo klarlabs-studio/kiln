@@ -51,6 +51,9 @@ type Docker struct {
 	// See envconfig.Env.CosignKey for what the value may be and why a
 	// self-hosted builder needs one.
 	SigningKey string
+	// Nox is the scanner used to build an SBOM when an artifact asks for one
+	// (KILN_NOX). Only read when artifact.sbom is set.
+	Nox string
 }
 
 // NewDocker builds a publisher.
@@ -134,6 +137,9 @@ func (d *Docker) build(ctx context.Context, req ports.PublishRequest, plan Plan,
 	if err := d.attest(ctx, plan.Image, digest, reference, req); err != nil {
 		return ports.PublishResult{}, err
 	}
+	if err := d.attachSBOM(ctx, reference, req); err != nil {
+		return ports.PublishResult{}, err
+	}
 	if err := d.attachSourceSummary(ctx, reference, req); err != nil {
 		return ports.PublishResult{}, err
 	}
@@ -197,6 +203,79 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	}
 	d.Log.Info("provenance attached", "reference", reference, "commit", in.SHA)
 	return nil
+}
+
+// attachSBOM scans the checked-out source and attaches a CycloneDX inventory
+// to the same digest the provenance hangs off.
+//
+// Provenance answers "where did this come from". It cannot answer "what is
+// inside it", which is the question an incident opens with, and which is
+// otherwise reconstructed by hand from a commit. Both attestations live on the
+// digest, so a consumer joins them with cosign and nothing else — no clone, no
+// build system, no kiln.
+//
+// The scan runs against req.RepoDir, the worktree this publish already built
+// from, so the inventory describes the commit that produced the image rather
+// than whatever is checked out on the box.
+//
+// A failure here fails the publish. The alternative — attaching provenance and
+// quietly skipping the inventory — produces an artifact that looks complete
+// and is missing the half somebody will later assume is there, which is the
+// failure mode this whole chain exists to avoid.
+func (d *Docker) attachSBOM(ctx context.Context, reference string, req ports.PublishRequest) error {
+	if !req.Artifact.SBOM {
+		return nil
+	}
+
+	dir, err := os.MkdirTemp("", "kiln-sbom-*")
+	if err != nil {
+		return fmt.Errorf("publish: sbom workspace: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+
+	// --offline because a publish already knows what it built: an inventory
+	// that varies with a vulnerability feed's availability is not a property
+	// of the artifact, and this attestation is meant to be a fact about it.
+	if _, err := d.Runner.Run(ctx, execx.Cmd{
+		Name:   d.nox(),
+		Args:   []string{"scan", ".", "--format", "cdx", "--output", dir, "--offline"},
+		Dir:    req.RepoDir,
+		Stdout: req.Output, Stderr: req.Output,
+	}); err != nil {
+		return fmt.Errorf("publish: nox scan for sbom: %w", err)
+	}
+
+	path := filepath.Join(dir, "sbom.cdx.json")
+	if _, err := os.Stat(path); err != nil {
+		return fmt.Errorf("publish: nox produced no sbom at %s: %w", path, err)
+	}
+
+	if err := d.withRetry(ctx, "cosign attest sbom", func(ctx context.Context) error {
+		_, e := d.Runner.Run(ctx, execx.Cmd{
+			Name: d.Cosign,
+			Args: d.signingArgs(
+				"attest", "--yes",
+				"--type", "cyclonedx",
+				"--predicate", path,
+				reference,
+			),
+			Dir:    req.RepoDir,
+			Stdout: req.Output, Stderr: req.Output,
+		})
+		return e
+	}); err != nil {
+		return fmt.Errorf("publish: cosign attest sbom %s: %w", reference, err)
+	}
+	d.Log.Info("sbom attached", "reference", reference)
+	return nil
+}
+
+// nox is the scanner binary, defaulting to the name on PATH.
+func (d *Docker) nox() string {
+	if d.Nox == "" {
+		return "nox"
+	}
+	return d.Nox
 }
 
 // attachSourceSummary republishes Warden's verification summary against the
