@@ -62,6 +62,18 @@ type Env struct {
 	// An encrypted key file additionally needs COSIGN_PASSWORD in the
 	// environment; cosign reads that itself, and prompts without it — the same
 	// hang in a different place.
+	//
+	// k8s:// is the exception: cosign reads the passphrase from the secret's
+	// own `cosign.password` field, which is what
+	// `cosign generate-key-pair k8s://…` writes, and does NOT consult
+	// COSIGN_PASSWORD there. A secret carrying the passphrase under any other
+	// name fails with a bare "decryption failed", which reads like a wrong key
+	// rather than a misnamed field.
+	//
+	// The value must REFERENCE a key, never contain one. A PEM body here is
+	// refused at startup by ValidateCosignKey: cosign would treat it as a
+	// filename, fail, and the failing argument would reach the logs and the
+	// git-tracked run ledger.
 	CosignKey string
 	// Token authorizes GitHub Checks and the PR fork lookup. Without it, Kiln
 	// posts no Checks and treats every pull request as a fork.

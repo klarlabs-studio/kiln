@@ -97,6 +97,13 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	if opts.Env != nil {
 		env = *opts.Env
 	}
+	// Before the logger exists, and before anything is handed to a
+	// subprocess. A KILN_COSIGN_KEY holding a PEM body would otherwise reach
+	// the retry warnings, the publish error and the git-tracked run ledger
+	// (#56); refusing it here means it never becomes data kiln holds.
+	if err := env.Validate(); err != nil {
+		return nil, err
+	}
 
 	log := opts.Log
 	if log == nil {
