@@ -17,6 +17,7 @@ import (
 	"io"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -236,6 +237,31 @@ type Artifact struct {
 	// commit and one Dockerfile — senat-api and senat-runtime differ only by
 	// BIN= — are otherwise indistinguishable in their attestations.
 	Args map[string]string `yaml:"args"`
+
+	// Secrets are BuildKit build secrets, as id -> env://VAR.
+	//
+	// WHY THIS EXISTS WHEN args DELIBERATELY HAS NO ENV PASSTHROUGH. That rule
+	// protects reproducibility: a build argument changes what goes INTO the
+	// image, so sourcing one from the box's environment would make the artifact
+	// depend on something the commit does not record. A build secret is the
+	// opposite case — it is a credential used to FETCH what the commit already
+	// pins (a private npm package named in package-lock.json, a module proxy
+	// token), and BuildKit keeps it out of the image and its history by
+	// construction. The output still follows from the commit; only the
+	// permission to fetch it comes from the box.
+	//
+	// That is also why a secret must NOT be written as a build arg instead: a
+	// build arg is recorded in image history, so a token in one is published
+	// with the artifact.
+	//
+	// env://VAR only, matching the cosign key. A literal value in the pipeline
+	// file would be a credential committed to the repository, and a file path
+	// would tie the pipeline to one box's layout.
+	//
+	// Secret IDs are recorded in the provenance; their VALUES never are. Which
+	// credentials a build needed is part of how it was produced, and is the
+	// question asked when one is rotated or leaked.
+	Secrets map[string]string `yaml:"secrets"`
 
 	// SBOM attaches a CycloneDX bill of materials to the published digest,
 	// alongside the provenance.
@@ -754,7 +780,57 @@ func (a Artifact) validateImage(where string) error {
 	if strings.TrimSpace(a.Context) == "" {
 		return fmt.Errorf("%s.context must not be empty", where)
 	}
+	for id, ref := range a.Secrets {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("%s.secrets: an id must not be empty", where)
+		}
+		// The id reaches docker as `--secret id=<id>,env=<VAR>`; a comma or an
+		// equals sign in it would silently change what that flag means.
+		if strings.ContainsAny(id, ",= \t") {
+			return fmt.Errorf("%s.secrets: id %q must not contain a comma, equals sign or space", where, id)
+		}
+		name, ok := strings.CutPrefix(ref, envScheme)
+		if !ok {
+			return fmt.Errorf(
+				"%s.secrets.%s must be %sVAR, got %q: a literal here would be a credential committed to the repository",
+				where, id, envScheme, ref)
+		}
+		if strings.TrimSpace(name) == "" {
+			return fmt.Errorf("%s.secrets.%s: %s with no variable name", where, id, envScheme)
+		}
+	}
 	return nil
+}
+
+// envScheme is the reference form kiln already uses for the cosign signing key.
+// One spelling for "this value lives in the environment, not in the file".
+const envScheme = "env://"
+
+// SecretIDs returns the configured secret ids, sorted.
+//
+// Ids, never values: this feeds the provenance statement published beside the
+// image, which records WHICH credentials a build needed and nothing more.
+func (a Artifact) SecretIDs() []string {
+	if len(a.Secrets) == 0 {
+		return nil
+	}
+
+	ids := make([]string, 0, len(a.Secrets))
+	for id := range a.Secrets {
+		ids = append(ids, id)
+	}
+
+	sort.Strings(ids)
+
+	return ids
+}
+
+// SecretEnv returns the environment variable a secret id reads from, and
+// whether the id is configured.
+func (a Artifact) SecretEnv(id string) (string, bool) {
+	name, ok := strings.CutPrefix(a.Secrets[id], envScheme)
+
+	return name, ok
 }
 
 func (a Artifact) validateBinaries(where string) error {
@@ -766,6 +842,7 @@ func (a Artifact) validateBinaries(where string) error {
 		"dockerfile": a.Dockerfile != "",
 		"context":    a.Context != "",
 		"args":       len(a.Args) > 0,
+		"secrets":    len(a.Secrets) > 0,
 	} {
 		if set {
 			return misplaced(where, field, KindBinaries)
