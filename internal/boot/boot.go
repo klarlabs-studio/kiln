@@ -262,6 +262,9 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log ports.Logger) po
 	}
 	d := publish.NewDocker(runner, log)
 	d.SigningKey = env.CosignKey
+	// Only consulted when an artifact sets sbom: true, so a box without nox
+	// publishes exactly as it did before.
+	d.Nox = env.Nox
 	return d
 }
 
