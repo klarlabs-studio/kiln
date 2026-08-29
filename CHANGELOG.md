@@ -6,6 +6,78 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-08-29
+
+Provenance for artifacts kiln did not build, contents alongside origin, and a
+verifier that can explain itself.
+
+### Added
+
+- **`kiln attest` — provenance for a build kiln did not run.** The
+  verification half already worked for anyone: `kiln verify --policy` names
+  allowed builders and reads the attestation off the artifact, and the shipped
+  policy example lists a GitHub Actions identity beside kiln's own. The
+  producing half did not. A GitLab or Jenkins pipeline could emit SLSA
+  provenance, but not the two fields that make the chain worth verifying — the
+  commit the artifact was built from, and a source gate's verdict about that
+  commit.
+
+  ```bash
+  kiln attest --subject app@sha256:… --commit "$CI_COMMIT_SHA" \
+    --repo acme/app --builder "https://gitlab.com/acme/app" \
+    --gate warden --gate-reproved > predicate.json
+  cosign attest --predicate predicate.json \
+    --type https://slsa.dev/provenance/v1 app@sha256:…
+  ```
+
+  `--builder` is required rather than defaulted, and `sourceGate.verified` is
+  stated by the caller rather than assumed. Both used to be hardcoded to
+  kiln's own answer — correct while kiln was the only producer, and a lie the
+  moment anything else is, because the builder id is exactly what a verifier
+  pins its trust on and a pipeline that ran no gate would have emitted a
+  verdict claiming one passed.
+
+- **`publish[].sbom` attaches a CycloneDX inventory to the digest.** Off by
+  default. Provenance says where an artifact came from and nothing about what
+  is inside it, which is the question an incident opens with. Both
+  attestations hang off the same digest, so a consumer joins them with cosign
+  alone — no clone, no build system, no kiln.
+
+  No new toolchain: `nox scan --format cdx` already emits CycloneDX and kiln
+  already shells out to nox for `prove.nox`. A scan that fails, or that exits
+  0 having written nothing, fails the publish. `doctor` states the scope —
+  the source tree's declared dependencies, not a distro base image's own
+  packages.
+
+### Fixed
+
+- **A refusal said `0 < 1` and threw the explanation away.** cosign declined
+  a signature with "not enough verified log entries from transparency log:
+  0 < 1"; `condense()` kept everything after the last `": "`, which is the one
+  fragment that means nothing alone. kiln refused correctly, exited 2, and
+  gave the operator nothing to act on. A tail carrying no letters now keeps
+  its clause.
+
+- **The README's verification command failed on every release after v0.1.0.**
+  The certificate identity was hardcoded to that tag, so following the
+  instructions verbatim produced `failed to verify certificate identity` on a
+  release that verifies perfectly — an error indistinguishable from a forged
+  artifact, produced by the project's own documentation.
+
+- **The README said RollOps does not verify deployed images.** It has since
+  19 August: signature, SLSA provenance with builder pinning, and the source
+  gate joined to the commit the artifact was built from, enforcing before
+  apply. What was true was the measurement — an unconfigured daemon deploys
+  whatever Git points at — reported as a missing capability, which is a
+  different claim.
+
+### Testing
+
+- **`scripts/e2e-verify.sh` runs kiln against real cosign on every PR.** Every
+  unit test of the verify path scripts cosign with a fake, which proves
+  "given cosign says X, kiln concludes Y" and cannot prove "cosign, run with
+  kiln's arguments, says X". It found the `0 < 1` defect on its first run.
+
 ### Security
 
 - **Releases were built with a Go toolchain fourteen patch releases behind.**
@@ -620,7 +692,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.1.3...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/klarlabs-studio/kiln/compare/v0.4.1...v0.5.0
 [0.1.3]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.3
 [0.1.2]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.2
 [0.1.1]: https://github.com/klarlabs-studio/kiln/releases/tag/v0.1.1
