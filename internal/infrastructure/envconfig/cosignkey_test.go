@@ -39,8 +39,9 @@ func TestKeyMaterialIsRefusedBeforeAnythingRuns(t *testing.T) {
 // A key round-tripped through a secret store arrives base64-encoded and is
 // just as disclosing.
 func TestBase64KeyMaterialIsAlsoRefused(t *testing.T) {
-	// nox:ignore SEC-163 -- not a secret: the base64 of "-----BEGIN ENCRYPTED",
-	// which is the prefix this check exists to recognise.
+	// The base64 of "-----BEGIN ENCRYPTED" — the prefix this check exists to
+	// recognise, not a secret.
+	// nox:ignore SEC-163 -- fixture: the encoded PEM prefix under test
 	if err := ValidateCosignKey("LS0tLS1CRUdJTiBFTkNSWVBURUQ="); err == nil {
 		t.Error("base64 PEM was accepted")
 	}
@@ -56,9 +57,10 @@ func TestEveryValidReferenceIsAccepted(t *testing.T) {
 		"env://COSIGN_PRIVATE_KEY",
 		"k8s://kiln-system/cosign",
 		"awskms:///alias/kiln",
-		// nox:ignore SEC-520 -- a placeholder KMS URI, not a real project. It is
-		// here because every form cosign accepts must keep working; dropping it
-		// to quiet a scanner would stop testing the case it names.
+		// A placeholder KMS URI, not a real project. It is here because every
+		// form cosign accepts must keep working; dropping it to quiet a
+		// scanner would stop testing the case it names.
+		// nox:ignore SEC-520 -- fixture: placeholder gcpkms URI
 		"gcpkms://projects/p/locations/l/keyRings/r/cryptoKeys/k",
 		"azurekms://vault.vault.azure.net/key",
 		"hashivault://kiln",
