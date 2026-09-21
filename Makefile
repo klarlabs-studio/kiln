@@ -76,4 +76,4 @@ docker:
 release-check: examples-check dist-check all
 
 clean:
-	rm -rf $(BINDIR) $(DISTDIR) coverage.out
+	rm -rf $(BINDIR) $(DISTDIR) coverage.out .cover

@@ -14,7 +14,7 @@ policy:
       min: 80
     - name: isolation
       match: ["./internal/domain/isolation", "./internal/domain/isolation/..."]
-      min: 70
+      min: 80
     - name: attest
       match: ["./internal/infrastructure/attest", "./internal/infrastructure/attest/..."]
       min: 75
@@ -23,9 +23,12 @@ policy:
       min: 85
     - name: authority
       match: ["./internal/application/authority", "./internal/application/authority/..."]
-      min: 70
+      min: 75
     - name: gitcli
       match: ["./internal/infrastructure/gitcli", "./internal/infrastructure/gitcli/..."]
-      min: 70
+      min: 75
+    - name: engine
+      match: ["./internal/application/engine", "./internal/application/engine/..."]
+      min: 45
 exclude:
   - "**/testdata/**"

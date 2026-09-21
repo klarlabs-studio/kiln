@@ -372,7 +372,9 @@ recorded them; the table is where the work landed.
 
 Further on this branch: the engine consumes `trust.Context` rather than
 loose caller fields; coverage floors live in `.coverctl.yaml`;
-`filepath.Glob` (no `**`) is documented for `keep`.
+`filepath.Glob` (no `**`) is documented for `keep`; an architecture
+test refuses a surface that constructs `engine.Request` or calls
+`Engine.Execute`.
 
 Still later, and deliberately not started: an offline evidence bundle,
 a process sandbox, HTTP rate limits, and digest-pinning Kiln's own
