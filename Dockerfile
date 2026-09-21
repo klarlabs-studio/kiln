@@ -47,7 +47,9 @@ FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c
 LABEL org.opencontainers.image.title="kiln" \
       org.opencontainers.image.description="Signed-artifact factory: prove a commit through warden, build it, sign the digest with cosign." \
       org.opencontainers.image.source="https://github.com/klarlabs-studio/kiln" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="MIT" \
+      org.opencontainers.image.authors="Felix Geelhaar <felix@felixgeelhaar.de>" \
+      maintainer="Felix Geelhaar <felix@felixgeelhaar.de>"
 
 COPY --from=build /out/kiln  /usr/local/bin/kiln
 COPY --from=build /out/kilnd /usr/local/bin/kilnd
@@ -56,6 +58,11 @@ USER nonroot:nonroot
 WORKDIR /workspace
 
 EXPOSE 8088
+
+# Distroless has no shell and no curl. The only check this image can run
+# is that the binary we copied still starts. kilnd's real probe is
+# GET /healthz from outside the container.
+HEALTHCHECK --interval=30s --timeout=3s CMD ["/usr/local/bin/kiln", "version"]
 
 ENTRYPOINT ["/usr/local/bin/kiln"]
 CMD ["version"]

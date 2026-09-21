@@ -19,6 +19,8 @@ func TestDockerfilePinsBaseImages(t *testing.T) {
 	for _, want := range []string{
 		"golang:1.25-bookworm@sha256:",
 		"gcr.io/distroless/static-debian12:nonroot@sha256:",
+		"org.opencontainers.image.authors=",
+		"HEALTHCHECK",
 	} {
 		if !bytes.Contains(raw, []byte(want)) {
 			t.Errorf("Dockerfile base %q is not digest-pinned", want)
