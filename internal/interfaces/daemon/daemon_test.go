@@ -483,6 +483,36 @@ func TestOversizedBodyIsRejected(t *testing.T) {
 	}
 }
 
+func TestRunRefusesASecondCaller(t *testing.T) {
+	srv, repo := newServer(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	srv.Deps.Engine.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
+		close(started)
+		<-release
+		return nil
+	})
+
+	done := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		done <- do(t, srv, http.MethodPost, "/v1/run",
+			[]byte(`{"sha":"`+repo.Head()+`","event":"push"}`), bearer())
+	}()
+	<-started
+
+	rec := do(t, srv, http.MethodPost, "/v1/run",
+		[]byte(`{"sha":"`+repo.Head()+`","event":"push"}`), bearer())
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("second caller = %d, want 429; body = %s", rec.Code, rec.Body.String())
+	}
+
+	close(release)
+	first := <-done
+	if first.Code != http.StatusOK {
+		t.Errorf("first caller = %d, body = %s", first.Code, first.Body.String())
+	}
+}
+
 func TestShutdownWaitsForInFlightBuilds(t *testing.T) {
 	srv, repo := newServer(t)
 	started := make(chan struct{})

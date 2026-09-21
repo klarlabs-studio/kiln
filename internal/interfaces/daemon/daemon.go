@@ -66,6 +66,10 @@ type Server struct {
 
 	// background tracks in-flight webhook builds so Shutdown can wait for them.
 	background sync.WaitGroup
+	// runs admits one synchronous POST /v1/run at a time. A stolen token
+	// can still publish; this stops the same token pinning the box with
+	// stacked builds that all wait on the repository lock.
+	runs chan struct{}
 }
 
 // ErrNoToken reports a server that would have booted without authentication.
@@ -79,7 +83,10 @@ func New(deps *boot.Deps, token, webhookSecret string, log ports.Logger) (*Serve
 	if log == nil {
 		log = obs.Discard()
 	}
-	return &Server{Deps: deps, Log: log, Token: token, WebhookSecret: webhookSecret}, nil
+	return &Server{
+		Deps: deps, Log: log, Token: token, WebhookSecret: webhookSecret,
+		runs: make(chan struct{}, 1),
+	}, nil
 }
 
 // Handler builds the route table.
@@ -205,6 +212,14 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 	}
 	if strings.TrimSpace(req.SHA) == "" {
 		writeError(w, http.StatusBadRequest, "sha is required")
+		return
+	}
+
+	select {
+	case s.runs <- struct{}{}:
+		defer func() { <-s.runs }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "another run is already in progress on this box")
 		return
 	}
 

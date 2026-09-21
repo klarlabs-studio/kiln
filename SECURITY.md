@@ -115,7 +115,9 @@ exists to catch.
   unauthenticated build trigger is a remote code execution primitive.
   `KILN_TOKEN` is a publish credential: treat a leak as registry-write plus
   signing. JSON callers still cannot manufacture push/tag authority for a SHA
-  that is not on a trusted ref.
+  that is not on a trusted ref. `POST /v1/run` admits one caller at a time
+  (429 if another build is already in flight); a leak can still publish, it
+  cannot stack builds until the box falls over.
 
 - **MCP is read-only unless you say otherwise.** Agents get `doctor` and
   `status` freely and pull-request proves; push and tag runs are refused unless
