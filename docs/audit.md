@@ -3,7 +3,7 @@
 **Subject:** [klarlabs-studio/kiln](https://github.com/klarlabs-studio/kiln) at `main`  
 **Version in tree:** 0.6.0 (module `go.klarlabs.de/kiln`, Go 1.25, toolchain `go1.25.14`)  
 **Scope:** product understanding, architecture, trust model, security, correctness, documentation drift, test and release posture  
-**Method:** read the public docs and the implementation they describe. No exploit, payload, or reproduction procedure is included.  
+**Method:** read the public docs and the implementation they describe, then a second pass over architecture and security-sensitive surfaces. No exploit, payload, or reproduction procedure is included.  
 **Date:** 2026-09-21
 
 ---
@@ -155,6 +155,25 @@ Consequences:
 
 This is a safer default against H1/M3 (a fork cannot add `services:` or a force-pushing task) and a correctness surprise against the documented model (“the pipeline lives in the repository”). It should be an explicit, tested rule: *operator checkout owns routing; the commit owns checks* — or the pipeline should be read from the worktree of the SHA, under the isolation policy.
 
+#### H3. `POST /v1/run` lets the caller pick the trust event
+
+`handleRun` takes `event` and `fork` from the JSON body and passes them to the engine unchanged (`internal/interfaces/daemon/daemon.go`). There is no check that the SHA is on the watched branch, a tag, or a non-fork head.
+
+A holder of `KILN_TOKEN` can therefore ask for `{ "sha": "<any object in the clone>", "event": "push" }` and receive `isolation.For(push, false)`: secrets, publish, provenance skip. Fork PR heads that `watch` has already parked under `refs/kiln/pr/` are in that clone.
+
+The other surfaces do not leave this open:
+
+| Surface | Who decides event / fork |
+|---|---|
+| Webhook | HMAC-authenticated GitHub payload (`github.ParseDelivery`) |
+| MCP | Push/tag refused unless `KILN_MCP_ALLOW_RUN=1`; missing PR number → `ForkUnknown` |
+| CLI `kiln run` | Same capability, but it is a local operator command, not a network API |
+| `kilnd` JSON | Caller-supplied; `fork` defaults to `false` |
+
+`KILN_TOKEN` is already a signing-and-publish credential. H3 is how a leaked token becomes “sign any commit this box can see,” not only “rebuild what Git just pushed.” MCP extra-gates the same request; kilnd does not.
+
+**Fix direction:** treat `KILN_TOKEN` as tier-0 in the docs. For `event=pull_request`, require `pr` and resolve fork via the API (see M7). For `push`/`tag`, require the SHA to be reachable from the configured remote refs before granting publish policy — or refuse JSON-triggered publish entirely and leave that to webhooks and the CLI.
+
 ### Medium
 
 #### M1. The source verdict is attached best-effort
@@ -197,6 +216,24 @@ This is an accepted product constraint (the box *is* the toolchain). It means `.
 
 Today H2 keeps the image name operator-authored. If the pipeline is ever read from the commit (the documented model), a pull request can start an arbitrary image on the box before the gate runs. Even under today's load path, a merged `services:` change is “run this image as the docker daemon.” Doctor already warns when `ready` is missing; it should also warn on an unpinned tag.
 
+#### M7. kilnd defaults an unknown pull request to same-repo
+
+`docs/isolation.md` and the CLI/MCP paths agree: if kiln cannot tell whether a PR head is a fork, it is a fork. `cli/run.go` `resolveFork` and `cli/mcp.go` `facade.Run` both return `boot.ForkUnknown` when `--pr` / `pr` is absent.
+
+`daemon.execute` only calls `ResolvePullFork` when `event == pull_request && pr > 0`. A body `{ "event": "pull_request", "sha": "…" }` therefore keeps `fork=false` (the JSON zero value). That grants provenance skip. Secrets and publish stay off, so this is narrower than H3, but it is a real inconsistency with the documented fail-closed rule: a trusted warden note on that commit can stand in for a re-prove.
+
+#### M8. Build-secret ids are promised in provenance and then dropped
+
+`docs/configuration.md` and `ports.AttestInput.SecretIDs` say the secret *ids* (never values) are recorded so an incident can answer “what did this token build?” `publish.Docker` sets `in.SecretIDs = req.Artifact.SecretIDs()`. `attest.Build` copies `BuildArgs` into `externalParameters` and never writes `SecretIDs` onto the predicate (`internal/infrastructure/attest/attest.go`). The field is dead on the way to the artifact.
+
+This is a contract gap, not a leak. The ids appear in the operator-facing plan string; they do not travel with the digest.
+
+#### M9. MCP `kiln_run` does not take the repository lock
+
+CLI `kiln run` refuses when `.kiln/lock` is held (exit 75). `kiln watch` skips. `kilnd` waits. `facade.Run` in `internal/interfaces/cli/mcp.go` calls `Engine.Execute` with no `TryAcquire`. An agent and a cron tick can share a checkout: overlapping worktrees, interleaved ledger writes, two publishes of the same SHA.
+
+`--dry-run` / `doctor` / `status` correctly never lock. `kiln_run` is a write and should follow `kiln run`.
+
 ### Low
 
 #### L1. `SECURITY.md` still hardcodes the v0.1.0 certificate identity
@@ -231,6 +268,14 @@ Actions are pinned to commits. `Dockerfile` uses `golang:1.25-bookworm` and `gcr
 
 CI runs `kiln doctor --policy` on `*policy*.yaml` and `--config-only --pipeline` on pipelines. `make examples-check` runs `--config-only --pipeline` on every `examples/*.yaml`. A policy file passed as a pipeline is a load error. `make release-check` depends on this target.
 
+#### L9. `kiln status` does not list kept task files
+
+`docs/configuration.md` says matches are copied to `.kiln/runs/<run-id>/<task>/` and that `kiln status` lists them. The files are written. `printStatus` in `internal/interfaces/cli/status.go` prints run metadata, digest, and tags. It does not print `r.Tasks` or walk the keep directory. An operator following the docs looks in the wrong place.
+
+#### L10. `internal/infrastructure/gitcli` has no tests
+
+Watch discovery, tag peeling, and PR-ref listing all go through this adapter. Every other critical adapter (`publish`, `attest`, `github`, `task`, `watch`) has dedicated tests; `gitcli` relies on higher-level watch tests and a fake `execx`. A format-string change in `for-each-ref` would show up as “PRs vanished,” not as a red unit test.
+
 ### Documentation drift (not defects in the binary)
 
 These are audit findings because a supply-chain tool's docs *are* part of the trust story.
@@ -242,6 +287,8 @@ These are audit findings because a supply-chain tool's docs *are* part of the tr
 | `CONTRIBUTING.md` | Architecture section still names `internal/engine`, `internal/cli`, `internal/prove`. The tree is `application/`, `domain/`, `infrastructure/`, `interfaces/`, `boot/`. |
 | `SECURITY.md` | Stale verify-blob tag (L1). The model section is otherwise aligned with the code, including the “worktree is not a sandbox” sentence. |
 | `docs/competitive.md` | Last verified 2026-08-18. The GitHub private-repo attestation restriction is the load-bearing fact; it is due a refresh. |
+| `docs/configuration.md` | Says secret ids land in provenance (M8) and that `kiln status` lists kept files (L9). Neither is true in the binary. |
+| `docs/isolation.md` | “`kiln run --event pull_request` with no `--pr` → fork.” True for CLI and MCP; false for kilnd (M7). |
 
 ---
 
@@ -251,11 +298,11 @@ Kiln is unusually explicit about what it will not do, and the code generally mat
 
 **Trust boundaries are small and tested.** `isolation.For` is a pure function with an exhaustive matrix. Fork detection fails closed in the CLI, the watcher, and the webhook parser. `--fork` cannot be turned off by a later API result.
 
-**Surfaces cannot override policy.** CLI, MCP, HTTP and webhook all call the same engine. MCP push/tag is extra-gated. Webhook rejects empty secret and SHA-1 with the same 401 as a bad MAC. `deploy:` is a load error, not a feature request.
+**Surfaces cannot override the isolation *function*.** They can still choose the inputs. CLI, MCP, HTTP and webhook all call the same engine, so `publish` on a `pull_request` event is still suppressed. H3 is the remaining hole: kilnd lets the caller name the event. MCP push/tag is extra-gated. Webhook rejects empty secret and SHA-1 with the same 401 as a bad MAC. `deploy:` is a load error, not a feature request.
 
 **Signing failures are loud.** Missing `cosign` fails publish. Goreleaser without `signs:` is refused before the build. `KILN_COSIGN_KEY` holding PEM (or its base64) is rejected in `boot` before the logger exists; `Cmd.String` redacts leftovers. The ledger stores `ExitError.Summary()`, not subprocess stderr — a response to a real key leak into `.kiln/state.json` (0.6.0).
 
-**Untrusted input is treated as hostile.** `keep` and `materialize` refuse `..` and absolute paths, and resolve symlinks before copy. Unknown YAML keys are load errors. JSON API bodies `DisallowUnknownFields`. Build `args` have no env passthrough; build `secrets` are `env://` only, checked present before docker runs, and recorded by id not value.
+**Untrusted input is treated as hostile.** `keep` and `materialize` refuse `..` and absolute paths, and resolve symlinks before copy. Unknown YAML keys are load errors. JSON API bodies `DisallowUnknownFields`. Build `args` have no env passthrough; build `secrets` are `env://` only and checked present before docker runs. The ids are supposed to be recorded on the predicate (M8) and today are not.
 
 **Operations look like they have been on a real box.** Tag baseline, closed-PR filtering (`refs/pull/N/head` is immortal), failure backoff (205 failed runs in an afternoon is cited from production), PATH pinning in `box install`, keychain ACL so a launchd tick does not hang on a dialog, docker prune that never deletes a moving tag or a foreign repository.
 
@@ -277,7 +324,7 @@ Kiln is unusually explicit about what it will not do, and the code generally mat
 | Coverage floor | Disabled (L5). |
 | Lint | golangci-lint v2 org bar; gosec deliberately omitted in favour of nox taint analysis in the shared workflow. |
 
-Gaps relative to the findings: no test that `pull_request.branch: main` is refused; no test that `Clone` isolates `Tasks`; no test that a long-lived watcher reloads `.kiln.yaml` (because it does not); no test that a successful publish without a source VSA is a policy choice rather than a warn-and-continue.
+Gaps relative to the findings: no test that `pull_request.branch: main` is refused; no test that `Clone` isolates `Tasks`; no test that a long-lived watcher reloads `.kiln.yaml` (because it does not); no test that a successful publish without a source VSA is a policy choice rather than a warn-and-continue; no test that kilnd without `pr` is a fork; no test that `SecretIDs` appear on the predicate; no lock around MCP `kiln_run`; no `gitcli` unit tests.
 
 ---
 
@@ -297,11 +344,13 @@ These are product decisions. An auditor should not “fix” them without changi
 ## Recommended order of work
 
 1. **Refuse dangerous task branches** (H1) and treat empty `base` as the watched ref. Add a regression test that `branch: main` is a load error.
-2. **Decide and document pipeline authorship** (H2). Either “the box checkout is the pipeline, the commit is the gate” — and reload it each `watch --once` / each `--every` tick after an optional fast-forward of the tracked branch — or load from the worktree and run `services` / `tasks` through the same isolation as secrets.
-3. **Copy `Tasks` in `Run.Clone`** (M2). Extend `TestCloneIsDeep`.
-4. **Make source-summary attachment configurable and default-strict when trusted keys exist** (M1).
-5. **Refresh stale docs** (`backlog.md`, `CONTRIBUTING.md`, `SECURITY.md` verify command, `rollops-handoff.md` SLSA paragraph) so the audit trail matches 0.6.0.
-6. **Widen the secret-name list** with URL/DSN forms (M4); pin or warn on `services[].image` tags (M6).
+2. **Harden kilnd `POST /v1/run`** (H3, M7): unknown PR → fork; do not grant push/tag policy to a SHA that is not on a configured ref. Document `KILN_TOKEN` as equivalent to registry write plus signing.
+3. **Decide and document pipeline authorship** (H2). Either “the box checkout is the pipeline, the commit is the gate” — and reload it each `watch --once` / each `--every` tick after an optional fast-forward of the tracked branch — or load from the worktree and run `services` / `tasks` through the same isolation as secrets.
+4. **Lock MCP `kiln_run`** the way `kiln run` does (M9). Copy `Tasks` in `Run.Clone` (M2).
+5. **Serialize `SecretIDs` onto the SLSA predicate** (M8), or stop promising them.
+6. **Make source-summary attachment configurable and default-strict when trusted keys exist** (M1).
+7. **Refresh stale docs** (`backlog.md`, `CONTRIBUTING.md`, `SECURITY.md` verify command, `rollops-handoff.md` SLSA paragraph, `configuration.md` keep/status and secret-id claims) so the audit trail matches 0.6.0.
+8. **Widen the secret-name list** with URL/DSN forms (M4); pin or warn on `services[].image` tags (M6); show kept files in `kiln status` (L9).
 
 Nothing in this list requires growing kiln toward CD, a second check language, or an Actions runner. Those remain category errors.
 
@@ -311,4 +360,4 @@ Nothing in this list requires growing kiln toward CD, a second check language, o
 
 Kiln is a small, opinionated build-and-attest tool with a clear place in a larger system and an unusually adult threat model for an 0.x project. The isolation matrix, fail-closed fork handling, unsigned-publish refusal, worktree discipline, and the recent key-material / ledger-redaction work are real engineering, not brochure security.
 
-The main gaps are where the *new* surface (`tasks`, especially `pull_request` + `schedule`) meets write credentials, and where the docs still describe a world the code has already left (backlog items that shipped) or a world the code never implemented (pipeline loaded from the commit). Fix those without widening the product and the claim — two authorities, one commit, nothing unsigned — stays honest.
+The main gaps are where the *new* surface (`tasks`, especially `pull_request` + `schedule`) meets write credentials, where kilnd lets the caller name the trust event, and where the docs still describe a world the code has already left (backlog items that shipped) or a world the code never implemented (pipeline loaded from the commit; secret ids on the predicate). Fix those without widening the product and the claim — two authorities, one commit, nothing unsigned — stays honest.
