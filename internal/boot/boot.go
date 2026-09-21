@@ -9,6 +9,8 @@ package boot
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -16,16 +18,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	"go.klarlabs.de/kiln/internal/application/ports"
-	"go.klarlabs.de/kiln/internal/version"
-
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/application/engine"
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/credstore"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/pipelinefile"
 	"go.klarlabs.de/kiln/internal/infrastructure/prove"
@@ -35,6 +39,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/task"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
+	"go.klarlabs.de/kiln/internal/version"
 )
 
 // Options are the per-invocation inputs boot cannot read from the environment.
@@ -66,12 +71,13 @@ type Deps struct {
 	// simply off in that case.
 	RepoErr error
 
-	Runner execx.Runner
-	Store  *store.File
-	GitHub *github.Client
-	Checks ports.Reporter
-	Engine *engine.Engine
-	Log    ports.Logger
+	Runner    execx.Runner
+	Store     *store.File
+	GitHub    *github.Client
+	Checks    ports.Reporter
+	Engine    *engine.Engine
+	Authority *authority.Runner
+	Log       ports.Logger
 
 	// output is where subprocess output goes for requests built from this
 	// graph. Unexported so surfaces read it through Output() rather than
@@ -120,10 +126,11 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		return nil, fmt.Errorf("boot: %s is not a git repository — kiln builds commits, so it needs one", dir)
 	}
 
-	pipeline, found, err := loadPipeline(dir, opts.PipelinePath)
+	pipeline, found, pipelineFile, err := loadPipeline(dir, opts.PipelinePath)
 	if err != nil {
 		return nil, err
 	}
+	policyID := identifyPolicy(pipelineFile, found)
 
 	// A token from the environment wins — CI sets one, and an operator
 	// exporting GITHUB_TOKEN for one command means it. Otherwise the stored
@@ -165,6 +172,8 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		KilnVersion:      version.Version,
 		ToolVersions:     toolVersions(ctx, runner, env),
 		PhaseTimeout:     env.PhaseTimeout,
+		Evidence:         trust.ResolveEvidence(pipeline.Evidence.Source, len(env.TrustedKeys) > 0),
+		Policy:           policyID,
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
@@ -180,7 +189,42 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	// request. Recording it here keeps the plumbing in one place.
 	deps.output = opts.Output
 
+	deps.Authority = &authority.Runner{
+		Engine: deps.Engine,
+		Resolver: &authority.Resolver{
+			Git:     gitcli.New(runner),
+			Dir:     dir,
+			Remote:  pipeline.Watch.Remote,
+			Watched: pipeline.Watch.Ref,
+			ForkOf:  deps.lookupFork,
+		},
+		Locks:    lock.NewLocks(),
+		Repo:     repoName(deps),
+		Dir:      dir,
+		Pipeline: pipeline,
+		Log:      log,
+	}
+
 	return deps, nil
+}
+
+func repoName(d *Deps) string {
+	if d.RepoErr != nil {
+		return ""
+	}
+	return d.Repo.String()
+}
+
+func (d *Deps) lookupFork(ctx context.Context, number int) (bool, bool) {
+	if d.GitHub == nil || !d.GitHub.Enabled() {
+		return true, false
+	}
+	pull, err := d.GitHub.LookupPull(ctx, number)
+	if err != nil {
+		d.Log.Warn("could not look up pull request: treating it as a fork", "pr", number, "err", err)
+		return true, false
+	}
+	return pull.Fork, true
 }
 
 // Output is where subprocess output should be streamed for requests built
@@ -222,26 +266,46 @@ func resolveDB(db, dir string) string {
 	return filepath.Join(dir, db)
 }
 
-func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
+func loadPipeline(dir, explicit string) (config.Pipeline, bool, string, error) {
 	if explicit != "" {
 		// An explicitly named pipeline that does not exist is a mistake worth
 		// stopping for; a missing default one is not.
 		p, err := pipelinefile.LoadFile(explicit)
 		if err != nil {
-			return config.Pipeline{}, false, err
+			return config.Pipeline{}, false, explicit, err
 		}
-		return p, true, nil
+		return p, true, explicit, nil
 	}
 
+	path := filepath.Join(dir, config.FileName)
 	p, err := pipelinefile.LoadDir(dir)
 	switch {
 	case errors.Is(err, config.ErrNotFound):
-		return p, false, nil
+		return p, false, path, nil
 	case err != nil:
-		return config.Pipeline{}, false, err
+		return config.Pipeline{}, false, path, err
 	default:
-		return p, true, nil
+		return p, true, path, nil
 	}
+}
+
+func identifyPolicy(path string, found bool) trust.PolicyIdentity {
+	id := trust.PolicyIdentity{Path: config.FileName}
+	if !found {
+		id.Source = trust.PolicyDefault
+		return id
+	}
+	id.Source = trust.PolicyOperator
+	if path != "" {
+		id.Path = filepath.Base(path)
+	}
+	data, err := os.ReadFile(path) //nolint:gosec // operator pipeline path
+	if err != nil {
+		return id
+	}
+	sum := sha256.Sum256(data)
+	id.Digest = "sha256:" + hex.EncodeToString(sum[:])
+	return id
 }
 
 func buildClient(env envconfig.Env, repo github.Repo, log ports.Logger) *github.Client {

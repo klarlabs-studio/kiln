@@ -480,6 +480,10 @@ Cron plus `kiln watch --once` stays the daemon-less default. `kilnd` is for oper
 
 The webhook answers 202 and builds in the background: GitHub's ten-second delivery window is not the build budget. A missing secret is the same 401 as a forged signature.
 
+`POST /v1/run` is a request, not a grant. A body that says `"event": "push"`
+must still prove the SHA is on a trusted ref. A pull request without a number
+is a fork. The HMAC-verified webhook is already evidence.
+
 ### GitHub — the human UI
 
 Kiln posts Checks. There is no Kiln web app in OSS, and there does not need to be — humans have the pull request page, agents have MCP, operators have the CLI.
@@ -526,6 +530,8 @@ Each tick recomputes the full set of interesting refs and drops the ones a **suc
 
 ## Documentation
 
+- [`docs/intent.md`](docs/intent.md) — what kiln is for, and what it must not become
+- [`docs/intent.md`](docs/intent.md) — what kiln is for, and what it must not become
 - [`docs/configuration.md`](docs/configuration.md) — the full `.kiln.yaml` schema
 - [`docs/isolation.md`](docs/isolation.md) — the trust model, in detail
 - [`docs/operating.md`](docs/operating.md) — running it unattended, kilnd, troubleshooting

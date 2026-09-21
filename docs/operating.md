@@ -449,6 +449,11 @@ curl -sS localhost:8088/v1/run \
   -d '{"sha":"HEAD","event":"push","ref":"refs/heads/main"}'
 ```
 
+The body is a request. `"event": "push"` does not grant publish authority —
+the SHA must belong to the watched ref (or a tag this repository knows). A
+pull request without `"pr"` is treated as a fork. The webhook is different:
+the HMAC is the evidence.
+
 Point the GitHub webhook at `/v1/github/webhook`, content type
 `application/json`, with `KILN_WEBHOOK_SECRET` as the secret. Subscribe to
 **Pushes** and **Pull requests**.

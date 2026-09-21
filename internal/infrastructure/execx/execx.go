@@ -235,6 +235,16 @@ var secretNames = map[string]bool{
 	"GH_TOKEN":            true,
 	"KILN_TOKEN":          true,
 	"KILN_WEBHOOK_SECRET": true,
+	"DATABASE_URL":        true,
+	"DATABASE_URI":        true,
+	"DSN":                 true,
+	"CONNECTION_STRING":   true,
+	"JDBC_URL":            true,
+	"REDIS_URL":           true,
+	"REDIS_URI":           true,
+	"PGURL":               true,
+	"MONGO_URI":           true,
+	"MONGODB_URI":         true,
 	// The trusted-key list is not itself a secret, but a fork head that can
 	// read it learns exactly which signature to try to forge.
 	"KILN_TRUSTED_KEYS": true,
@@ -280,6 +290,9 @@ func Scrub(environ []string) []string {
 func IsSecretVar(name string) bool {
 	upper := strings.ToUpper(name)
 	if secretNames[upper] {
+		return true
+	}
+	if strings.HasSuffix(upper, "_PEM") || strings.HasSuffix(upper, "_DSN") || strings.HasSuffix(upper, "_URI") {
 		return true
 	}
 	for _, marker := range secretMarkers {

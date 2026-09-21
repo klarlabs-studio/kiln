@@ -242,5 +242,8 @@ func (r *Run) Clone() *Run {
 			}
 		}
 	}
+	if r.Tasks != nil {
+		cp.Tasks = append([]Task(nil), r.Tasks...)
+	}
 	return &cp
 }

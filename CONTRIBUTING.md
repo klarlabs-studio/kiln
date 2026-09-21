@@ -50,16 +50,20 @@ So:
 
 ## Architecture
 
-- `internal/engine` — the one path a run takes; every surface calls this.
-- `internal/prove`, `internal/publish`, `internal/verify` — the phases.
-- `internal/attest`, `internal/provenance` — statements, and who signed them.
-- `internal/isolation` — what an event is allowed to do. A pure function of
-  (event × fork); callers state intent, the policy decides.
-- `internal/execx` — the subprocess seam everything shells out through.
-- `internal/cli`, `internal/mcpsrv`, `internal/daemon` — delivery.
+- `internal/application/authority` — turns a surface's claim into an
+  established trust context and takes the repository lock. New doors call
+  this; they do not reimplement membership or fork defaults.
+- `internal/application/engine` — the one path a run takes once trust is
+  established.
+- `internal/domain/trust`, `internal/domain/write`, `internal/domain/isolation`
+  — evidence mode, kiln-owned proposal branches, and the event×fork matrix.
+- `internal/infrastructure/prove`, `publish`, `verify`, `attest` — the phases
+  and the statements they produce.
+- `internal/infrastructure/execx` — the subprocess seam.
+- `internal/interfaces/cli`, `mcpsrv`, `daemon` — delivery.
 
 Keep the phases ignorant of each other, and keep policy decisions out of the
-surfaces.
+surfaces. See [docs/intent.md](docs/intent.md).
 
 ## Commits & PRs
 
@@ -75,8 +79,10 @@ surfaces.
 Some things are deliberately not features, and a PR adding them will be
 declined however well it is written: an apply/canary/rollback path (that is
 RollOps), an Actions runner protocol, a second check language beside
-`.warden.yaml`, and a registry-touching prune. See
-[Boundaries](README.md#boundaries) and
+`.warden.yaml`, a generic workflow language (`needs`, `matrix`, `jobs`),
+and a registry-touching prune. See
+[Boundaries](README.md#boundaries),
+[`docs/intent.md`](docs/intent.md) and
 [`docs/competitive.md`](docs/competitive.md) for where kiln deliberately does
 not compete.
 

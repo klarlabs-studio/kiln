@@ -21,6 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/domain/trust"
+	"go.klarlabs.de/kiln/internal/domain/write"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,7 +87,18 @@ type Pipeline struct {
 	// suite talks to, a fake API. They run for the whole of prove and tasks
 	// and are torn down afterwards whatever happened.
 	Services map[string]Service `yaml:"services,omitempty"`
-	Watch    Watch              `yaml:"watch"`
+	// Evidence says how complete the source half of a published artifact
+	// must be. Empty is resolved later: a box with pinned trusted keys
+	// defaults to required, an adopting box to best-effort.
+	Evidence Evidence `yaml:"evidence,omitempty"`
+	Watch    Watch    `yaml:"watch"`
+}
+
+// Evidence is the completeness policy for the provenance chain.
+type Evidence struct {
+	// Source is required or best-effort. A required publish that cannot
+	// attach Warden's verdict is a failed publish, not a warning.
+	Source string `yaml:"source,omitempty"`
 }
 
 // Service is a container the gate needs beside it.
@@ -187,10 +201,10 @@ type Prove struct {
 	// it. A repository whose dependencies live in a global cache, which is
 	// every Go one, needs nothing here.
 	//
-	// Honoured only for a trusted event. The pipeline is read from the commit
-	// being gated, so a fork's author writes this list, and copying what they
-	// name out of the operator's clone is exactly the thing isolation exists
-	// to prevent.
+	// Honoured only for a trusted event. The pipeline is the operator
+	// checkout's .kiln.yaml, but this list still names paths inside the
+	// worktree of the commit being gated — and a fork must not be able to
+	// pull files out of the operator clone.
 	Materialize []string `yaml:"materialize"`
 }
 
@@ -553,6 +567,9 @@ func (p Pipeline) validate() error {
 	if p.WantsPublish() && len(p.Publish) == 0 {
 		return errors.New("an event routes to publish but the publish: list is empty")
 	}
+	if err := p.validateEvidence(); err != nil {
+		return err
+	}
 	if err := p.validateTasks(); err != nil {
 		return err
 	}
@@ -623,6 +640,17 @@ func (p Pipeline) validateTasks() error {
 			case strings.HasPrefix(pr.Branch, "refs/"):
 				return fmt.Errorf("%s.pull_request.branch is a branch name, not a ref: %q", where, pr.Branch)
 			}
+			if err := write.Owned(pr.Branch); err != nil {
+				return fmt.Errorf("%s.pull_request.branch: %w", where, err)
+			}
+			watched := p.Watch.Ref
+			if watched == "" {
+				watched = "main"
+			}
+			if pr.Branch == watched || pr.Base == pr.Branch {
+				return fmt.Errorf("%s.pull_request: %q is the watched branch; kiln does not rewrite source-of-truth",
+					where, pr.Branch)
+			}
 			for _, event := range t.On {
 				if event == "pull_request" {
 					// A task on a pull request opening pull requests is a loop
@@ -645,6 +673,17 @@ func (p Pipeline) validateTasks() error {
 			// reaching into whatever else the box builds.
 			return fmt.Errorf("%s.workdir must stay inside the worktree, got %q", where, t.Workdir)
 		}
+	}
+	return nil
+}
+
+func (p Pipeline) validateEvidence() error {
+	if strings.TrimSpace(p.Evidence.Source) == "" {
+		return nil
+	}
+	if _, ok := trust.ParseEvidenceMode(p.Evidence.Source); !ok {
+		return fmt.Errorf("evidence.source must be %q or %q, got %q",
+			trust.EvidenceRequired, trust.EvidenceBestEffort, p.Evidence.Source)
 	}
 	return nil
 }

@@ -379,6 +379,62 @@ publish:
 	}
 }
 
+func TestDoctorWarnsAboutBestEffortEvidence(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "evidence.source is best-effort") {
+		t.Errorf("an adopting box should hear that the source half is optional:\n%s", out)
+	}
+}
+
+func TestDoctorReportsRequiredEvidenceWhenKeysArePinned(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_TRUSTED_KEYS", "warden-test-key")
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "evidence.source is required") {
+		t.Errorf("a box with pinned keys should require the source half:\n%s", out)
+	}
+}
+
+func TestDoctorWarnsAboutAnUnpinnedServiceImage(t *testing.T) {
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+  push: [prove]
+services:
+  db:
+    image: postgres:16
+    port: 5432
+`)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "not digest-pinned") {
+		t.Errorf("doctor should warn about a mutable service tag:\n%s", out)
+	}
+}
+
+func TestListKeptNamesRetainedFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "runs", "run-1", "scan")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nox.sarif"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := listKept(root, "run-1")
+	if len(got) != 1 || got[0] != filepath.Join("scan", "nox.sarif") {
+		t.Errorf("listKept = %v", got)
+	}
+}
+
 func TestDoctorOutsideARepository(t *testing.T) {
 	t.Chdir(t.TempDir())
 	t.Setenv("KILN_DIR", "")

@@ -6,6 +6,39 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Authority resolution below every mutating surface.** CLI, MCP and
+  `POST /v1/run` submit a claim. Push and tag authority is established by
+  membership on a trusted ref; a pull request without a number, or whose
+  forge lookup fails, is a fork. A verified webhook remains evidence.
+  Repository exclusivity lives on the same path, so MCP can no longer
+  race the ledger.
+- **`evidence.source`.** `required` or `best-effort`. A box with
+  `KILN_TRUSTED_KEYS` pinned defaults to required: a publish that cannot
+  attach Warden's verdict fails. Best-effort is recorded in provenance
+  and shown by `kiln doctor` and `kiln verify`.
+- **Build-policy identity in provenance.** `.kiln.yaml` is the operator
+  checkout's file. Its source (`operator` or `default`) and sha256 digest
+  travel with the artifact.
+- **Declared secret IDs in provenance.** Values never do.
+- **Proposal branches are structurally `kiln/*`.** `branch: main` is a
+  load error, not a force-push destination.
+
+### Changed
+
+- Scheduled tasks no longer inherit synthetic push authority. Secrets
+  are granted only to a task that actually proposes a write.
+- `kiln verify` explains policy identity, evidence mode, declared
+  secrets, and inherited vs reproduced source verdicts.
+- `kiln status` lists task outcomes and retained files.
+- `kiln doctor` reports evidence mode and warns on unpinned service
+  images.
+- Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`
+  and `*_PEM` / `*_URI` forms.
+- `SECURITY.md` verifies the current release tag, not a hardcoded
+  `v0.1.0`.
+
 ## [0.6.0] - 2026-08-29
 
 A private key that reached the ledger, a form of key storage doctor called

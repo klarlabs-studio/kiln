@@ -111,6 +111,20 @@ func (g *Git) PullRefs(ctx context.Context, dir string) ([]ports.Ref, error) {
 	return out, nil
 }
 
+// Resolve turns a ref or commit-ish into an object id.
+func (g *Git) Resolve(ctx context.Context, dir, ref string) (string, error) {
+	if strings.TrimSpace(ref) == "" {
+		return "", fmt.Errorf("gitcli: no ref")
+	}
+	res, err := g.Runner.Run(ctx, execx.Cmd{
+		Name: "git", Args: []string{"rev-parse", "--verify", ref + "^{commit}"}, Dir: dir,
+	})
+	if err != nil {
+		return "", fmt.Errorf("gitcli: resolve %s: %w", ref, err)
+	}
+	return strings.TrimSpace(res.Output()), nil
+}
+
 func (g *Git) Contains(ctx context.Context, dir, sha, tip string) (bool, error) {
 	if sha == "" || tip == "" {
 		return false, nil

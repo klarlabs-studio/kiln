@@ -4,6 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"sort"
 	"time"
 
 	"go.klarlabs.de/kiln/internal/application/engine"
@@ -39,7 +43,7 @@ func runStatus(ctx context.Context, args []string, io IO) error {
 	if *asJSON {
 		return writeJSON(io, r)
 	}
-	printStatus(io, r)
+	printStatus(io, r, filepath.Dir(deps.Store.Path()))
 	return nil
 }
 
@@ -91,7 +95,7 @@ func printList(io IO, deps *boot.Deps, limit int, asJSON bool) error {
 	return nil
 }
 
-func printStatus(io IO, r *run.Run) {
+func printStatus(io IO, r *run.Run, keepRoot string) {
 	io.printf("run     %s\n", r.ID)
 	io.printf("commit  %s\n", r.SHA)
 	if r.Ref != "" {
@@ -115,6 +119,12 @@ func printStatus(io IO, r *run.Run) {
 	for _, tag := range r.Tags {
 		io.printf("tag     %s\n", tag)
 	}
+	for _, task := range r.Tasks {
+		io.printf("task    %s %s\n", task.Name, taskLabel(task))
+	}
+	for _, name := range listKept(keepRoot, r.ID) {
+		io.printf("kept    %s\n", name)
+	}
 	if r.Error != "" {
 		io.printf("error   %s\n", r.Error)
 	}
@@ -122,6 +132,43 @@ func printStatus(io IO, r *run.Run) {
 	if !r.FinishedAt.IsZero() {
 		io.printf("took    %s\n", r.Duration().Round(time.Millisecond))
 	}
+}
+
+func taskLabel(t run.Task) string {
+	switch {
+	case t.OK:
+		return "ok"
+	case t.Tolerated:
+		return "failed (tolerated)"
+	default:
+		return "FAIL"
+	}
+}
+
+// listKept names the files a task retained for this run, relative to the
+// run directory. The worktree is gone; this is what is left to read.
+func listKept(keepRoot, runID string) []string {
+	if keepRoot == "" || runID == "" {
+		return nil
+	}
+	dir := filepath.Join(keepRoot, "runs", runID)
+	if _, err := os.Stat(dir); err != nil {
+		return nil
+	}
+	var out []string
+	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return nil
+		}
+		out = append(out, rel)
+		return nil
+	})
+	sort.Strings(out)
+	return out
 }
 
 // phaseLabel marks a non-terminal run that has been open too long.

@@ -12,8 +12,8 @@ follows from taking that sentence seriously.
 | `pull_request` | no | no | no | yes |
 | `push` / `tag` | — | yes | yes | yes |
 
-This lives in `internal/isolation`, as a pure function of two inputs with no
-I/O. It can be exhaustively tested, and it is.
+This lives in `internal/domain/isolation`, as a pure function of two inputs
+with no I/O. It can be exhaustively tested, and it is.
 
 ## The caller states intent; the policy decides
 
@@ -24,6 +24,23 @@ HTTP client.
 
 That inversion is why new surfaces are cheap: they cannot express a way around
 the rules, because the rules are not applied at the edge.
+
+## Surfaces are not security boundaries
+
+CLI, MCP, `POST /v1/run`, the webhook, watch and schedule all ask for work.
+They do not define reality.
+
+A JSON body that says `{ "event": "push", "fork": false }` is a claim. The
+application layer resolves the SHA against the watched ref (or a tag this
+repository knows) before the engine sees a publishable event. A webhook
+delivery is different: the HMAC is the evidence, and the parsed job is
+already established.
+
+A pull request without a number, or whose forge lookup fails, is a fork.
+`--fork` and `"fork": true` are a floor, never a ceiling.
+
+Repository locking lives on the same path. MCP, CLI and HTTP cannot bypass
+it by using a different door.
 
 ## Why a pull request never publishes
 
@@ -39,14 +56,15 @@ way to smuggle a deployable artifact past review.
 A fork pull request's head contains attacker-authored code that Kiln is about
 to execute. Two consequences:
 
-**No secrets.** The gate runs with a scrubbed environment. `internal/execx`
+**No secrets.** The gate runs with a scrubbed environment. `internal/infrastructure/execx`
 drops anything matching `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `API_KEY`,
 `AUTH` and friends, plus a named list covering `GITHUB_TOKEN`, registry
-credentials, cosign material and `SSH_AUTH_SOCK` (agent forwarding is a live
-credential, not a value). Ordinary variables — `PATH`, `HOME`, `CI` — survive,
-and `KILN_ISOLATED=1` is added so a repository's own checks can tell they are
-running without credentials and skip an integration test rather than fail
-confusingly.
+credentials, cosign material, `SSH_AUTH_SOCK` (agent forwarding is a live
+credential, not a value), and common connection forms (`DATABASE_URL`, `DSN`,
+`CONNECTION_STRING`, `*_PEM`, `*_URI`). Ordinary variables — `PATH`, `HOME`,
+`CI` — survive, and `KILN_ISOLATED=1` is added so a repository's own checks can
+tell they are running without credentials and skip an integration test rather
+than fail confusingly.
 
 This is a denylist, deliberately. An allowlist would be tighter but would break
 every build that needs a variable Kiln has never heard of, and an operator who
@@ -126,3 +144,10 @@ and sign something real.
 
 The refusal message names the variable. An agent told "internal error" has no
 move except to give up or retry identically.
+
+## Proposal writes
+
+A task may force-push only a branch under `kiln/`. `main`, `master`, the
+watched ref, and anything that escapes that namespace are load errors.
+Kiln may replace its own proposal branches. It may not rewrite
+source-of-truth.

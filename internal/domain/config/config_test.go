@@ -496,3 +496,48 @@ func TestPrunableImagesListsOnlyImages(t *testing.T) {
 		t.Errorf("PrunableImages = %v", got)
 	}
 }
+
+func TestProposalBranchMustBeKilnOwned(t *testing.T) {
+	doc := minimal + `
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: main
+      title: pwned
+`
+	err := parseErr(t, doc)
+	if !strings.Contains(err.Error(), "kiln/") {
+		t.Errorf("want a kiln/ namespace refusal, got %v", err)
+	}
+}
+
+func TestProposalBranchInKilnNamespaceLoads(t *testing.T) {
+	p := parse(t, minimal+`
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: kiln/remediate
+      title: chore
+`)
+	if p.Tasks["remediate"].PullRequest.Branch != "kiln/remediate" {
+		t.Errorf("branch = %q", p.Tasks["remediate"].PullRequest.Branch)
+	}
+}
+
+func TestEvidenceSourceMustBeKnown(t *testing.T) {
+	err := parseErr(t, minimal+"\nevidence:\n  source: maybe\n")
+	if !strings.Contains(err.Error(), "required") {
+		t.Errorf("want a known-mode refusal, got %v", err)
+	}
+}
+
+func TestEvidenceSourceRequiredLoads(t *testing.T) {
+	p := parse(t, minimal+"\nevidence:\n  source: required\n")
+	if p.Evidence.Source != "required" {
+		t.Errorf("source = %q", p.Evidence.Source)
+	}
+}

@@ -1,3 +1,7 @@
+The items below were the original migration list. Several have landed
+(schedule from watch, task `keep`, task `pull_request`, `services:`).
+Near-term work now lives in [intent.md](intent.md): strengthen evidence
+and authority rather than grow the workflow language.
 
 ## Fire scheduled tasks from the watch loop
 

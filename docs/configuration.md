@@ -13,6 +13,14 @@ released. Kiln does not read it either, beyond one check — see `binaries` belo
 says. It is deliberately small, and the things it *cannot* express are as much
 a part of the design as the things it can.
 
+Kiln reads `.kiln.yaml` from the **operator checkout**, not from the commit
+being built. The source being built and the policy controlling the build are
+different objects. That is a security decision: a pull request must not be
+able to rewrite routing, services or proposal destinations. The file's
+identity (`operator` or `default`, plus `sha256:` of the bytes) is recorded
+in provenance so a verifier can say "commit X produced artifact Y under
+policy Z". See [intent.md](intent.md).
+
 Every unknown key is a load error. A typo that silently does nothing is worse
 than a failure, because it looks like it worked.
 
@@ -57,6 +65,9 @@ watch:
   ref: main
   pull_requests: true
   tags: true
+
+evidence:
+  source: required      # or best-effort; see Evidence below
 ```
 
 ---
@@ -454,6 +465,11 @@ fast-forwarded. Yesterday's fix should not outlive the code it was fixing.
 remediation left behind would open a pull request full of a partial fix, which
 is worse than no pull request at all.
 
+**The branch must live under `kiln/`.** Kiln may replace its own proposal
+branches. It may not rewrite `main`, `master`, the watched ref, or anything
+else that is source-of-truth — even if the pipeline names that branch.
+`branch: main` is a load error.
+
 **A task routed to `pull_request` may not open one** — that is a loop with a
 write credential in it, and the config refuses to load. An untrusted head is
 refused a second time at runtime, for any caller that assembles a request by
@@ -511,6 +527,24 @@ away.
 `remote` and `ref` name the branch a tick follows. `pull_requests` and `tags`
 default to `true`; setting either `false` is honoured (they are tri-state
 internally, so "absent" and "explicitly false" are distinguishable).
+
+## `evidence`
+
+How complete the source half of a published artifact must be.
+
+```yaml
+evidence:
+  source: required      # fail publish if Warden's verdict cannot be attached
+  # source: best-effort # attach it when present; record the gap when not
+```
+
+A box with `KILN_TRUSTED_KEYS` pinned defaults to `required`. A box still
+adopting Warden defaults to `best-effort`. The effective mode is recorded in
+provenance and shown by `kiln verify` and `kiln doctor`.
+
+Best-effort exists for migration. It is not silent: a production
+configuration that meant to require the chain and quietly published without
+it would be a failed publication dressed as a warning.
 
 ---
 

@@ -26,10 +26,11 @@ import (
 	"sync"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/application/engine"
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -201,7 +202,7 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 
 	run, err := s.execute(r.Context(), github.Job{
 		SHA: req.SHA, Ref: req.Ref, Event: event, Fork: req.Fork,
-	}, req.PR)
+	}, req.PR, false)
 	if err != nil && run.ID == "" {
 		// Nothing ran: a bad commit, an unreadable repository.
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -292,7 +293,7 @@ func (s *Server) startBackground(job github.Job) {
 		ctx, cancel := context.WithTimeout(context.Background(), BackgroundTimeout)
 		defer cancel()
 
-		out, err := s.execute(ctx, job, 0)
+		out, err := s.execute(ctx, job, 0, true)
 		if err != nil {
 			s.Log.Error("webhook build failed",
 				"sha", job.SHA, "ref", job.Ref, "event", job.Event.String(), "err", err)
@@ -309,7 +310,7 @@ func (s *Server) startBackground(job github.Job) {
 // delivers a push and a pull_request within the same second all the time, and
 // each starts its own background build. Without the lock they would race each
 // other's worktrees and ledger writes on one checkout.
-func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.RunOutput, error) {
+func (s *Server) execute(ctx context.Context, job github.Job, pr int, established bool) (mcpsrv.RunOutput, error) {
 	d := s.Deps
 
 	sha, err := worktree.ResolveSHA(ctx, d.Runner, d.Dir, job.SHA)
@@ -323,19 +324,11 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 	}
 	defer func() { _ = l.Release() }()
 
-	fork := job.Fork
-	if !fork && job.Event == isolation.EventPullRequest && pr > 0 {
-		fork = d.ResolvePullFork(ctx, pr)
-	}
-
-	rec, execErr := d.Engine.Execute(ctx, engine.Request{
-		SHA:      sha,
-		Event:    job.Event,
-		Fork:     fork,
-		Ref:      job.Ref,
-		Repo:     repoName(d),
-		Dir:      d.Dir,
-		Pipeline: d.Pipeline,
+	rec, execErr := d.Authority.ExecuteLocked(ctx, authority.Request{
+		Claim: trust.Claim{
+			SHA: sha, Event: job.Event, Ref: job.Ref, PR: pr, Fork: job.Fork,
+			Established: established,
+		},
 	})
 	return mcpsrv.FromRun(rec), execErr
 }
@@ -366,13 +359,6 @@ func (s *Server) repoLock(ctx context.Context) (*lock.Lock, error) {
 		case <-time.After(poll):
 		}
 	}
-}
-
-func repoName(d *boot.Deps) string {
-	if d.RepoErr != nil {
-		return ""
-	}
-	return d.Repo.String()
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {

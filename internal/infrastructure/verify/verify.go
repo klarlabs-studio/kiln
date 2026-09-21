@@ -119,7 +119,39 @@ func (r Report) String() string {
 	for _, l := range r.Links {
 		fmt.Fprintf(&b, "  %-8s %-12s %s\n", l.Status, l.Name, l.Detail)
 	}
+	if r.Statement != nil {
+		explainStatement(&b, *r.Statement)
+	}
 	return b.String()
+}
+
+// explainStatement names the facts the provenance already established so
+// the report is a chain, not a list of cryptographic checks.
+func explainStatement(b *strings.Builder, s attest.Statement) {
+	ext := s.Predicate.BuildDefinition.ExternalParameters
+	internal := s.Predicate.BuildDefinition.InternalParameters
+	if p := ext.Policy; p != nil && (p.Source != "" || p.Digest != "") {
+		fmt.Fprintf(b, "  %-8s %-12s %s", "", "policy", orNone(p.Source))
+		if p.Digest != "" {
+			fmt.Fprintf(b, " %s", p.Digest)
+		}
+		b.WriteByte('\n')
+	}
+	if internal.EvidenceSource != "" {
+		fmt.Fprintf(b, "  %-8s %-12s source %s\n", "", "evidence", internal.EvidenceSource)
+	}
+	if len(ext.SecretIDs) > 0 {
+		fmt.Fprintf(b, "  %-8s %-12s %s\n", "", "secrets", strings.Join(ext.SecretIDs, ", "))
+	}
+	gate := internal.SourceGate
+	if !gate.Verified {
+		return
+	}
+	mode := "reproduced"
+	if !gate.Reproved {
+		mode = "inherited"
+	}
+	fmt.Fprintf(b, "  %-8s %-12s %s (%s)\n", "", "verdict", orNone(gate.Tool), mode)
 }
 
 // Options configure a walk.

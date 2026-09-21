@@ -57,5 +57,14 @@ watch:
   pull_requests: true
   tags: true
 
+# This file is the operator checkout's policy, not the commit's. Kiln records
+# its digest in provenance so a verifier can name the policy that governed
+# the build. See docs/intent.md.
+#
+# evidence.source defaults to required when KILN_TRUSTED_KEYS is pinned.
+# Uncomment to keep publishing while adopting warden notes:
+# evidence:
+#   source: best-effort
+
 # There is no `deploy:` key, and adding one is a load error. RollOps consumes
 # the signed digest this pipeline produces; kiln never applies.

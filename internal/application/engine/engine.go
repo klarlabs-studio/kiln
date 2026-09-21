@@ -22,6 +22,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 )
 
 // Request is what a surface asks for.
@@ -106,6 +107,11 @@ type Engine struct {
 	// default; a box that keeps every artifact forever fills its disk, and the
 	// first symptom is an unrelated build failing.
 	KeepRuns int
+	// Evidence is how complete the source half of a publish must be.
+	// Zero (and best-effort) warn and continue; required fails the publish.
+	Evidence trust.EvidenceMode
+	// Policy is the identity of the pipeline that governed this process.
+	Policy trust.PolicyIdentity
 	// PhaseTimeout bounds each phase separately. Zero means unbounded.
 	//
 	// Per phase rather than per run, because the phases fail differently: a
@@ -315,8 +321,14 @@ func (e *Engine) doPublish(
 	e.persist(r, log)
 	e.report(ctx, func() error { return e.Checks.Start(ctx, ports.NamePublish, req.SHA) }, log, ports.NamePublish)
 
+	vsa, err := e.sourceSummary(ctx, req, log)
+	if err != nil {
+		log.Error("source evidence required but missing", "err", err)
+		return err
+	}
+
 	produced, err := e.publishAll(ctx, req, r, wanted,
-		e.provenanceInput(req, r, policy, gate), e.sourceSummary(ctx, req, log), log)
+		e.provenanceInput(req, r, policy, gate), vsa, log)
 
 	conclusion, title, summary := ports.PublishSummary(produced, err)
 	e.report(ctx, func() error {
@@ -392,22 +404,33 @@ func (e *Engine) publishAll(
 
 // sourceSummary fetches warden's verdict for the commit, once per run.
 //
-// Best-effort. A repository still adopting warden, or a commit whose note has
-// not been written, publishes build provenance without the source half rather
-// than failing — refusing would make adoption all-or-nothing. The absence is
-// logged, because "no source summary attached" is something an operator
-// enforcing one downstream needs to be able to find out about here rather than
-// at deploy time.
-func (e *Engine) sourceSummary(ctx context.Context, req Request, log ports.Logger) []byte {
+// Required mode fails the publish when the verdict cannot be attached. That
+// is the production default once trusted keys are pinned. Best-effort is the
+// adoption path: the artifact still ships, the gap is logged and recorded in
+// provenance, and a consumer who needs the source half finds out here rather
+// than at deploy time.
+func (e *Engine) sourceSummary(ctx context.Context, req Request, log ports.Logger) ([]byte, error) {
+	required := e.Evidence == trust.EvidenceRequired
 	if e.SourceAttester == nil {
-		return nil
+		if required {
+			return nil, errors.New("evidence.source is required: no source attester configured")
+		}
+		return nil, nil
 	}
 	vsa, err := e.SourceAttester.SourceAttestation(ctx, req.Dir, req.SHA)
-	if err != nil {
-		log.Warn("no source summary to attach", "err", err)
-		return nil
+	if err != nil || len(vsa) == 0 {
+		if required {
+			if err != nil {
+				return nil, fmt.Errorf("evidence.source is required: %w", err)
+			}
+			return nil, errors.New("evidence.source is required: no source summary to attach")
+		}
+		if err != nil {
+			log.Warn("no source summary to attach", "err", err)
+		}
+		return nil, nil
 	}
-	return vsa
+	return vsa, nil
 }
 
 // provenanceInput assembles the run-level facts every artifact's attestation
@@ -424,16 +447,27 @@ func (e *Engine) provenanceInput(
 		// A build that could not see the operator's credentials is a
 		// materially different build, and a reader deciding what to trust
 		// should not have to infer it from the event name.
-		Isolated:     !policy.Secrets,
-		GateTool:     "warden",
-		GateVerified: true, // kiln does not reach a publish otherwise
-		GateReproved: !r.Skipped,
-		GateReason:   gate.Reason,
-		KilnVersion:  e.KilnVersion,
-		ToolVersions: e.ToolVersions,
-		InvocationID: r.ID,
-		StartedOn:    r.StartedAt,
+		Isolated:       !policy.Secrets,
+		GateTool:       "warden",
+		GateVerified:   true, // kiln does not reach a publish otherwise
+		GateReproved:   !r.Skipped,
+		GateReason:     gate.Reason,
+		KilnVersion:    e.KilnVersion,
+		ToolVersions:   e.ToolVersions,
+		InvocationID:   r.ID,
+		StartedOn:      r.StartedAt,
+		PolicySource:   e.Policy.Source,
+		PolicyPath:     e.Policy.Path,
+		PolicyDigest:   e.Policy.Digest,
+		EvidenceSource: string(e.effectiveEvidence()),
 	}
+}
+
+func (e *Engine) effectiveEvidence() trust.EvidenceMode {
+	if e.Evidence == "" {
+		return trust.EvidenceBestEffort
+	}
+	return e.Evidence
 }
 
 // publisherFor selects the publisher for an artifact kind. A nil result is a
@@ -492,10 +526,10 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	e.persist(r, log)
 	log.Info("scheduled tasks", "count", len(tasks))
 
-	// A schedule fires on the tracked ref of the operator's own repository —
-	// never a fork head — so the tasks get the trusted policy. The publish
-	// bit is off regardless: RunScheduled never publishes.
-	policy := isolation.Policy{Secrets: true, Skip: true}
+	// A schedule is not evidence that source changed, so it does not inherit
+	// push/tag authority. Secrets are a capability granted only to tasks that
+	// actually propose a write — not a synthetic event type.
+	policy := scheduledPolicy(tasks)
 
 	if e.Worktrees == nil {
 		return r, fmt.Errorf("engine: no worktree provider configured")
@@ -512,6 +546,15 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	r.Succeed()
 	e.persist(r, log)
 	return r, nil
+}
+
+func scheduledPolicy(tasks []config.NamedTask) isolation.Policy {
+	for _, nt := range tasks {
+		if nt.Task.PullRequest != nil {
+			return isolation.Policy{Secrets: true}
+		}
+	}
+	return isolation.Policy{}
 }
 
 // startServices brings up the pipeline's service containers.

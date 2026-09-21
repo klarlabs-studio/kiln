@@ -87,6 +87,11 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"AWS_SECRET_ACCESS_KEY=xxx",
 		"SSH_AUTH_SOCK=/tmp/agent.1",
 		"CI=true",
+		"DATABASE_URL=postgres://x",
+		"DSN=host=db",
+		"REDIS_URL=redis://x",
+		"MONGO_URI=mongodb://x",
+		"APP_PEM=-----BEGIN",
 		"malformed-no-equals",
 	}
 

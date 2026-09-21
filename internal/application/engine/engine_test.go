@@ -11,6 +11,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -733,5 +734,51 @@ func TestCallerCancellationIsNotATimeout(t *testing.T) {
 	// be reported as one.
 	if errors.Is(err, ErrPhaseTimeout) {
 		t.Errorf("cancellation reported as a timeout: %v", err)
+	}
+}
+
+func TestPublishRecordsPolicyAndEvidence(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Policy = trust.PolicyIdentity{Source: trust.PolicyOperator, Digest: "sha256:policy"}
+	h.engine.Evidence = trust.EvidenceBestEffort
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := h.lastPub.Provenance
+	if got.PolicySource != trust.PolicyOperator || got.PolicyDigest != "sha256:policy" {
+		t.Errorf("policy = %s %s", got.PolicySource, got.PolicyDigest)
+	}
+	if got.EvidenceSource != string(trust.EvidenceBestEffort) {
+		t.Errorf("evidence = %q", got.EvidenceSource)
+	}
+}
+
+func TestScheduledPolicyGrantsSecretsOnlyToAProposal(t *testing.T) {
+	if got := scheduledPolicy([]config.NamedTask{{Name: "scan", Task: config.Task{Run: "true"}}}); got.Secrets {
+		t.Error("a schedule is not a push: a scan task must not inherit secrets")
+	}
+	if got := scheduledPolicy([]config.NamedTask{{
+		Name: "remediate",
+		Task: config.Task{PullRequest: &config.PullRequest{Branch: "kiln/fix"}},
+	}}); !got.Secrets {
+		t.Error("a proposing task needs the write credential")
+	}
+	if got := scheduledPolicy(nil); got.Secrets || got.Publish || got.Skip {
+		t.Errorf("empty schedule granted %v", got)
+	}
+}
+
+func TestRequiredSourceEvidenceFailsAPublish(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v, want a required-evidence failure", err)
+	}
+	if h.published != 0 {
+		t.Error("published an artifact without the source half of the chain")
 	}
 }

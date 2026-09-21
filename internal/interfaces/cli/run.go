@@ -5,14 +5,15 @@ import (
 	"errors"
 	"io"
 	"os"
-	"strconv"
 	"strings"
 
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
@@ -57,32 +58,17 @@ func runRun(ctx context.Context, args []string, io IO) error {
 
 	// A one-shot run was asked for explicitly, so a busy repository is a
 	// refusal rather than a shrug: the operator wants to know their command
-	// did not happen.
-	return withRepoLock(deps.Dir, "kiln run --sha "+run.ShortSHA(resolved), busyRefusal,
-		func() error {
-			return executeRun(ctx, deps, io, parsedEvent, resolved,
-				resolveFork(ctx, deps, parsedEvent, *fork, *pr),
-				defaultRef(*ref, parsedEvent, *pr))
-		})
-}
-
-// executeRun is the body of a locked run.
-func executeRun(
-	ctx context.Context, deps *boot.Deps, io IO,
-	event isolation.Event, sha string, fork bool, ref string,
-) error {
-	r, execErr := deps.Engine.Execute(ctx, engine.Request{
-		SHA:      sha,
-		Event:    event,
-		Fork:     fork,
-		Ref:      ref,
-		Repo:     repoName(deps),
-		Dir:      deps.Dir,
-		Pipeline: deps.Pipeline,
-		Output:   deps.Output(),
-	})
-
-	printRun(io, r)
+	// did not happen. Event and fork are claims until authority resolves them.
+	rec, execErr := deps.Authority.Execute(ctx, authority.Request{
+		Claim: trust.Claim{
+			SHA: resolved, Event: parsedEvent, Ref: *ref, PR: *pr, Fork: *fork,
+		},
+		Output: deps.Output(),
+	}, "kiln run --sha "+run.ShortSHA(resolved))
+	if errors.Is(execErr, ports.ErrRepoBusy) {
+		return busyRefusal(lock.ReadHolder(lock.PathFor(deps.Dir)))
+	}
+	printRun(io, rec)
 	return classify(execErr)
 }
 
@@ -90,48 +76,6 @@ func executeRun(
 // that were asked for explicitly and must not silently do nothing.
 func busyRefusal(h lock.Holder) error {
 	return failWith(ExitBusy, "%v: %s", lock.ErrBusy, h)
-}
-
-// resolveFork decides the fork flag.
-//
-// The flag is a floor, never a ceiling: --fork forces untrusted, and nothing —
-// not the API, not the absence of a token — can turn it back off. An operator
-// who has said "treat this as hostile" must be obeyed.
-func resolveFork(ctx context.Context, deps *boot.Deps, event isolation.Event, flagFork bool, pr int) bool {
-	if flagFork {
-		return true
-	}
-	if event != isolation.EventPullRequest {
-		return false
-	}
-	if pr > 0 {
-		return deps.ResolvePullFork(ctx, pr)
-	}
-	if !deps.ChecksEnabled() {
-		// A pull request that cannot be identified is a pull request that
-		// cannot be trusted.
-		deps.Log.Warn("no github token: treating this pull request as a fork",
-			"effect", "no secrets, no publish, no provenance skip")
-		return boot.ForkUnknown
-	}
-	// A token exists but no number was given, so there is nothing to look up.
-	// Same reasoning: unknown means untrusted.
-	deps.Log.Warn("no --pr number: treating this pull request as a fork",
-		"hint", "pass --pr N to let kiln resolve fork status from the api")
-	return boot.ForkUnknown
-}
-
-// defaultRef supplies a ref when the caller omitted one. The ref decides the
-// semver tag and scopes watch's already-built check, so leaving it empty
-// quietly changes behaviour rather than failing.
-func defaultRef(ref string, event isolation.Event, pr int) string {
-	if ref != "" {
-		return ref
-	}
-	if event == isolation.EventPullRequest && pr > 0 {
-		return "refs/pull/" + strconv.Itoa(pr) + "/head"
-	}
-	return ""
 }
 
 func repoName(deps *boot.Deps) string {

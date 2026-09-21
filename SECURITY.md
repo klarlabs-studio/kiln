@@ -36,14 +36,19 @@ identity is the point — it names the workflow and the tag that produced the
 file, so a signature cannot be reused for a build made anywhere else:
 
 ```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/klarlabs-studio/kiln/releases/latest | jq -r .tag_name)
 cosign verify-blob \
   --bundle checksums.txt.bundle \
   --certificate-identity \
-    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0" \
+    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
+
+The identity names the workflow **and the tag**. A hardcoded version would
+make every later release look forged — the exact trust failure this command
+exists to catch.
 
 ## Security model — what kiln does and doesn't guarantee
 
@@ -74,6 +79,24 @@ sha256sum --check --ignore-missing checksums.txt
   a function of the event, not a flag a caller passes. A fork PR never inherits
   a provenance skip and never publishes, and the code that decides this does
   not accept an override.
+
+- **Callers request work; they do not grant authority.** `POST /v1/run`, MCP
+  and the CLI supply a SHA and an event claim. Push and tag authority is
+  established by membership on a trusted ref. A pull request without a number,
+  or whose forge lookup fails, is a fork. A verified webhook is already
+  evidence.
+
+- **`.kiln.yaml` is operator-owned.** Routing, services and proposal
+  destinations come from the box checkout, not from the commit being built.
+  The file's digest is recorded in provenance.
+
+- **Proposal writes stay under `kiln/`.** A task may force-push its own
+  proposal branch. It may not rewrite `main` or the watched ref because the
+  pipeline named that branch.
+
+- **Source evidence is a policy, not a warning.** With trusted Warden keys
+  pinned, a publish that cannot attach the source verdict fails. Best-effort
+  is for adoption and is visible in the attestation.
 
 - **Builds run repository-authored commands.** Kiln runs what `.warden.yaml`
   and your Dockerfile/`.goreleaser.yaml` say to run, in a disposable worktree,

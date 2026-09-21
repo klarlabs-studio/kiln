@@ -223,6 +223,43 @@ func TestRunRejectsAnUnknownField(t *testing.T) {
 	}
 }
 
+func TestRunRefusesAPushThatIsNotOnTheWatchedBranch(t *testing.T) {
+	srv, repo := newServer(t)
+	repo.Git("checkout", "-q", "-b", "other")
+	other := repo.Commit("side", "side.txt", "no\n")
+	repo.Git("checkout", "-q", "main")
+
+	// A caller saying "this is a push" is a claim. The SHA is in the clone
+	// — watch parks fork heads there — but it is not on the watched ref.
+	rec := do(t, srv, http.MethodPost, "/v1/run",
+		[]byte(`{"sha":"`+other+`","event":"push"}`), bearer())
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not on") {
+		t.Errorf("body = %s", rec.Body.String())
+	}
+}
+
+func TestRunTreatsAPullRequestWithoutANumberAsAFork(t *testing.T) {
+	srv, _ := newServer(t)
+
+	rec := do(t, srv, http.MethodPost, "/v1/run",
+		[]byte(`{"sha":"HEAD","event":"pull_request"}`), bearer())
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("code = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	if out["fork"] != true {
+		t.Errorf("an unknown PR must be untrusted: out = %v", out)
+	}
+}
+
 func TestRunRejectsAnUnresolvableCommit(t *testing.T) {
 	srv, _ := newServer(t)
 

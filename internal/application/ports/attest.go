@@ -46,6 +46,15 @@ type AttestInput struct {
 
 	// Isolated reports a credential-free build (a fork pull request).
 	Isolated bool
+	// PolicySource and PolicyDigest identify the build policy that governed
+	// this execution. The source being built and the policy controlling the
+	// build are different objects.
+	PolicySource string
+	PolicyDigest string
+	PolicyPath   string
+	// EvidenceSource is required or best-effort: whether the source half of
+	// the chain had to be present for this publish to succeed.
+	EvidenceSource string
 	// GateTool, GateVerified, GateReproved and GateReason describe the source
 	// gate.
 	//

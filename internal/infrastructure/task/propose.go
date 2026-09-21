@@ -8,6 +8,7 @@ import (
 	"go.klarlabs.de/kiln/internal/application/ports"
 
 	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/domain/write"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 )
 
@@ -22,6 +23,10 @@ import (
 func (t *Runner) Propose(
 	ctx context.Context, req ports.TaskRequest, spec config.PullRequest, forge ports.PullProposer,
 ) (ports.Proposal, error) {
+	if err := write.Owned(spec.Branch); err != nil {
+		return ports.Proposal{}, fmt.Errorf("task %s: %w", req.Name, err)
+	}
+
 	if !req.Policy.Secrets {
 		// Structural, not a configuration mistake: an untrusted head must
 		// never hold a credential that can write to the base repository.

@@ -356,6 +356,30 @@ func TestGarbageAttestationFails(t *testing.T) {
 	}
 }
 
+func TestReportExplainsPolicyAndSecrets(t *testing.T) {
+	s := statement(t, func(in *ports.AttestInput) {
+		in.PolicySource = "operator"
+		in.PolicyDigest = "sha256:policy"
+		in.EvidenceSource = "required"
+		in.SecretIDs = []string{"npm-token"}
+		in.GateReproved = false
+		in.GateVerified = true
+		in.GateTool = "warden"
+	})
+	fake := healthy(t, s)
+	report, err := New(fake).Verify(t.Context(), keyed())
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	out := report.String()
+	for _, want := range []string{"policy", "operator", "sha256:policy", "evidence", "required", "npm-token", "inherited"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report omits %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReportRendersEveryLink(t *testing.T) {
 	fake := healthy(t, statement(t, nil))
 	report, _ := New(fake).Verify(t.Context(), keyed())
