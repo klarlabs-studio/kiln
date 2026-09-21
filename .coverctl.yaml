@@ -1,0 +1,31 @@
+# Coverage floors for the packages that implement Kiln's trust model.
+# Other packages are not gated yet: turning the default up without a
+# measured baseline would fail the build for reasons nobody can act on.
+version: 1
+policy:
+  default:
+    min: 0
+  domains:
+    - name: trust
+      match: ["./internal/domain/trust", "./internal/domain/trust/..."]
+      min: 90
+    - name: write
+      match: ["./internal/domain/write", "./internal/domain/write/..."]
+      min: 80
+    - name: isolation
+      match: ["./internal/domain/isolation", "./internal/domain/isolation/..."]
+      min: 70
+    - name: attest
+      match: ["./internal/infrastructure/attest", "./internal/infrastructure/attest/..."]
+      min: 75
+    - name: verify
+      match: ["./internal/infrastructure/verify", "./internal/infrastructure/verify/..."]
+      min: 85
+    - name: authority
+      match: ["./internal/application/authority", "./internal/application/authority/..."]
+      min: 70
+    - name: gitcli
+      match: ["./internal/infrastructure/gitcli", "./internal/infrastructure/gitcli/..."]
+      min: 70
+exclude:
+  - "**/testdata/**"

@@ -85,6 +85,7 @@ Every way that question can fail resolves to **fork**:
 - the API call failed → fork
 - `head.repo` is null (the fork was deleted) → fork
 - `kiln run --event pull_request` with no `--pr` number → fork
+- `POST /v1/run` with `event: pull_request` and no `pr` → fork
 
 The conservative guess costs a re-prove. The permissive guess hands a stranger
 the operator's registry credentials.

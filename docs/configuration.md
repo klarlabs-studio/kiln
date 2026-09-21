@@ -431,6 +431,11 @@ operator later reads, and must not become a way to lift files off the build
 box. Directory matches are skipped rather than walked, so a stray `*` does not
 copy the whole checkout.
 
+**`filepath.Glob`, not `**`.** `keep: ["*.sarif"]` matches files in the
+workdir. `keep: ["**/*.sarif"]` matches nothing and is reported, because Go's
+glob does not treat `**` as recursive. Name the directory (`keep: ["out/*.sarif"]`)
+or the file.
+
 Retention is bounded at the last 20 runs, for the same reason the ledger caps
 itself and the docker prune keeps ten builds: a box that keeps everything
 forever fills its disk, and the first symptom is an unrelated build failing.

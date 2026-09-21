@@ -243,6 +243,10 @@ func (w *Watcher) runJob(ctx context.Context, job Job) (*run.Run, error) {
 		})
 	}
 	return w.Engine.Execute(ctx, engine.Request{
+		Trust: trust.Context{
+			SHA: job.SHA, Event: job.Event, Fork: job.Fork, Ref: job.Ref,
+			Established: true,
+		},
 		SHA:      job.SHA,
 		Event:    job.Event,
 		Fork:     job.Fork,

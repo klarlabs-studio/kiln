@@ -33,8 +33,7 @@ jobs:
       pull-requests: write
     secrets: inherit
     with:
-      # No .coverctl.yaml threshold yet.
-      coverage: false
+      coverage: true
 
   examples:
     name: Examples

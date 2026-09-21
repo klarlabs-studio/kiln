@@ -278,6 +278,7 @@ func (r *Runner) execute(ctx context.Context, in Request, holder string, acquire
 
 	runFn := func() (*run.Run, error) {
 		return r.Engine.Execute(ctx, engine.Request{
+			Trust:    established,
 			SHA:      established.SHA,
 			Event:    established.Event,
 			Fork:     established.Fork,

@@ -737,6 +737,24 @@ func TestCallerCancellationIsNotATimeout(t *testing.T) {
 	}
 }
 
+func TestEstablishedTrustWinsOverLooseFields(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventPush, false, "refs/heads/main")
+	// A caller who set push/false and also handed an established fork PR
+	// must not get publish. Trust is what authority established.
+	r.Trust = trust.Context{
+		SHA: sha, Event: isolation.EventPullRequest, Fork: true,
+		Ref: "refs/pull/1/head", Established: true,
+	}
+
+	if _, err := h.engine.Execute(t.Context(), r); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 0 {
+		t.Error("an established fork PR published")
+	}
+}
+
 func TestPublishRecordsPolicyAndEvidence(t *testing.T) {
 	h := newHarness(t)
 	h.engine.Policy = trust.PolicyIdentity{Source: trust.PolicyOperator, Digest: "sha256:policy"}

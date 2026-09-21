@@ -354,6 +354,30 @@ These are product decisions. An auditor should not “fix” them without changi
 
 Nothing in this list requires growing kiln toward CD, a second check language, or an Actions runner. Those remain category errors.
 
+### Follow-up (this branch)
+
+Items 1–8 above have been implemented. The findings remain as the audit
+recorded them; the table is where the work landed.
+
+| Item | Where it landed |
+|---|---|
+| 1 H1 `kiln/*` writes | `internal/domain/write`; config load error for `branch: main`; empty `base` is the watched ref |
+| 2 H3 / M7 kilnd | `internal/application/authority` derives event/fork/membership; JSON cannot manufacture push/tag; unknown PR is a fork; `KILN_TOKEN` documented as a publish credential |
+| 3 H2 pipeline authorship | Operator checkout owns `.kiln.yaml`; identity recorded in provenance; `watch --every` reloads each tick |
+| 4 M9 / M2 | MCP `kiln_run` takes the repo lock; `Run.Clone` copies `Tasks` |
+| 5 M8 SecretIDs | SLSA `externalParameters` records ids, never values |
+| 6 M1 evidence | `evidence.source: required \| best-effort`; required is the default when `KILN_TRUSTED_KEYS` is set |
+| 7 docs | `intent.md`, `CONTRIBUTING.md`, `SECURITY.md`, `isolation.md`, `configuration.md`, `backlog.md` |
+| 8 M4 / M6 / L9 | URL/DSN/`*_PEM` scrubbing; unpinned service-image warning; `kiln status` lists kept files |
+
+Further on this branch: the engine consumes `trust.Context` rather than
+loose caller fields; coverage floors live in `.coverctl.yaml`;
+`filepath.Glob` (no `**`) is documented for `keep`.
+
+Still later, and deliberately not started: an offline evidence bundle,
+a process sandbox, HTTP rate limits, and digest-pinning Kiln's own
+Dockerfile. Those do not change the handoff.
+
 ---
 
 ## Summary judgement

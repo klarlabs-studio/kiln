@@ -27,6 +27,10 @@ import (
 
 // Request is what a surface asks for.
 type Request struct {
+	// Trust is the established classification. Authority fills this after
+	// resolving a claim. Tests and a scheduled run may still set SHA/Event/
+	// Fork/Ref directly; established() prefers Trust when it carries a SHA.
+	Trust trust.Context
 	// SHA is the commit to build. Already resolved: the engine does not read
 	// git refs, so "HEAD" must be turned into an object id before it gets here.
 	SHA string
@@ -142,6 +146,9 @@ func New(e Engine) *Engine {
 // meaningful: a failed run is still a record worth storing and worth showing,
 // so callers should read the *Run even when err is non-nil.
 func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
+	t := req.established()
+	req.SHA, req.Event, req.Fork, req.Ref = t.SHA, t.Event, t.Fork, t.Ref
+
 	r := run.New(req.SHA, req.Ref, req.Event.String(), req.Fork, req.Repo)
 	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", req.Event.String())
 
@@ -152,7 +159,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	}
 
 	r.Phase = run.PhaseIsolating
-	policy := isolation.For(req.Event, req.Fork)
+	policy := t.Policy()
 	log.Info("run started",
 		"ref", req.Ref, "fork", req.Fork,
 		"secrets", policy.Secrets, "may_publish", policy.Publish, "may_skip", policy.Skip)
@@ -227,6 +234,21 @@ func (e *Engine) withPhaseTimeout(ctx context.Context, phase string, fn func(con
 			ErrPhaseTimeout, phase, e.PhaseTimeout, err)
 	}
 	return err
+}
+
+// established is the trust context this request runs under.
+//
+// Trust wins when authority has already classified the SHA. The loose fields
+// remain so tests and RunScheduled can still construct a request without
+// going through a resolver.
+func (req Request) established() trust.Context {
+	if req.Trust.SHA != "" {
+		return req.Trust
+	}
+	return trust.Context{
+		SHA: req.SHA, Event: req.Event, Fork: req.Fork, Ref: req.Ref,
+		Established: true,
+	}
 }
 
 func validate(req Request) error {
