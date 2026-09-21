@@ -334,6 +334,11 @@ Containers the gate needs beside it — the database a test suite talks to, a
 fake API. This is the Actions `services:` equivalent, and it was the one thing
 standing between the first migrated repository and leaving Actions.
 
+Images should be digest-pinned (`image@sha256:…`). `kiln doctor` warns on a
+mutable tag. Containers start with `--cap-drop ALL` and `no-new-privileges`.
+Services exist to support proving and building; they are not a general
+orchestration facility.
+
 ```yaml
 services:
   postgres:

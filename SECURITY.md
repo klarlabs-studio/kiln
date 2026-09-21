@@ -113,6 +113,9 @@ exists to catch.
   token on every route that does anything, and an HMAC signature on webhooks. A
   missing webhook secret is the same 401 as a forged signature — an
   unauthenticated build trigger is a remote code execution primitive.
+  `KILN_TOKEN` is a publish credential: treat a leak as registry-write plus
+  signing. JSON callers still cannot manufacture push/tag authority for a SHA
+  that is not on a trusted ref.
 
 - **MCP is read-only unless you say otherwise.** Agents get `doctor` and
   `status` freely and pull-request proves; push and tag runs are refused unless

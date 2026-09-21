@@ -513,6 +513,25 @@ tasks:
 	}
 }
 
+func TestEmptyProposalBaseIsTheWatchedRef(t *testing.T) {
+	// An empty base is the repository default, which is the watched branch.
+	// Equality is judged against that, not against the empty string.
+	err := parseErr(t, minimal+`
+watch:
+  ref: kiln/docs
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: kiln/docs
+      title: pwned
+`)
+	if err == nil || !strings.Contains(err.Error(), "watched branch") {
+		t.Errorf("want a watched-branch refusal when base is empty, got %v", err)
+	}
+}
+
 func TestProposalBranchInKilnNamespaceLoads(t *testing.T) {
 	p := parse(t, minimal+`
 tasks:

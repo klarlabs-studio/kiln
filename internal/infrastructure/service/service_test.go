@@ -74,6 +74,9 @@ func TestThePortIsPublishedOnAnEphemeralHostPort(t *testing.T) {
 	if !strings.Contains(run, "--env POSTGRES_PASSWORD=test") {
 		t.Errorf("docker run = %q, want the configured environment", run)
 	}
+	if !strings.Contains(run, "--cap-drop ALL") || !strings.Contains(run, "no-new-privileges") {
+		t.Errorf("docker run = %q, want least-privilege defaults", run)
+	}
 }
 
 func TestReadinessIsWaitedFor(t *testing.T) {

@@ -647,7 +647,11 @@ func (p Pipeline) validateTasks() error {
 			if watched == "" {
 				watched = "main"
 			}
-			if pr.Branch == watched || pr.Base == pr.Branch {
+			base := strings.TrimSpace(pr.Base)
+			if base == "" {
+				base = watched
+			}
+			if pr.Branch == watched || pr.Branch == base {
 				return fmt.Errorf("%s.pull_request: %q is the watched branch; kiln does not rewrite source-of-truth",
 					where, pr.Branch)
 			}

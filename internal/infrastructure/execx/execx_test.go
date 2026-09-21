@@ -92,6 +92,7 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"REDIS_URL=redis://x",
 		"MONGO_URI=mongodb://x",
 		"APP_PEM=-----BEGIN",
+		"SERVICE_URL=postgres://x",
 		"malformed-no-equals",
 	}
 

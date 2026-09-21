@@ -38,6 +38,12 @@ All notable changes to kiln are documented here. The format follows
   and `*_PEM` / `*_URI` forms.
 - `SECURITY.md` verifies the current release tag, not a hardcoded
   `v0.1.0`.
+- A long-lived `watch --every` rereads the operator `.kiln.yaml` each
+  tick instead of freezing the snapshot from process start.
+- Service containers start with `--cap-drop ALL` and
+  `no-new-privileges`.
+- Bearer comparison hashes both sides so token length does not leak.
+- `make examples-check` validates policy files as policies.
 
 ## [0.6.0] - 2026-08-29
 

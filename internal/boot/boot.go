@@ -208,6 +208,31 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	return deps, nil
 }
 
+// ReloadPipeline rereads the operator checkout's .kiln.yaml.
+//
+// The source being built and the policy controlling the build are different
+// objects. A long-lived watcher must pick up an operator edit (or a pull of
+// the tracked branch) rather than freeze the snapshot from process start.
+func (d *Deps) ReloadPipeline(explicit string) error {
+	p, found, path, err := loadPipeline(d.Dir, explicit)
+	if err != nil {
+		return err
+	}
+	d.Pipeline = p
+	d.PipelineFound = found
+	if d.Engine != nil {
+		d.Engine.Policy = identifyPolicy(path, found)
+	}
+	if d.Authority != nil {
+		d.Authority.Pipeline = p
+		if d.Authority.Resolver != nil {
+			d.Authority.Resolver.Watched = p.Watch.Ref
+			d.Authority.Resolver.Remote = p.Watch.Remote
+		}
+	}
+	return nil
+}
+
 func repoName(d *Deps) string {
 	if d.RepoErr != nil {
 		return ""

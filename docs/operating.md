@@ -432,7 +432,9 @@ kilnd
 ```
 
 It refuses to boot without `KILN_TOKEN`. There is no anonymous mode to forget
-to turn off.
+to turn off. Treat that token as registry-write plus signing — the same class
+of secret as `KILN_COSIGN_KEY`. JSON callers still have to prove the SHA
+belongs on a trusted ref before a publishable event is granted.
 
 | Route | Auth | Behaviour |
 |---|---|---|

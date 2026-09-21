@@ -212,7 +212,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
 | `KILN_ADDR` | kilnd bind address (default `127.0.0.1:8088`) |
-| `KILN_TOKEN` | kilnd bearer token — **required to boot** |
+| `KILN_TOKEN` | kilnd bearer token — **required to boot**. Equivalent to registry write plus signing: a leaked token can ask this box to build. Push/tag still require the SHA to be on a trusted ref. |
 | `KILN_WEBHOOK_SECRET` | GitHub webhook HMAC |
 | `KILN_DIR` | Repository directory for kilnd |
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |

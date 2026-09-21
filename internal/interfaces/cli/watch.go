@@ -12,6 +12,7 @@ import (
 	"go.klarlabs.de/kiln/internal/application/poll"
 	"go.klarlabs.de/kiln/internal/application/watch"
 	"go.klarlabs.de/kiln/internal/boot"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
@@ -69,7 +70,7 @@ func runWatch(ctx context.Context, args []string, io IO, branchesOnly bool) erro
 		return wrapExit(ExitConfig, err)
 	}
 
-	watcher := newWatcher(deps, branchesOnly)
+	watcher := newWatcher(deps, branchesOnly, *pipelinePath)
 
 	if *every != "" {
 		interval, err := parseInterval(*every)
@@ -232,7 +233,7 @@ func watchOne(ctx context.Context, io IO, dir string, opts watchOptions) error {
 		return err
 	}
 
-	watcher := newWatcher(deps, opts.branchesOnly)
+	watcher := newWatcher(deps, opts.branchesOnly, opts.pipelinePath)
 
 	if opts.dryRun {
 		return finishTick(ctx, watcher, io, opts.branchesOnly, true)
@@ -247,9 +248,10 @@ func watchOne(ctx context.Context, io IO, dir string, opts watchOptions) error {
 
 // newWatcher builds a watcher from the assembled graph, so the single-repo and
 // fleet paths cannot drift in what they wire.
-func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
+func newWatcher(deps *boot.Deps, branchesOnly bool, pipelinePath string) *watch.Watcher {
 	return &watch.Watcher{
 		Engine:       deps.Engine,
+		Authority:    deps.Authority,
 		Store:        deps.Store,
 		Git:          gitcli.New(deps.Runner),
 		Forge:        deps.GitHub,
@@ -258,6 +260,12 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Pipeline:     deps.Pipeline,
 		Repo:         repoName(deps),
 		BranchesOnly: branchesOnly,
+		Reload: func() (config.Pipeline, error) {
+			if err := deps.ReloadPipeline(pipelinePath); err != nil {
+				return config.Pipeline{}, err
+			}
+			return deps.Pipeline, nil
+		},
 		// Beside the ledger, in the directory kiln already owns, so a
 		// repository gains no new top-level clutter and the interval survives
 		// a restart.

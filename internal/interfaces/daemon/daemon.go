@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -139,9 +140,16 @@ func (s *Server) authorized(r *http.Request) bool {
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return false
 	}
-	// Constant time: a byte-by-byte comparison leaks the token one character
-	// at a time to anyone willing to measure.
-	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(provided)), []byte(s.Token)) == 1
+	return tokenEqual(strings.TrimSpace(provided), s.Token)
+}
+
+// tokenEqual compares bearer tokens without leaking length. Hashing both
+// sides first makes the comparison constant-time even when the caller sent
+// a different number of bytes than KILN_TOKEN.
+func tokenEqual(provided, want string) bool {
+	a := sha256.Sum256([]byte(provided))
+	b := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {

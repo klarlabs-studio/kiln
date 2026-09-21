@@ -23,11 +23,13 @@ import (
 
 	"go.klarlabs.de/fortify/retry"
 
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/forge"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 )
 
 // PRRefNamespace is where pull request heads are parked locally. A private
@@ -71,6 +73,13 @@ type Watcher struct {
 
 	// Dir is the repository to watch.
 	Dir string
+	// Authority is the common execute path. Nil falls back to Engine so
+	// discovery tests can stub a prover without assembling a resolver.
+	Authority *authority.Runner
+	// Reload rereads the operator pipeline. A long-lived --every watcher
+	// must not freeze yesterday's .kiln.yaml for the life of the process.
+	// Nil keeps the Pipeline already on the watcher.
+	Reload func() (config.Pipeline, error)
 	// Pipeline supplies the watch configuration and the event routing.
 	Pipeline config.Pipeline
 	// Repo is owner/name for the ledger.
@@ -139,6 +148,10 @@ func (r Result) Failures() int {
 func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	log := w.logger()
 
+	if err := w.reload(); err != nil {
+		return Result{}, err
+	}
+
 	if !dryRun {
 		w.reap(ctx)
 		w.prune(ctx)
@@ -189,15 +202,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		log.Info("building", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
 			"event", job.Event.String(), "fork", job.Fork)
 
-		r, runErr := w.Engine.Execute(ctx, engine.Request{
-			SHA:      job.SHA,
-			Event:    job.Event,
-			Fork:     job.Fork,
-			Ref:      job.Ref,
-			Repo:     w.Repo,
-			Dir:      w.Dir,
-			Pipeline: w.Pipeline,
-		})
+		r, runErr := w.runJob(ctx, job)
 		if runErr != nil {
 			log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
 		}
@@ -211,6 +216,41 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		}
 	}
 	return result, nil
+}
+
+func (w *Watcher) reload() error {
+	if w.Reload == nil {
+		return nil
+	}
+	p, err := w.Reload()
+	if err != nil {
+		return fmt.Errorf("watch: reload pipeline: %w", err)
+	}
+	w.Pipeline = p
+	if w.Authority != nil {
+		w.Authority.Pipeline = p
+	}
+	return nil
+}
+
+func (w *Watcher) runJob(ctx context.Context, job Job) (*run.Run, error) {
+	if w.Authority != nil {
+		return w.Authority.ExecuteLocked(ctx, authority.Request{
+			Claim: trust.Claim{
+				SHA: job.SHA, Event: job.Event, Ref: job.Ref, Fork: job.Fork,
+				Established: true,
+			},
+		})
+	}
+	return w.Engine.Execute(ctx, engine.Request{
+		SHA:      job.SHA,
+		Event:    job.Event,
+		Fork:     job.Fork,
+		Ref:      job.Ref,
+		Repo:     w.Repo,
+		Dir:      w.Dir,
+		Pipeline: w.Pipeline,
+	})
 }
 
 // Every loops Once until the context is cancelled. The first tick runs

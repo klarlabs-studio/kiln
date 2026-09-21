@@ -27,8 +27,10 @@ That last field matters for audit. The chain is two statements:
 1. **Warden's note** on the commit — the configured checks ran and passed.
 2. **Kiln's digest** on the run — this image was built from that commit.
 
-MVP records both. An in-toto/SLSA export can be layered on later without
-changing either.
+Both statements travel with the artifact: Kiln attaches an in-toto
+statement carrying a SLSA v1 provenance predicate (`cosign attest`), and
+carries Warden's own signed verdict without re-signing it. `kiln verify`
+walks the chain. RollOps consumes the same facts at apply time.
 
 ## What RollOps consumes
 

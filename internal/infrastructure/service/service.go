@@ -128,7 +128,14 @@ func (s *Runner) startAll(ctx context.Context, services map[string]config.Servic
 func (s *Runner) start(ctx context.Context, name string, spec config.Service, runID string) (Running, error) {
 	container := fmt.Sprintf("kiln-%s-%s", shortID(runID), name)
 
-	args := []string{"run", "--detach", "--rm", "--name", container}
+	args := []string{
+		"run", "--detach", "--rm", "--name", container,
+		// Least privilege that still lets a database listen. Services are
+		// operator-authored today; these defaults stay if they ever become
+		// commit-controlled, which would be a major trust-boundary change.
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+	}
 	for _, kv := range sortedEnv(spec.Env) {
 		args = append(args, "--env", kv)
 	}

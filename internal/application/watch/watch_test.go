@@ -602,6 +602,22 @@ func TestAClosedPullRequestStopsBeingBuilt(t *testing.T) {
 	}
 }
 
+func TestOnceReloadsTheOperatorPipeline(t *testing.T) {
+	f := newFixture(t)
+	calls := 0
+	f.watcher.Reload = func() (config.Pipeline, error) {
+		calls++
+		return defaultPipeline(t), nil
+	}
+
+	if _, err := f.watcher.Once(t.Context(), true); err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if calls != 1 {
+		t.Errorf("Reload called %d times, want 1 per tick", calls)
+	}
+}
+
 func hasRef(jobs []Job, ref string) bool {
 	for _, j := range jobs {
 		if j.Ref == ref {
