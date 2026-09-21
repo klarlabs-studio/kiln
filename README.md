@@ -167,6 +167,12 @@ Owned by Warden. Kiln shells out to `warden run pre-push --attest-only` and does
 
 ### `.kiln.yaml` — publish and routing
 
+Kiln reads this file from the **operator checkout**, not from the commit
+being built. A pull request cannot rewrite routing, services or proposal
+destinations. The file's identity (`operator` or `default`, plus
+`sha256:` of the bytes) is recorded in provenance. See
+[intent.md](docs/intent.md).
+
 ```yaml
 apiVersion: kiln.klarlabs.de/v1
 kind: Pipeline
@@ -207,7 +213,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_DB` | Run ledger path (default `.kiln/state.json`) |
 | `KILN_DRY=1` | Plan tags; call neither docker nor cosign |
 | `KILN_WARDEN` / `KILN_NOX` / `KILN_GORELEASER` | Binary names |
-| `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** |
+| `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** Also defaults `evidence.source` to `required`. |
 | `KILN_COSIGN_KEY` | Signing key for publish. Empty means keyless, which needs an ambient OIDC identity. Takes any form cosign's `--key` does: a path, `env://VAR`, `k8s://ns/name`, or a KMS URI. **Required on a self-hosted builder** — see [Signing](#signing). |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |

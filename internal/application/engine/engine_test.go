@@ -800,3 +800,80 @@ func TestRequiredSourceEvidenceFailsAPublish(t *testing.T) {
 		t.Error("published an artifact without the source half of the chain")
 	}
 }
+
+type attesterFunc func() ([]byte, error)
+
+func (f attesterFunc) SourceAttestation(context.Context, string, string) ([]byte, error) {
+	return f()
+}
+
+func TestBestEffortSourceEvidenceStillPublishes(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceBestEffort
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 1 {
+		t.Error("best-effort must still produce the artifact")
+	}
+}
+
+func TestRequiredSourceEvidenceFailsWhenTheAttesterErrors(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) {
+		return nil, errors.New("no note")
+	})
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v", err)
+	}
+	if h.published != 0 {
+		t.Error("published without a source verdict")
+	}
+}
+
+func TestRequiredSourceEvidenceFailsOnAnEmptyVerdict(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) { return nil, nil })
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRequiredSourceEvidenceAttachesTheVerdict(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	vsa := []byte(`{"payloadType":"application/vnd.in-toto+json"}`)
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) { return vsa, nil })
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if string(h.lastPub.SourceVSA) != string(vsa) {
+		t.Errorf("SourceVSA = %q", h.lastPub.SourceVSA)
+	}
+}
+
+func TestBestEffortSourceEvidencePublishesWhenTheAttesterErrors(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceBestEffort
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) {
+		return nil, errors.New("no note")
+	})
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 1 {
+		t.Error("best-effort must not turn a missing verdict into a failed publish")
+	}
+	if len(h.lastPub.SourceVSA) != 0 {
+		t.Error("a failed fetch must not attach a half-verdict")
+	}
+}
