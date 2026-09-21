@@ -6,7 +6,10 @@
 # Running kiln inside this container is for the HTTP surface (kilnd) and for
 # operators who mount a socket and a toolchain in deliberately.
 
-FROM golang:1.25-bookworm AS build
+# Bases are pinned by digest the way Actions are pinned to a commit: a
+# floating tag is a silent toolchain change. The tag stays so a reader can
+# see which track this is; Dependabot (or a human) bumps the digest.
+FROM golang:1.25-bookworm@sha256:3b4a11519ad929d1e1d261a12cff056f0c85b735253d7d861346b9c6f8b36437 AS build
 
 WORKDIR /src
 
@@ -39,7 +42,7 @@ RUN go build -trimpath \
 
 # nonroot: kiln has no reason to be root, and an image that builds other
 # people's code is exactly the wrong place to make an exception.
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 
 LABEL org.opencontainers.image.title="kiln" \
       org.opencontainers.image.description="Signed-artifact factory: prove a commit through warden, build it, sign the digest with cosign." \

@@ -376,9 +376,9 @@ loose caller fields; coverage floors live in `.coverctl.yaml`;
 test refuses a surface that constructs `engine.Request` or calls
 `Engine.Execute`.
 
-Still later, and deliberately not started: an offline evidence bundle,
-a process sandbox, HTTP rate limits, and digest-pinning Kiln's own
-Dockerfile. Those do not change the handoff.
+Kiln's own Dockerfile bases are now digest-pinned (L6). Still later:
+an offline evidence bundle, a process sandbox, and HTTP rate limits.
+Those do not change the handoff.
 
 ---
 
