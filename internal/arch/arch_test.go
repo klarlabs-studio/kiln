@@ -153,17 +153,24 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 }
 
 // TestSurfacesDoNotExecuteTheEngine keeps delivery from becoming a second
-// authority. CLI, MCP and kilnd may import the engine for errors and
+// authority. CLI, MCP, kilnd and boot may import the engine for errors and
 // constants. They must not construct a Request or call Execute: that is
-// how a JSON body used to manufacture a push. Watch's fallback lives in
-// application/ and is the test seam, not a door.
+// how a JSON body used to manufacture a push.
+//
+// Two files are allowed: authority, which is the resolver, and watch, which
+// falls back for tests that stub a prover without assembling one. A third
+// caller is a new door.
 func TestSurfacesDoNotExecuteTheEngine(t *testing.T) {
-	root := filepath.Join("..", "interfaces")
+	root := ".."
 	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
+		if mayCallEngine(rel) {
 			return nil
 		}
 
@@ -209,6 +216,18 @@ func TestSurfacesDoNotExecuteTheEngine(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func mayCallEngine(rel string) bool {
+	if strings.HasPrefix(rel, "application/engine/") {
+		return true
+	}
+	switch rel {
+	case "application/authority/authority.go", "application/watch/watch.go":
+		return true
+	default:
+		return false
 	}
 }
 

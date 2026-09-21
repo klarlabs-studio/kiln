@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"go.klarlabs.de/kiln/internal/application/ports"
-
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -208,6 +208,48 @@ func TestDryUsesTheRehearsalPublisher(t *testing.T) {
 	}
 	if _, ok := deps.Engine.Publisher.(*publish.Dry); !ok {
 		t.Errorf("publisher = %T, want *publish.Dry", deps.Engine.Publisher)
+	}
+}
+
+func TestOperatorPipelineIdentityIsRecorded(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	repo.Write(".kiln.yaml", pipeline)
+	deps := build(t, repo.Dir, env(t))
+
+	id := deps.Engine.Policy
+	if id.Source != trust.PolicyOperator || !strings.HasPrefix(id.Digest, "sha256:") {
+		t.Errorf("operator policy = %+v", id)
+	}
+}
+
+func TestMissingPipelineIsTheDefaultIdentity(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	deps := build(t, repo.Dir, env(t))
+
+	id := deps.Engine.Policy
+	if id.Source != trust.PolicyDefault || id.Digest != "" {
+		t.Errorf("default policy = %+v", id)
+	}
+}
+
+func TestReloadPipelinePicksUpAnOperatorEdit(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	repo.Write(".kiln.yaml", pipeline)
+	deps := build(t, repo.Dir, env(t))
+	first := deps.Engine.Policy.Digest
+
+	repo.Write(".kiln.yaml", pipeline+"\nwatch:\n  ref: release\n")
+	if err := deps.ReloadPipeline(""); err != nil {
+		t.Fatal(err)
+	}
+	if deps.Engine.Policy.Digest == "" || deps.Engine.Policy.Digest == first {
+		t.Errorf("reload kept digest %s", deps.Engine.Policy.Digest)
+	}
+	if deps.Authority == nil || deps.Authority.Resolver == nil || deps.Authority.Resolver.Watched != "release" {
+		t.Error("reload did not move the watched ref the resolver uses")
 	}
 }
 
