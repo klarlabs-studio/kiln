@@ -531,6 +531,7 @@ Each tick recomputes the full set of interesting refs and drops the ones a **suc
 - [`docs/operating.md`](docs/operating.md) — running it unattended, kilnd, troubleshooting
 - [`docs/rollops-handoff.md`](docs/rollops-handoff.md) — what RollOps consumes
 - [`docs/competitive.md`](docs/competitive.md) — the OSS CI landscape, and where kiln loses
+- [`docs/audit.md`](docs/audit.md) — product summary and independent audit of the tree
 
 ---
 
