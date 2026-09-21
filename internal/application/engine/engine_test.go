@@ -877,3 +877,104 @@ func TestBestEffortSourceEvidencePublishesWhenTheAttesterErrors(t *testing.T) {
 		t.Error("a failed fetch must not attach a half-verdict")
 	}
 }
+
+type recordingTasks struct {
+	last ports.TaskRequest
+	ran  int
+}
+
+func (r *recordingTasks) Run(_ context.Context, req ports.TaskRequest) ports.TaskResult {
+	r.ran++
+	r.last = req
+	return ports.TaskResult{}
+}
+func (r *recordingTasks) Propose(context.Context, ports.TaskRequest, config.PullRequest, ports.PullProposer) (ports.Proposal, error) {
+	return ports.Proposal{}, nil
+}
+func (r *recordingTasks) Keep(string, string, []string) ([]ports.KeptFile, error) {
+	return nil, nil
+}
+func (r *recordingTasks) KeepDir(string, string, string) string { return "" }
+func (r *recordingTasks) Sweep(string, int) error               { return nil }
+
+type inlineTrees struct{}
+
+func (inlineTrees) With(_ context.Context, _, _ string, fn func(string) error) error {
+	return fn("/scheduled")
+}
+func (inlineTrees) Reap(context.Context, string, time.Duration) (int, error) { return 0, nil }
+
+func TestRunScheduledWithNoTasksSucceedsAndDoesNotPublish(t *testing.T) {
+	h := newHarness(t)
+	got, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), nil)
+	if err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if got.Phase != run.PhaseSucceeded {
+		t.Errorf("phase = %s", got.Phase)
+	}
+	if h.published != 0 || h.proved != 0 {
+		t.Error("a schedule proved or published")
+	}
+}
+
+func TestRunScheduledRefusesAnEmptySHA(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	_, err := h.engine.RunScheduled(t.Context(), Request{Dir: t.TempDir()}, []config.NamedTask{{
+		Name: "scan", Task: config.Task{Run: "true"},
+	}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if tasks.ran != 0 {
+		t.Error("ran a task with no commit")
+	}
+}
+
+func TestRunScheduledDoesNotInheritPushAuthority(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	// The request looks like a push. A schedule is not a push.
+	r := req(t, isolation.EventPush, false, "refs/heads/main")
+	if _, err := h.engine.RunScheduled(t.Context(), r, []config.NamedTask{{
+		Name: "scan", Task: config.Task{Run: "true"},
+	}}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if h.published != 0 {
+		t.Error("a schedule published")
+	}
+	if tasks.last.Policy.Secrets || tasks.last.Policy.Publish || tasks.last.Policy.Skip {
+		t.Errorf("scan inherited push policy: %+v", tasks.last.Policy)
+	}
+}
+
+func TestRunScheduledGrantsSecretsOnlyToAProposal(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	if _, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), []config.NamedTask{{
+		Name: "fix",
+		Task: config.Task{Run: "true", PullRequest: &config.PullRequest{Branch: "kiln/fix"}},
+	}}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if !tasks.last.Policy.Secrets {
+		t.Error("a proposing task needs the write credential")
+	}
+	if tasks.last.Policy.Publish || tasks.last.Policy.Skip {
+		t.Errorf("a schedule must not publish or skip: %+v", tasks.last.Policy)
+	}
+	if h.published != 0 {
+		t.Error("a proposing schedule published")
+	}
+}

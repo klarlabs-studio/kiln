@@ -29,6 +29,6 @@ policy:
       min: 75
     - name: engine
       match: ["./internal/application/engine", "./internal/application/engine/..."]
-      min: 50
+      min: 65
 exclude:
   - "**/testdata/**"
