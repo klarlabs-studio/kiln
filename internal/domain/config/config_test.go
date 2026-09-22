@@ -496,3 +496,147 @@ func TestPrunableImagesListsOnlyImages(t *testing.T) {
 		t.Errorf("PrunableImages = %v", got)
 	}
 }
+
+func TestProposalBranchMustBeKilnOwned(t *testing.T) {
+	doc := minimal + `
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: main
+      title: pwned
+`
+	err := parseErr(t, doc)
+	if !strings.Contains(err.Error(), "kiln/") {
+		t.Errorf("want a kiln/ namespace refusal, got %v", err)
+	}
+}
+
+func TestEmptyProposalBaseIsTheWatchedRef(t *testing.T) {
+	// An empty base is the watched branch. Equality is judged against that,
+	// not against the empty string.
+	err := parseErr(t, minimal+`
+watch:
+  ref: kiln/docs
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: kiln/docs
+      title: pwned
+`)
+	if err == nil || !strings.Contains(err.Error(), "watched branch") {
+		t.Errorf("want a watched-branch refusal when base is empty, got %v", err)
+	}
+}
+
+func TestResolvedBasePrefersExplicitThenWatchedThenMain(t *testing.T) {
+	if got := (PullRequest{Base: "develop"}).ResolvedBase("release"); got != "develop" {
+		t.Errorf("explicit base = %q", got)
+	}
+	if got := (PullRequest{}).ResolvedBase("release"); got != "release" {
+		t.Errorf("empty base = %q, want the watched ref", got)
+	}
+	if got := (PullRequest{}).ResolvedBase(""); got != "main" {
+		t.Errorf("no watched ref = %q, want main", got)
+	}
+}
+
+func TestProposalBranchInKilnNamespaceLoads(t *testing.T) {
+	p := parse(t, minimal+`
+tasks:
+  remediate:
+    on: [push]
+    run: echo x
+    pull_request:
+      branch: kiln/remediate
+      title: chore
+`)
+	if p.Tasks["remediate"].PullRequest.Branch != "kiln/remediate" {
+		t.Errorf("branch = %q", p.Tasks["remediate"].PullRequest.Branch)
+	}
+}
+
+func TestEvidenceSourceMustBeKnown(t *testing.T) {
+	err := parseErr(t, minimal+"\nevidence:\n  source: maybe\n")
+	if !strings.Contains(err.Error(), "required") {
+		t.Errorf("want a known-mode refusal, got %v", err)
+	}
+}
+
+func TestEvidenceSourceRequiredLoads(t *testing.T) {
+	p := parse(t, minimal+"\nevidence:\n  source: required\n")
+	if p.Evidence.Source != "required" {
+		t.Errorf("source = %q", p.Evidence.Source)
+	}
+}
+
+func TestPolicyFromDefaultsToOperator(t *testing.T) {
+	p := parse(t, minimal)
+	if p.PolicyFrom() != PolicyFromOperator || p.CommitControlled() {
+		t.Errorf("absent policy.from must stay operator-owned: %+v", p.Policy)
+	}
+}
+
+func TestPolicyFromCommitIsOptIn(t *testing.T) {
+	p := parse(t, minimal+"\npolicy:\n  from: commit\n")
+	if !p.CommitControlled() {
+		t.Errorf("policy.from: commit was not honoured: %+v", p.Policy)
+	}
+}
+
+func TestUnknownPolicyFromIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+"\npolicy:\n  from: worktree\n")
+	if !strings.Contains(err.Error(), "trust-boundary") {
+		t.Errorf("want an explicit opt-in refusal, got %v", err)
+	}
+}
+
+const pinnedPostgres = "postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestPinnedServiceImageLoads(t *testing.T) {
+	p := parse(t, minimal+`
+services:
+  db:
+    image: `+pinnedPostgres+`
+    port: 5432
+`)
+	if p.Services["db"].Image != pinnedPostgres {
+		t.Errorf("image = %q", p.Services["db"].Image)
+	}
+}
+
+func TestUnpinnedServiceImageIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+`
+services:
+  db:
+    image: postgres:16
+    port: 5432
+`)
+	if !strings.Contains(err.Error(), "digest-pinned") {
+		t.Errorf("want a digest-pin refusal, got %v", err)
+	}
+}
+
+func TestShortServiceDigestIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+`
+services:
+  db:
+    image: postgres@sha256:abcd
+    port: 5432
+`)
+	if !strings.Contains(err.Error(), "digest-pinned") {
+		t.Errorf("a truncated digest must not count as pinned, got %v", err)
+	}
+}
+
+func TestImageDigestPinned(t *testing.T) {
+	if ImageDigestPinned("postgres:16") {
+		t.Error("a tag is not pinned")
+	}
+	if !ImageDigestPinned(pinnedPostgres) {
+		t.Error("a 64-hex digest must count")
+	}
+}

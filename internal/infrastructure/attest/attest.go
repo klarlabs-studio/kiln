@@ -97,6 +97,21 @@ type ExternalParameters struct {
 	// this their attestations would be identical while their contents are not.
 	// Anyone reproducing the build needs them.
 	BuildArgs map[string]string `json:"buildArgs,omitempty"`
+	// SecretIDs names the BuildKit secrets that participated, ids only.
+	SecretIDs []string `json:"secretIds,omitempty"`
+	// Policy identifies the build policy that governed the execution.
+	Policy *BuildPolicy `json:"policy,omitempty"`
+}
+
+// BuildPolicy is the identity of the .kiln.yaml (or the default) that
+// routed this build. A mutable policy that is invisible to provenance is
+// a fact kiln established and then forgot.
+type BuildPolicy struct {
+	Source string `json:"source"`
+	Path   string `json:"path,omitempty"`
+	Digest string `json:"digest,omitempty"`
+	// Commit is set when the SHA being built supplied the file.
+	Commit string `json:"commit,omitempty"`
 }
 
 // InternalParameters records what the platform decided, including the two
@@ -109,6 +124,8 @@ type InternalParameters struct {
 	// inherited a note, and it is the whole reason this predicate is worth
 	// signing.
 	SourceGate SourceGate `json:"sourceGate"`
+	// EvidenceSource is required or best-effort.
+	EvidenceSource string `json:"evidenceSource,omitempty"`
 }
 
 // SourceGate is Kiln's record of Warden's verdict.
@@ -215,9 +232,12 @@ func Build(in ports.AttestInput) (Statement, error) {
 					Artifact:   in.ArtifactKind,
 					Config:     in.Config,
 					BuildArgs:  in.BuildArgs,
+					SecretIDs:  in.SecretIDs,
+					Policy:     buildPolicy(in),
 				},
 				InternalParameters: InternalParameters{
-					Isolated: in.Isolated,
+					Isolated:       in.Isolated,
+					EvidenceSource: in.EvidenceSource,
 					SourceGate: SourceGate{
 						Tool: gateTool,
 						// Stated by the caller, not assumed. Kiln's own path
@@ -295,6 +315,18 @@ func optionalTime(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+func buildPolicy(in ports.AttestInput) *BuildPolicy {
+	if in.PolicySource == "" && in.PolicyDigest == "" {
+		return nil
+	}
+	return &BuildPolicy{
+		Source: in.PolicySource,
+		Path:   in.PolicyPath,
+		Digest: in.PolicyDigest,
+		Commit: in.PolicyCommit,
+	}
 }
 
 func orUnknown(s string) string {

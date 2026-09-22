@@ -6,6 +6,62 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Authority resolution below every mutating surface.** CLI, MCP and
+  `POST /v1/run` submit a claim. Push and tag authority is established by
+  membership on a trusted ref; a pull request without a number, or whose
+  forge lookup fails, is a fork. A verified webhook remains evidence.
+  Repository exclusivity lives on the same path, so MCP can no longer
+  race the ledger.
+- **`evidence.source`.** `required` or `best-effort`. A box with
+  `KILN_TRUSTED_KEYS` pinned defaults to required: a publish that cannot
+  attach Warden's verdict fails. Best-effort is recorded in provenance
+  and shown by `kiln doctor` and `kiln verify`.
+- **Build-policy identity in provenance.** `.kiln.yaml` is the operator
+  checkout's file. Its source (`operator` or `default`) and sha256 digest
+  travel with the artifact.
+- **Declared secret IDs in provenance.** Values never do.
+- **Proposal branches are structurally `kiln/*`.** `branch: main` is a
+  load error, not a force-push destination.
+- **Opt-in commit-controlled policy.** `policy.from: commit` loads the
+  SHA's `.kiln.yaml`. Watch stays the operator's. A fork cannot start
+  the commit's services. Provenance records `source: commit` and the SHA.
+  Absent this key, the checkout's file still governs the build.
+- **`kiln verify --bundle` / `--statement`.** Walk a local
+  `statement.json` (and optional `source.json` / `signature.bundle`)
+  without a registry or a clone. A missing local cosign bundle is
+  reported as offline, not as a pass.
+- **Landlock on fork prove and tasks.** When the kernel can, repository-
+  authored commands on a fork are filesystem-restricted to the worktree
+  and toolchain paths. The worktree is still not a sandbox. Network is
+  not confined. `KILN_CONFINE=off` disables; `KILN_CONFINE=required`
+  fails the run if Landlock cannot apply.
+
+### Changed
+
+- Scheduled tasks no longer inherit synthetic push authority. Secrets
+  are granted only to the task that proposes a write, not to every
+  task due in the same tick. `KILN_EVENT=schedule` is exported to the
+  child. An empty `pull_request.base` is the watched ref at propose
+  time, not the forge default.
+- `kiln verify` explains policy identity, evidence mode, declared
+  secrets, and inherited vs reproduced source verdicts.
+- `kiln status` lists task outcomes and retained files.
+- `kiln doctor` reports evidence mode and policy authorship. A service
+  image without a digest pin is a load error, not a warning.
+- Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`,
+  `*_PEM` / `*_URI` / `*_KID` forms, and paths to credential files (`KUBECONFIG`,
+  `NETRC`, `GNUPGHOME`, `AWS_SHARED_CREDENTIALS_FILE`, `SSL_KEY_FILE`).
+- `SECURITY.md` verifies the current release tag, not a hardcoded
+  `v0.1.0`.
+- A long-lived `watch --every` rereads the operator `.kiln.yaml` each
+  tick instead of freezing the snapshot from process start.
+- Service containers start with `--cap-drop ALL`,
+  `no-new-privileges`, `--init`, `--pids-limit 256`, and `--tmpfs /tmp`.
+- Bearer comparison hashes both sides so token length does not leak.
+- `make examples-check` validates policy files as policies.
+
 ## [0.6.0] - 2026-08-29
 
 A private key that reached the ledger, a form of key storage doctor called

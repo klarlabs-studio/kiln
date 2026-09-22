@@ -1,7 +1,16 @@
+The items below were the original migration list. Schedule, `keep`,
+task `pull_request`, and `services:` have landed. Near-term work now
+lives in [intent.md](intent.md): strengthen evidence and authority
+rather than grow the workflow language. The remaining real backlog
+item is declarative SARIF upload.
 
 ## Fire scheduled tasks from the watch loop
 
-`tasks: {on: [schedule], every: 24h}` parses, validates and is listed by `kiln doctor`, but nothing executes it — a scheduled task silently never runs. Wire the watch tick to fire due scheduled tasks against the tracked ref's head, recording the last run per task in the ledger so an interval survives a restart and a box that was off overnight does not fire a day's worth of catch-up runs at once. This is the capability 19 nox-remediate workflow uses depend on, and until it exists no scheduled automation can leave Actions.
+**Landed.** Watch fires due `on: [schedule]` tasks against the tracked
+ref's head. The ledger remembers the last run per task so an interval
+survives a restart. A schedule is not push/tag authority: secrets are
+granted only to the task that proposes a write, not to every task due
+in the same tick.
 
 ---
 
@@ -13,13 +22,24 @@ Seven repos run github/codeql-action/upload-sarif so nox findings reach the Secu
 
 ## Open a pull request from a task
 
-The single biggest Actions dependency in the org: 19 repos call the shared nox-remediate workflow and two more use peter-evans/create-pull-request. A task that modified the worktree can declare `pull_request: {branch, title, body, labels}`; kiln commits the diff, pushes the branch and opens or updates the PR. Idempotent by branch name, so a daily remediation run updates its existing PR rather than opening thirty. Refuses outright on an untrusted head — a fork PR whose task could open a PR against the base repository would be a write primitive handed to anyone. Does nothing when the worktree is clean, and says so, because "no changes needed" and "the tool is broken" must not look the same.
+**Landed.** A task may declare `pull_request: {branch, title, body, labels}`.
+The branch must live under `kiln/`; `branch: main` is a load error. Empty
+`base` is the watched ref. Refused on an untrusted head. Does nothing when
+the worktree is clean.
+
+Idempotent by branch name, so a daily remediation run updates its existing
+PR rather than opening thirty.
 
 ---
 
 ## Retain a task's output files
 
-22 uses of actions/upload-artifact across the org — coverage reports, scan output, build logs kept for after-the-fact reading. A task declares `keep: [globs]`; kiln copies the matches out of the disposable worktree into `<repo>/.kiln/runs/<run-id>/<task>/` before the tree is destroyed, and `kiln status <run-id>` lists what is there. Retention is bounded the way the ledger and the docker prune are, because a build box that keeps every artifact forever fills its disk and the first symptom is an unrelated failure. Deliberately local files rather than an upload to GitHub: kiln keeps them where the build happened, and a task that wants them elsewhere can rsync them.
+**Landed.** `keep:` copies matches into `.kiln/runs/<run-id>/<task>/`
+before the worktree is destroyed. `kiln status` lists them. Patterns are
+`filepath.Glob` (no recursive `**`). Retention is bounded.
+
+Deliberately local files rather than an upload to GitHub. A task that
+wants them elsewhere can rsync them.
 
 ---
 
@@ -31,6 +51,12 @@ The proof, and the thing that will find what the feature list missed. Pick one p
 
 ## Service containers for the gate and tasks
 
-The concrete blocker found by the first migration: skene and vorhut both use Actions `services:` to run a database beside the job, and kiln has no equivalent, so neither can leave Actions. Add `services:` to .kiln.yaml — an image, environment, and a readiness command — started before the gate, torn down after the tasks whatever happens, including on cancellation and panic. Host ports are allocated dynamically and exported (KILN_SERVICE_<NAME>_HOST/PORT) rather than fixed: a box runs many repositories and two pipelines both wanting 5432 would collide in a way that looks like a flaky test. Readiness is waited for with a timeout, because a gate that starts before the database accepts connections fails in a way nobody debugs twice.
+**Landed.** `services:` starts sidecar containers before the gate and
+tears them down after the tasks. Host ports are allocated dynamically.
+An image without `@sha256:<64-hex>` is a load error. Containers run with
+`--cap-drop ALL`, `no-new-privileges`, `--init`, `--pids-limit 256`, and `--tmpfs /tmp`.
+
+Host ports are exported as `KILN_SERVICE_<NAME>_HOST` / `_PORT`.
+Readiness is waited for with a timeout.
 
 ---

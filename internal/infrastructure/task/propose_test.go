@@ -263,3 +263,44 @@ func TestASecondRunReplacesTheBranchRatherThanStacking(t *testing.T) {
 		t.Errorf("branch is %s commits ahead of main, want 1", strings.TrimSpace(out.Stdout))
 	}
 }
+
+func TestEmptyBaseTargetsTheWatchedRef(t *testing.T) {
+	dir := repoWithRemote(t)
+	if err := os.WriteFile(filepath.Join(dir, "app.txt"), []byte("fixed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &forge{number: 4, opened: true}
+
+	_, err := task.New(execx.NewSystem()).Propose(t.Context(), ports.TaskRequest{
+		Name: "remediate", Dir: dir, SHA: "deadbeef", Ref: "refs/heads/release",
+		Event: "schedule", Policy: trusted, Watched: "release",
+	}, config.PullRequest{
+		Branch: "kiln/remediate", Title: "chore: apply remediations",
+	}, f)
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	if f.base != "release" {
+		t.Errorf("base = %q, want the watched ref, not the forge default", f.base)
+	}
+}
+
+func TestExplicitBaseIsKept(t *testing.T) {
+	dir := repoWithRemote(t)
+	if err := os.WriteFile(filepath.Join(dir, "app.txt"), []byte("fixed\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f := &forge{number: 5, opened: true}
+
+	_, err := task.New(execx.NewSystem()).Propose(t.Context(), ports.TaskRequest{
+		Name: "remediate", Dir: dir, Policy: trusted, Watched: "release",
+	}, config.PullRequest{
+		Branch: "kiln/remediate", Title: "chore", Base: "develop",
+	}, f)
+	if err != nil {
+		t.Fatalf("Propose: %v", err)
+	}
+	if f.base != "develop" {
+		t.Errorf("base = %q, want the configured base", f.base)
+	}
+}

@@ -53,7 +53,10 @@ tidy:
 examples-check: build
 	@set -e; for f in examples/*.yaml .kiln.yaml; do \
 		echo "checking $$f"; \
-		./$(BINDIR)/kiln doctor --config-only --pipeline "$$f" >/dev/null || exit 1; \
+		case $$f in \
+			*policy*) ./$(BINDIR)/kiln doctor --policy "$$f" >/dev/null || exit 1 ;; \
+			*)        ./$(BINDIR)/kiln doctor --config-only --pipeline "$$f" >/dev/null || exit 1 ;; \
+		esac; \
 	done
 
 # Release archives come from goreleaser, not from a hand-rolled loop here.
@@ -73,4 +76,4 @@ docker:
 release-check: examples-check dist-check all
 
 clean:
-	rm -rf $(BINDIR) $(DISTDIR) coverage.out
+	rm -rf $(BINDIR) $(DISTDIR) coverage.out .cover

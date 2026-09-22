@@ -76,6 +76,11 @@ func (t *Runner) Run(ctx context.Context, req ports.TaskRequest) ports.TaskResul
 		Stdout: req.Output,
 		Stderr: req.Output,
 	}
+	if req.Policy.Confine {
+		// The worktree, not the task workdir: a script that reads a sibling
+		// path is still inside the tree the kernel is asked to grant.
+		cmd.Confine = req.Dir
+	}
 
 	_, err := t.Exec.Run(ctx, cmd)
 

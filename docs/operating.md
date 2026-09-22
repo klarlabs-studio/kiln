@@ -432,7 +432,9 @@ kilnd
 ```
 
 It refuses to boot without `KILN_TOKEN`. There is no anonymous mode to forget
-to turn off.
+to turn off. Treat that token as registry-write plus signing — the same class
+of secret as `KILN_COSIGN_KEY`. JSON callers still have to prove the SHA
+belongs on a trusted ref before a publishable event is granted.
 
 | Route | Auth | Behaviour |
 |---|---|---|
@@ -448,6 +450,11 @@ curl -sS localhost:8088/v1/run \
   -H "Authorization: Bearer $KILN_TOKEN" \
   -d '{"sha":"HEAD","event":"push","ref":"refs/heads/main"}'
 ```
+
+The body is a request. `"event": "push"` does not grant publish authority —
+the SHA must belong to the watched ref (or a tag this repository knows). A
+pull request without `"pr"` is treated as a fork. The webhook is different:
+the HMAC is the evidence.
 
 Point the GitHub webhook at `/v1/github/webhook`, content type
 `application/json`, with `KILN_WEBHOOK_SECRET` as the secret. Subscribe to

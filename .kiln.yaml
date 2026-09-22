@@ -40,3 +40,6 @@ watch:
   ref: main
   pull_requests: true
   tags: true
+
+# Operator checkout owns this file. The commit being built does not.
+# evidence.source defaults to required when KILN_TRUSTED_KEYS is pinned.

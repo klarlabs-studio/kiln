@@ -107,6 +107,48 @@ func TestSourceGateRecordsWhetherChecksActuallyRan(t *testing.T) {
 	}
 }
 
+func TestSecretIDsAreRecordedNeverValues(t *testing.T) {
+	in := input()
+	in.SecretIDs = []string{"npm-token", "registry-token"}
+
+	got := build(t, in).Predicate.BuildDefinition.ExternalParameters.SecretIDs
+	if len(got) != 2 || got[0] != "npm-token" {
+		t.Errorf("secretIds = %v", got)
+	}
+	raw, err := build(t, in).JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "npm_token_value") {
+		t.Error("a secret value leaked into the statement")
+	}
+}
+
+func TestPolicyIdentityIsRecorded(t *testing.T) {
+	in := input()
+	in.PolicySource = "operator"
+	in.PolicyPath = ".kiln.yaml"
+	in.PolicyDigest = "sha256:abc"
+
+	p := build(t, in).Predicate.BuildDefinition.ExternalParameters.Policy
+	if p == nil || p.Source != "operator" || p.Digest != "sha256:abc" {
+		t.Errorf("policy = %+v", p)
+	}
+}
+
+func TestCommitPolicyIdentityCarriesTheSHA(t *testing.T) {
+	in := input()
+	in.PolicySource = "commit"
+	in.PolicyPath = ".kiln.yaml"
+	in.PolicyDigest = "sha256:abc"
+	in.PolicyCommit = in.SHA
+
+	p := build(t, in).Predicate.BuildDefinition.ExternalParameters.Policy
+	if p == nil || p.Source != "commit" || p.Commit != in.SHA {
+		t.Errorf("commit policy = %+v", p)
+	}
+}
+
 func TestIsolationIsRecorded(t *testing.T) {
 	in := input()
 	in.Isolated = true

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/gittest"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 )
 
@@ -188,6 +189,27 @@ func TestDoctorOnAPublishingRepo(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorReportsLandlockHonestly(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	out, _, _ := capture(t, "doctor")
+
+	if execx.LandlockAvailable() {
+		if !strings.Contains(out, "Landlock ABI") || !strings.Contains(out, "filesystem-confined") {
+			t.Errorf("Landlock is available; doctor must say the fork is confined:\n%s", out)
+		}
+		if strings.Contains(out, "environment-scrubbed only") {
+			t.Errorf("must not claim scrub-only when Landlock can apply:\n%s", out)
+		}
+		return
+	}
+	if !strings.Contains(out, "environment-scrubbed only") {
+		t.Errorf("no Landlock; doctor must not claim a sandbox:\n%s", out)
+	}
+	if strings.Contains(out, "filesystem-confined") {
+		t.Errorf("must not claim confined when Landlock is absent:\n%s", out)
 	}
 }
 
@@ -376,6 +398,78 @@ publish:
 	// The engine suppresses it at run time; saying so here saves an afternoon.
 	if !strings.Contains(out, "isolation policy always suppresses it") {
 		t.Errorf("doctor should warn about the suppressed publish:\n%s", out)
+	}
+}
+
+func TestDoctorWarnsAboutBestEffortEvidence(t *testing.T) {
+	repoWith(t, publishingPipeline)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "evidence.source is best-effort") {
+		t.Errorf("an adopting box should hear that the source half is optional:\n%s", out)
+	}
+}
+
+func TestDoctorReportsRequiredEvidenceWhenKeysArePinned(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	t.Setenv("KILN_TRUSTED_KEYS", "warden-test-key")
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "evidence.source is required") {
+		t.Errorf("a box with pinned keys should require the source half:\n%s", out)
+	}
+}
+
+func TestDoctorRefusesAnUnpinnedServiceImage(t *testing.T) {
+	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+  push: [prove]
+services:
+  db:
+    image: postgres:16
+    port: 5432
+`)
+
+	_, errOut, code := capture(t, "doctor")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d, want a load error", code)
+	}
+	if !strings.Contains(errOut, "digest-pinned") {
+		t.Errorf("an unpinned service must be a load error:\n%s", errOut)
+	}
+}
+
+func TestDoctorNamesCommitControlledPolicy(t *testing.T) {
+	repoWith(t, publishingPipeline+`
+policy:
+  from: commit
+`)
+
+	out, _, _ := capture(t, "doctor")
+
+	if !strings.Contains(out, "policy.from is commit") {
+		t.Errorf("the opt-in must be visible:\n%s", out)
+	}
+}
+
+func TestListKeptNamesRetainedFiles(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "runs", "run-1", "scan")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "nox.sarif"), []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	got := listKept(root, "run-1")
+	if len(got) != 1 || got[0] != filepath.Join("scan", "nox.sarif") {
+		t.Errorf("listKept = %v", got)
 	}
 }
 
@@ -778,6 +872,16 @@ func TestVerifyRequiresAReference(t *testing.T) {
 
 	if code != ExitUsage || !strings.Contains(errOut, "kiln verify <image-ref>") {
 		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestVerifyBundleDoesNotNeedAReference(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "verify", "--bundle", t.TempDir())
+
+	if code == ExitUsage {
+		t.Errorf("a bundle directory is a complete invocation: %s", errOut)
 	}
 }
 

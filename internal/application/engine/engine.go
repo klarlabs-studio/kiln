@@ -22,10 +22,15 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 )
 
 // Request is what a surface asks for.
 type Request struct {
+	// Trust is the established classification. Authority fills this after
+	// resolving a claim. Tests and a scheduled run may still set SHA/Event/
+	// Fork/Ref directly; established() prefers Trust when it carries a SHA.
+	Trust trust.Context
 	// SHA is the commit to build. Already resolved: the engine does not read
 	// git refs, so "HEAD" must be turned into an object id before it gets here.
 	SHA string
@@ -106,6 +111,11 @@ type Engine struct {
 	// default; a box that keeps every artifact forever fills its disk, and the
 	// first symptom is an unrelated build failing.
 	KeepRuns int
+	// Evidence is how complete the source half of a publish must be.
+	// Zero (and best-effort) warn and continue; required fails the publish.
+	Evidence trust.EvidenceMode
+	// Policy is the identity of the pipeline that governed this process.
+	Policy trust.PolicyIdentity
 	// PhaseTimeout bounds each phase separately. Zero means unbounded.
 	//
 	// Per phase rather than per run, because the phases fail differently: a
@@ -136,6 +146,9 @@ func New(e Engine) *Engine {
 // meaningful: a failed run is still a record worth storing and worth showing,
 // so callers should read the *Run even when err is non-nil.
 func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
+	t := req.established()
+	req.SHA, req.Event, req.Fork, req.Ref = t.SHA, t.Event, t.Fork, t.Ref
+
 	r := run.New(req.SHA, req.Ref, req.Event.String(), req.Fork, req.Repo)
 	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", req.Event.String())
 
@@ -146,7 +159,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	}
 
 	r.Phase = run.PhaseIsolating
-	policy := isolation.For(req.Event, req.Fork)
+	policy := t.Policy()
 	log.Info("run started",
 		"ref", req.Ref, "fork", req.Fork,
 		"secrets", policy.Secrets, "may_publish", policy.Publish, "may_skip", policy.Skip)
@@ -221,6 +234,21 @@ func (e *Engine) withPhaseTimeout(ctx context.Context, phase string, fn func(con
 			ErrPhaseTimeout, phase, e.PhaseTimeout, err)
 	}
 	return err
+}
+
+// established is the trust context this request runs under.
+//
+// Trust wins when authority has already classified the SHA. The loose fields
+// remain so tests and RunScheduled can still construct a request without
+// going through a resolver.
+func (req Request) established() trust.Context {
+	if req.Trust.SHA != "" {
+		return req.Trust
+	}
+	return trust.Context{
+		SHA: req.SHA, Event: req.Event, Fork: req.Fork, Ref: req.Ref,
+		Established: true,
+	}
 }
 
 func validate(req Request) error {
@@ -315,8 +343,14 @@ func (e *Engine) doPublish(
 	e.persist(r, log)
 	e.report(ctx, func() error { return e.Checks.Start(ctx, ports.NamePublish, req.SHA) }, log, ports.NamePublish)
 
+	vsa, err := e.sourceSummary(ctx, req, log)
+	if err != nil {
+		log.Error("source evidence required but missing", "err", err)
+		return err
+	}
+
 	produced, err := e.publishAll(ctx, req, r, wanted,
-		e.provenanceInput(req, r, policy, gate), e.sourceSummary(ctx, req, log), log)
+		e.provenanceInput(req, r, policy, gate), vsa, log)
 
 	conclusion, title, summary := ports.PublishSummary(produced, err)
 	e.report(ctx, func() error {
@@ -392,22 +426,33 @@ func (e *Engine) publishAll(
 
 // sourceSummary fetches warden's verdict for the commit, once per run.
 //
-// Best-effort. A repository still adopting warden, or a commit whose note has
-// not been written, publishes build provenance without the source half rather
-// than failing — refusing would make adoption all-or-nothing. The absence is
-// logged, because "no source summary attached" is something an operator
-// enforcing one downstream needs to be able to find out about here rather than
-// at deploy time.
-func (e *Engine) sourceSummary(ctx context.Context, req Request, log ports.Logger) []byte {
+// Required mode fails the publish when the verdict cannot be attached. That
+// is the production default once trusted keys are pinned. Best-effort is the
+// adoption path: the artifact still ships, the gap is logged and recorded in
+// provenance, and a consumer who needs the source half finds out here rather
+// than at deploy time.
+func (e *Engine) sourceSummary(ctx context.Context, req Request, log ports.Logger) ([]byte, error) {
+	required := e.Evidence == trust.EvidenceRequired
 	if e.SourceAttester == nil {
-		return nil
+		if required {
+			return nil, errors.New("evidence.source is required: no source attester configured")
+		}
+		return nil, nil
 	}
 	vsa, err := e.SourceAttester.SourceAttestation(ctx, req.Dir, req.SHA)
-	if err != nil {
-		log.Warn("no source summary to attach", "err", err)
-		return nil
+	if err != nil || len(vsa) == 0 {
+		if required {
+			if err != nil {
+				return nil, fmt.Errorf("evidence.source is required: %w", err)
+			}
+			return nil, errors.New("evidence.source is required: no source summary to attach")
+		}
+		if err != nil {
+			log.Warn("no source summary to attach", "err", err)
+		}
+		return nil, nil
 	}
-	return vsa
+	return vsa, nil
 }
 
 // provenanceInput assembles the run-level facts every artifact's attestation
@@ -424,16 +469,28 @@ func (e *Engine) provenanceInput(
 		// A build that could not see the operator's credentials is a
 		// materially different build, and a reader deciding what to trust
 		// should not have to infer it from the event name.
-		Isolated:     !policy.Secrets,
-		GateTool:     "warden",
-		GateVerified: true, // kiln does not reach a publish otherwise
-		GateReproved: !r.Skipped,
-		GateReason:   gate.Reason,
-		KilnVersion:  e.KilnVersion,
-		ToolVersions: e.ToolVersions,
-		InvocationID: r.ID,
-		StartedOn:    r.StartedAt,
+		Isolated:       !policy.Secrets,
+		GateTool:       "warden",
+		GateVerified:   true, // kiln does not reach a publish otherwise
+		GateReproved:   !r.Skipped,
+		GateReason:     gate.Reason,
+		KilnVersion:    e.KilnVersion,
+		ToolVersions:   e.ToolVersions,
+		InvocationID:   r.ID,
+		StartedOn:      r.StartedAt,
+		PolicySource:   e.Policy.Source,
+		PolicyPath:     e.Policy.Path,
+		PolicyDigest:   e.Policy.Digest,
+		PolicyCommit:   e.Policy.Commit,
+		EvidenceSource: string(e.effectiveEvidence()),
 	}
+}
+
+func (e *Engine) effectiveEvidence() trust.EvidenceMode {
+	if e.Evidence == "" {
+		return trust.EvidenceBestEffort
+	}
+	return e.Evidence
 }
 
 // publisherFor selects the publisher for an artifact kind. A nil result is a
@@ -474,6 +531,12 @@ func (e *Engine) report(ctx context.Context, fn func() error, log ports.Logger, 
 // schedule publish?" — and the honest answer, "no, because a schedule is not
 // evidence that anything changed", is better expressed by not offering it.
 func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.NamedTask) (*run.Run, error) {
+	// The ledger already records event: schedule. The task child must see
+	// the same name — KILN_EVENT is how a script tells a watch tick from
+	// a push. isolation.Event is the three forge shapes; schedule is not
+	// one of them, and isolation.For would deny everything, which is why
+	// this path uses scheduledPolicy instead.
+	req.Event = isolation.Event(config.ScheduleEvent)
 	r := run.New(req.SHA, req.Ref, config.ScheduleEvent, false, req.Repo)
 	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", config.ScheduleEvent)
 
@@ -492,16 +555,15 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	e.persist(r, log)
 	log.Info("scheduled tasks", "count", len(tasks))
 
-	// A schedule fires on the tracked ref of the operator's own repository —
-	// never a fork head — so the tasks get the trusted policy. The publish
-	// bit is off regardless: RunScheduled never publishes.
-	policy := isolation.Policy{Secrets: true, Skip: true}
-
+	// A schedule is not evidence that source changed, so it does not inherit
+	// push/tag authority. Secrets are a capability of the proposing task,
+	// not of the tick: a scan due in the same minute must not see the
+	// write credential the remediator needs.
 	if e.Worktrees == nil {
 		return r, fmt.Errorf("engine: no worktree provider configured")
 	}
 	err := e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
-		return e.runTasks(ctx, req, r, policy, tasks, dir, log)
+		return e.runTasks(ctx, req, r, scheduledPolicy, tasks, dir, log)
 	})
 	if err != nil {
 		r.Fail(err)
@@ -512,6 +574,13 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	r.Succeed()
 	e.persist(r, log)
 	return r, nil
+}
+
+func scheduledPolicy(nt config.NamedTask) isolation.Policy {
+	if nt.Task.PullRequest != nil {
+		return isolation.Policy{Secrets: true}
+	}
+	return isolation.Policy{}
 }
 
 // startServices brings up the pipeline's service containers.
@@ -564,13 +633,14 @@ func (e *Engine) doTasks(
 	// there is exactly one subprocess seam in this path and duplicating it
 	// would mean a test could stub one and not the other.
 	return e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
-		return e.runTasks(ctx, req, r, policy, wanted, dir, log)
+		return e.runTasks(ctx, req, r, func(config.NamedTask) isolation.Policy { return policy }, wanted, dir, log)
 	})
 }
 
 // runTasks executes the routed tasks inside an already-prepared worktree.
 func (e *Engine) runTasks(
-	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
+	ctx context.Context, req Request, r *run.Run,
+	policyFor func(config.NamedTask) isolation.Policy,
 	wanted []config.NamedTask, dir string, log ports.Logger,
 ) error {
 	var failed []string
@@ -581,11 +651,13 @@ func (e *Engine) runTasks(
 
 		var output strings.Builder
 		result := ports.TaskResult{}
+		policy := policyFor(nt)
 		err := e.withPhaseTimeout(ctx, "task "+nt.Name, func(ctx context.Context) error {
 			result = e.Tasks.Run(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task,
 				Dir: dir, SHA: req.SHA, Ref: req.Ref, Event: req.Event.String(),
-				Policy: policy, ServiceEnv: req.ServiceEnv,
+				Watched: req.Pipeline.Watch.Ref,
+				Policy:  policy, ServiceEnv: req.ServiceEnv,
 				// Tee: the operator watching a terminal sees it live, and the
 				// check body gets the same text without a second run.
 				Output: io.MultiWriter(&output, orDiscard(req.Output)),
@@ -625,6 +697,7 @@ func (e *Engine) runTasks(
 			proposal, perr := e.Tasks.Propose(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task, Dir: dir, SHA: req.SHA,
 				Ref: req.Ref, Event: req.Event.String(), Policy: policy,
+				Watched: req.Pipeline.Watch.Ref,
 			}, *spec, e.Proposer)
 			if perr != nil {
 				result.Err = perr

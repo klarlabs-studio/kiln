@@ -11,7 +11,7 @@ func TestForMatchesTheMatrix(t *testing.T) {
 		fork  bool
 		want  Policy
 	}{
-		{"fork PR gets nothing", EventPullRequest, true, Policy{}},
+		{"fork PR is confined and gets nothing else", EventPullRequest, true, Policy{Confine: true}},
 		{"same-repo PR may skip only", EventPullRequest, false, Policy{Skip: true}},
 		{"push gets everything", EventPush, false, Policy{Secrets: true, Publish: true, Skip: true}},
 		{"tag gets everything", EventTag, false, Policy{Secrets: true, Publish: true, Skip: true}},
@@ -37,8 +37,17 @@ func TestUnknownEventDeniesEverything(t *testing.T) {
 
 func TestZeroPolicyIsDenyAll(t *testing.T) {
 	var p Policy
-	if p.Secrets || p.Publish || p.Skip {
+	if p.Secrets || p.Publish || p.Skip || p.Confine {
 		t.Error("the zero Policy must permit nothing")
+	}
+}
+
+func TestEventValidAndString(t *testing.T) {
+	if !EventPush.Valid() || EventPush.String() != "push" {
+		t.Errorf("push: Valid/String = %v %q", EventPush.Valid(), EventPush.String())
+	}
+	if Event("release").Valid() {
+		t.Error("an unknown event must not be Valid")
 	}
 }
 

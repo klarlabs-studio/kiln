@@ -87,6 +87,18 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"AWS_SECRET_ACCESS_KEY=xxx",
 		"SSH_AUTH_SOCK=/tmp/agent.1",
 		"CI=true",
+		"DATABASE_URL=postgres://x",
+		"DSN=host=db",
+		"REDIS_URL=redis://x",
+		"MONGO_URI=mongodb://x",
+		"APP_PEM=-----BEGIN",
+		"SERVICE_URL=postgres://x",
+		"KUBECONFIG=/home/op/.kube/config",
+		"NETRC=/home/op/.netrc",
+		"GNUPGHOME=/home/op/.gnupg",
+		"AWS_SHARED_CREDENTIALS_FILE=/home/op/.aws/credentials",
+		"SSL_KEY_FILE=/home/op/client.key",
+		"JWT_KID=abc",
 		"malformed-no-equals",
 	}
 

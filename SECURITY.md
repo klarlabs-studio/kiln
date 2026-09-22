@@ -36,14 +36,19 @@ identity is the point — it names the workflow and the tag that produced the
 file, so a signature cannot be reused for a build made anywhere else:
 
 ```bash
+VERSION=$(curl -fsSL https://api.github.com/repos/klarlabs-studio/kiln/releases/latest | jq -r .tag_name)
 cosign verify-blob \
   --bundle checksums.txt.bundle \
   --certificate-identity \
-    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0" \
+    "https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/$VERSION" \
   --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
   checksums.txt
 sha256sum --check --ignore-missing checksums.txt
 ```
+
+The identity names the workflow **and the tag**. A hardcoded version would
+make every later release look forged — the exact trust failure this command
+exists to catch.
 
 ## Security model — what kiln does and doesn't guarantee
 
@@ -75,11 +80,35 @@ sha256sum --check --ignore-missing checksums.txt
   a provenance skip and never publishes, and the code that decides this does
   not accept an override.
 
+- **Callers request work; they do not grant authority.** `POST /v1/run`, MCP
+  and the CLI supply a SHA and an event claim. Push and tag authority is
+  established by membership on a trusted ref. A pull request without a number,
+  or whose forge lookup fails, is a fork. A verified webhook is already
+  evidence.
+
+- **`.kiln.yaml` is operator-owned.** Routing, services and proposal
+  destinations come from the box checkout, not from the commit being built.
+  The file's digest is recorded in provenance.
+
+- **Proposal writes stay under `kiln/`.** A task may force-push its own
+  proposal branch. It may not rewrite `main` or the watched ref because the
+  pipeline named that branch.
+
+- **Source evidence is a policy, not a warning.** With trusted Warden keys
+  pinned, a publish that cannot attach the source verdict fails. Best-effort
+  is for adoption and is visible in the attestation.
+
 - **Builds run repository-authored commands.** Kiln runs what `.warden.yaml`
   and your Dockerfile/`.goreleaser.yaml` say to run, in a disposable worktree,
   with the permissions of the user running kiln. **The worktree is isolation
   from your working copy, not a sandbox.** Treat those files as trusted code
-  and review changes to them accordingly.
+  and review changes to them accordingly. A fork's prove and tasks are
+  additionally Landlock-restricted to the worktree and toolchain paths when
+  the kernel supports it (filesystem open is denied; `stat` is not, and
+  network stays open). That is a kernel fact, recorded as
+  `KILN_CONFINED=landlock` on the child. Without Landlock the child is
+  environment-scrubbed only. `KILN_CONFINE=required` refuses the fork run
+  in that case.
 
 - **The signing identity is ambient.** Kiln invokes `cosign` and inherits
   whatever key or OIDC identity the environment gives it. Kiln does not manage
@@ -90,6 +119,11 @@ sha256sum --check --ignore-missing checksums.txt
   token on every route that does anything, and an HMAC signature on webhooks. A
   missing webhook secret is the same 401 as a forged signature — an
   unauthenticated build trigger is a remote code execution primitive.
+  `KILN_TOKEN` is a publish credential: treat a leak as registry-write plus
+  signing. JSON callers still cannot manufacture push/tag authority for a SHA
+  that is not on a trusted ref. `POST /v1/run` admits one caller at a time
+  (429 if another build is already in flight); a leak can still publish, it
+  cannot stack builds until the box falls over.
 
 - **MCP is read-only unless you say otherwise.** Agents get `doctor` and
   `status` freely and pull-request proves; push and tag runs are refused unless

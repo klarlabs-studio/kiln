@@ -167,6 +167,14 @@ Owned by Warden. Kiln shells out to `warden run pre-push --attest-only` and does
 
 ### `.kiln.yaml` — publish and routing
 
+Kiln reads this file from the **operator checkout**, not from the commit
+being built, unless the operator writes `policy.from: commit`. That is
+an explicit trust-boundary change: the SHA supplies the file, discovery
+stays the operator's, and a fork cannot start the commit's services.
+The file's identity (`operator`, `default`, or `commit`, plus
+`sha256:` of the bytes) is recorded in provenance. See
+[intent.md](docs/intent.md).
+
 ```yaml
 apiVersion: kiln.klarlabs.de/v1
 kind: Pipeline
@@ -207,12 +215,12 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_DB` | Run ledger path (default `.kiln/state.json`) |
 | `KILN_DRY=1` | Plan tags; call neither docker nor cosign |
 | `KILN_WARDEN` / `KILN_NOX` / `KILN_GORELEASER` | Binary names |
-| `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** |
+| `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** Also defaults `evidence.source` to `required`. |
 | `KILN_COSIGN_KEY` | Signing key for publish. Empty means keyless, which needs an ambient OIDC identity. Takes any form cosign's `--key` does: a path, `env://VAR`, `k8s://ns/name`, or a KMS URI. **Required on a self-hosted builder** — see [Signing](#signing). |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
 | `KILN_ADDR` | kilnd bind address (default `127.0.0.1:8088`) |
-| `KILN_TOKEN` | kilnd bearer token — **required to boot** |
+| `KILN_TOKEN` | kilnd bearer token — **required to boot**. Equivalent to registry write plus signing: a leaked token can ask this box to build. Push/tag still require the SHA to be on a trusted ref. |
 | `KILN_WEBHOOK_SECRET` | GitHub webhook HMAC |
 | `KILN_DIR` | Repository directory for kilnd |
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
@@ -259,13 +267,13 @@ prompts, which is the same hang in a different place. An unencrypted key needs
 
 Policy is a function of event and fork, enforced in the engine — **not** in the pipeline file. A `.kiln.yaml` edited on a fork pull request to demand a publish gets overruled, not obeyed.
 
-| Event | Fork | Secrets | Publish | Provenance skip |
-|---|---|---|---|---|
-| `pull_request` | yes | no | no | no |
-| `pull_request` | no | no | no | yes |
-| `push` / `tag` | — | yes | yes | yes |
+| Event | Fork | Secrets | Publish | Provenance skip | Confine |
+|---|---|---|---|---|---|
+| `pull_request` | yes | no | no | no | yes |
+| `pull_request` | no | no | no | yes | no |
+| `push` / `tag` | — | yes | yes | yes | no |
 
-Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket.
+Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket. They also request a Landlock filesystem confine of the worktree when the kernel has it. That is not a sandbox: network stays open, and without Landlock the child is scrubbed only.
 
 A same-repo pull request may skip the re-prove but still may not publish. An image built from an unmerged head is one nobody should be able to ship.
 
@@ -288,6 +296,7 @@ to — that shared commit is what makes the two statements one chain.
 
 ```bash
 kiln verify ghcr.io/felixgeelhaar/glossa-api@sha256:… --key cosign.pub --dir .
+kiln verify --bundle ./evidence   # statement.json, optional source.json / signature.bundle
 ```
 
 ```
@@ -449,7 +458,7 @@ Same engine, four ways in.
 | `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
-| `kiln verify <ref>` | Walk a published artifact's whole provenance chain. `--policy` for artifacts kiln did not build; `--json` for a gate |
+| `kiln verify <ref>` | Walk a published artifact's whole provenance chain. `--policy` for artifacts kiln did not build; `--bundle` / `--statement` for a local walk without a registry; `--json` for a gate |
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 
@@ -479,6 +488,10 @@ Cron plus `kiln watch --once` stays the daemon-less default. `kilnd` is for oper
 | `POST /v1/github/webhook` | HMAC-SHA256 `KILN_WEBHOOK_SECRET` |
 
 The webhook answers 202 and builds in the background: GitHub's ten-second delivery window is not the build budget. A missing secret is the same 401 as a forged signature.
+
+`POST /v1/run` is a request, not a grant. A body that says `"event": "push"`
+must still prove the SHA is on a trusted ref. A pull request without a number
+is a fork. The HMAC-verified webhook is already evidence.
 
 ### GitHub — the human UI
 
@@ -526,11 +539,14 @@ Each tick recomputes the full set of interesting refs and drops the ones a **suc
 
 ## Documentation
 
+- [`docs/intent.md`](docs/intent.md) — what kiln is for, and what it must not become
+- [`docs/intent.md`](docs/intent.md) — what kiln is for, and what it must not become
 - [`docs/configuration.md`](docs/configuration.md) — the full `.kiln.yaml` schema
 - [`docs/isolation.md`](docs/isolation.md) — the trust model, in detail
 - [`docs/operating.md`](docs/operating.md) — running it unattended, kilnd, troubleshooting
 - [`docs/rollops-handoff.md`](docs/rollops-handoff.md) — what RollOps consumes
 - [`docs/competitive.md`](docs/competitive.md) — the OSS CI landscape, and where kiln loses
+- [`docs/audit.md`](docs/audit.md) — product summary and independent audit of the tree
 
 ---
 

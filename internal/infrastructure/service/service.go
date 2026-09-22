@@ -128,7 +128,19 @@ func (s *Runner) startAll(ctx context.Context, services map[string]config.Servic
 func (s *Runner) start(ctx context.Context, name string, spec config.Service, runID string) (Running, error) {
 	container := fmt.Sprintf("kiln-%s-%s", shortID(runID), name)
 
-	args := []string{"run", "--detach", "--rm", "--name", container}
+	args := []string{
+		"run", "--detach", "--rm", "--name", container,
+		// Least privilege that still lets a database listen. When the
+		// operator opts into commit-controlled policy, a fork's services
+		// are stripped before they reach here; these defaults stay.
+		"--cap-drop", "ALL",
+		"--security-opt", "no-new-privileges",
+		"--init",
+		"--pids-limit", "256",
+		// Writable scratch without a writable root. Databases still write
+		// their data dir; /tmp is where images dump sockets and pid files.
+		"--tmpfs", "/tmp",
+	}
 	for _, kv := range sortedEnv(spec.Env) {
 		args = append(args, "--env", kv)
 	}

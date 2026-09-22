@@ -55,14 +55,19 @@ type Policy struct {
 	Publish bool
 	// Skip permits a trusted warden note to stand in for a re-prove.
 	Skip bool
+	// Confine asks the process layer to Landlock-restrict repository-
+	// authored commands to the worktree and toolchain paths. It is a
+	// request for a kernel restriction, not a claim that a worktree is
+	// a sandbox. Only a fork pull request sets it.
+	Confine bool
 }
 
 // For resolves the policy for an event and fork status.
 //
-//	event         fork  secrets  publish  skip
-//	pull_request  yes   no       no       no
-//	pull_request  no    no       no       yes
-//	push / tag    —     yes      yes      yes
+//	event         fork  secrets  publish  skip  confine
+//	pull_request  yes   no       no       no    yes
+//	pull_request  no    no       no       yes   no
+//	push / tag    —     yes      yes      yes   no
 //
 // Two rows deserve their reasoning written down.
 //
@@ -83,7 +88,7 @@ func For(event Event, fork bool) Policy {
 		return Policy{Secrets: true, Publish: true, Skip: true}
 	case EventPullRequest:
 		if fork {
-			return Policy{}
+			return Policy{Confine: true}
 		}
 		return Policy{Skip: true}
 	default:

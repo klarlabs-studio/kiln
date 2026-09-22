@@ -37,6 +37,11 @@ type Cmd struct {
 	// stream progress to a terminal and inspect the output afterwards.
 	Stdout io.Writer
 	Stderr io.Writer
+	// Confine, when set, is the worktree a repository-authored command may
+	// write. The kernel Landlock LSM enforces it. Empty means unconfined.
+	// This is not a claim that a worktree is a sandbox: network is open,
+	// and without Landlock the request is ignored unless KILN_CONFINE=required.
+	Confine string
 }
 
 // String renders the command for logs and error messages. It prints arguments
@@ -180,11 +185,21 @@ func (s System) Run(ctx context.Context, c Cmd) (Result, error) {
 		return Result{}, err
 	}
 
+	if c.Confine != "" {
+		confined, res, err := s.maybeConfine(ctx, c)
+		if confined || err != nil {
+			return res, err
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...) //nolint:gosec // the binary set is fixed by Kiln, not by repo content
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	cmd.Stdin = c.Stdin
+	return finish(cmd, c)
+}
 
+func finish(cmd *exec.Cmd, c Cmd) (Result, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = tee(&stdout, c.Stdout)
 	cmd.Stderr = tee(&stderr, c.Stderr)
@@ -235,6 +250,16 @@ var secretNames = map[string]bool{
 	"GH_TOKEN":            true,
 	"KILN_TOKEN":          true,
 	"KILN_WEBHOOK_SECRET": true,
+	"DATABASE_URL":        true,
+	"DATABASE_URI":        true,
+	"DSN":                 true,
+	"CONNECTION_STRING":   true,
+	"JDBC_URL":            true,
+	"REDIS_URL":           true,
+	"REDIS_URI":           true,
+	"PGURL":               true,
+	"MONGO_URI":           true,
+	"MONGODB_URI":         true,
 	// The trusted-key list is not itself a secret, but a fork head that can
 	// read it learns exactly which signature to try to forge.
 	"KILN_TRUSTED_KEYS": true,
@@ -253,6 +278,18 @@ var secretNames = map[string]bool{
 	"GOOGLE_APPLICATION_CREDENTIALS": true,
 	"AZURE_CLIENT_SECRET":            true,
 	"NPM_TOKEN":                      true,
+	// Paths to credential files. The values are not the secrets; the files
+	// they name are, and a fork that can read the path can read the file.
+	"KUBECONFIG":                  true,
+	"NETRC":                       true,
+	"GNUPGHOME":                   true,
+	"NPM_CONFIG_USERCONFIG":       true,
+	"DOCKER_CERT_PATH":            true,
+	"DOCKER_TLS_CERTDIR":          true,
+	"AWS_SHARED_CREDENTIALS_FILE": true,
+	"AWS_CONFIG_FILE":             true,
+	"SSL_CERT_FILE":               true,
+	"SSL_KEY_FILE":                true,
 }
 
 // Scrub removes credential-bearing variables from an environment.
@@ -280,6 +317,11 @@ func Scrub(environ []string) []string {
 func IsSecretVar(name string) bool {
 	upper := strings.ToUpper(name)
 	if secretNames[upper] {
+		return true
+	}
+	if strings.HasSuffix(upper, "_PEM") || strings.HasSuffix(upper, "_DSN") ||
+		strings.HasSuffix(upper, "_URI") || strings.HasSuffix(upper, "_URL") ||
+		strings.HasSuffix(upper, "_KID") {
 		return true
 	}
 	for _, marker := range secretMarkers {

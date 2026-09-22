@@ -94,12 +94,14 @@ func TestShortSHA(t *testing.T) {
 func TestCloneIsDeep(t *testing.T) {
 	r := New("abc", "", "push", false, "")
 	r.Tags = []string{"ghcr.io/x/y:latest"}
+	r.Tasks = []Task{{Name: "scan", OK: true}}
 
 	cp := r.Clone()
 	cp.Tags[0] = "mutated"
 	cp.SHA = "mutated"
+	cp.Tasks[0].Name = "mutated"
 
-	if r.Tags[0] == "mutated" || r.SHA == "mutated" {
+	if r.Tags[0] == "mutated" || r.SHA == "mutated" || r.Tasks[0].Name == "mutated" {
 		t.Error("Clone shares state with the original")
 	}
 	if Clone := (*Run)(nil).Clone(); Clone != nil {

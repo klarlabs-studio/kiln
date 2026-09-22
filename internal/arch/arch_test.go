@@ -8,6 +8,7 @@
 package arch
 
 import (
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"io/fs"
@@ -148,6 +149,110 @@ func TestTheDependencyRuleHolds(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestSurfacesDoNotExecuteTheEngine keeps delivery from becoming a second
+// authority. CLI, MCP, kilnd and boot may import the engine for errors and
+// constants. They must not construct a Request or call Execute: that is
+// how a JSON body used to manufacture a push.
+//
+// Two files are allowed: authority, which is the resolver, and watch, which
+// falls back for tests that stub a prover without assembling one. A third
+// caller is a new door.
+func TestSurfacesDoNotExecuteTheEngine(t *testing.T) {
+	root := ".."
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		rel := filepath.ToSlash(strings.TrimPrefix(path, root+string(filepath.Separator)))
+		if mayCallEngine(rel) {
+			return nil
+		}
+
+		fset := token.NewFileSet()
+		file, parseErr := parser.ParseFile(fset, path, nil, 0)
+		if parseErr != nil {
+			return parseErr
+		}
+
+		engineName := importedName(file, modulePath+"application/engine")
+		if engineName == "" || engineName == "_" {
+			return nil
+		}
+
+		ast.Inspect(file, func(n ast.Node) bool {
+			switch x := n.(type) {
+			case *ast.CallExpr:
+				sel, ok := x.Fun.(*ast.SelectorExpr)
+				if !ok || (sel.Sel.Name != "Execute" && sel.Sel.Name != "ExecuteLocked") {
+					return true
+				}
+				if namesEngine(sel.X) {
+					t.Errorf("%s: surfaces call authority, not the engine:\n"+
+						"\t%s is an Execute on Engine; a new door that skips the resolver\n"+
+						"\tcan name a push the repository does not know",
+						path, fset.Position(x.Pos()))
+				}
+			case *ast.CompositeLit:
+				sel, ok := x.Type.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "Request" {
+					return true
+				}
+				id, ok := sel.X.(*ast.Ident)
+				if ok && id.Name == engineName {
+					t.Errorf("%s: surfaces must not construct engine.Request:\n"+
+						"\t%s builds a run the resolver never classified",
+						path, fset.Position(x.Pos()))
+				}
+			}
+			return true
+		})
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func mayCallEngine(rel string) bool {
+	if strings.HasPrefix(rel, "application/engine/") {
+		return true
+	}
+	switch rel {
+	case "application/authority/authority.go", "application/watch/watch.go":
+		return true
+	default:
+		return false
+	}
+}
+
+func importedName(file *ast.File, path string) string {
+	for _, spec := range file.Imports {
+		got, err := strconv.Unquote(spec.Path.Value)
+		if err != nil || got != path {
+			continue
+		}
+		if spec.Name != nil {
+			return spec.Name.Name
+		}
+		return "engine"
+	}
+	return ""
+}
+
+func namesEngine(expr ast.Expr) bool {
+	switch x := expr.(type) {
+	case *ast.Ident:
+		return x.Name == "Engine"
+	case *ast.SelectorExpr:
+		return x.Sel.Name == "Engine"
+	default:
+		return false
 	}
 }
 

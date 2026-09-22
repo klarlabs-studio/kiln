@@ -16,6 +16,7 @@ package daemon
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -26,10 +27,11 @@ import (
 	"sync"
 	"time"
 
-	"go.klarlabs.de/kiln/internal/application/engine"
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -64,6 +66,10 @@ type Server struct {
 
 	// background tracks in-flight webhook builds so Shutdown can wait for them.
 	background sync.WaitGroup
+	// runs admits one synchronous POST /v1/run at a time. A stolen token
+	// can still publish; this stops the same token pinning the box with
+	// stacked builds that all wait on the repository lock.
+	runs chan struct{}
 }
 
 // ErrNoToken reports a server that would have booted without authentication.
@@ -77,7 +83,10 @@ func New(deps *boot.Deps, token, webhookSecret string, log ports.Logger) (*Serve
 	if log == nil {
 		log = obs.Discard()
 	}
-	return &Server{Deps: deps, Log: log, Token: token, WebhookSecret: webhookSecret}, nil
+	return &Server{
+		Deps: deps, Log: log, Token: token, WebhookSecret: webhookSecret,
+		runs: make(chan struct{}, 1),
+	}, nil
 }
 
 // Handler builds the route table.
@@ -138,9 +147,16 @@ func (s *Server) authorized(r *http.Request) bool {
 	if !ok || !strings.EqualFold(scheme, "Bearer") {
 		return false
 	}
-	// Constant time: a byte-by-byte comparison leaks the token one character
-	// at a time to anyone willing to measure.
-	return subtle.ConstantTimeCompare([]byte(strings.TrimSpace(provided)), []byte(s.Token)) == 1
+	return tokenEqual(strings.TrimSpace(provided), s.Token)
+}
+
+// tokenEqual compares bearer tokens without leaking length. Hashing both
+// sides first makes the comparison constant-time even when the caller sent
+// a different number of bytes than KILN_TOKEN.
+func tokenEqual(provided, want string) bool {
+	a := sha256.Sum256([]byte(provided))
+	b := sha256.Sum256([]byte(want))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
@@ -199,9 +215,17 @@ func (s *Server) handleRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	select {
+	case s.runs <- struct{}{}:
+		defer func() { <-s.runs }()
+	default:
+		writeError(w, http.StatusTooManyRequests, "another run is already in progress on this box")
+		return
+	}
+
 	run, err := s.execute(r.Context(), github.Job{
 		SHA: req.SHA, Ref: req.Ref, Event: event, Fork: req.Fork,
-	}, req.PR)
+	}, req.PR, false)
 	if err != nil && run.ID == "" {
 		// Nothing ran: a bad commit, an unreadable repository.
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -292,7 +316,7 @@ func (s *Server) startBackground(job github.Job) {
 		ctx, cancel := context.WithTimeout(context.Background(), BackgroundTimeout)
 		defer cancel()
 
-		out, err := s.execute(ctx, job, 0)
+		out, err := s.execute(ctx, job, 0, true)
 		if err != nil {
 			s.Log.Error("webhook build failed",
 				"sha", job.SHA, "ref", job.Ref, "event", job.Event.String(), "err", err)
@@ -309,7 +333,7 @@ func (s *Server) startBackground(job github.Job) {
 // delivers a push and a pull_request within the same second all the time, and
 // each starts its own background build. Without the lock they would race each
 // other's worktrees and ledger writes on one checkout.
-func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.RunOutput, error) {
+func (s *Server) execute(ctx context.Context, job github.Job, pr int, established bool) (mcpsrv.RunOutput, error) {
 	d := s.Deps
 
 	sha, err := worktree.ResolveSHA(ctx, d.Runner, d.Dir, job.SHA)
@@ -323,19 +347,11 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 	}
 	defer func() { _ = l.Release() }()
 
-	fork := job.Fork
-	if !fork && job.Event == isolation.EventPullRequest && pr > 0 {
-		fork = d.ResolvePullFork(ctx, pr)
-	}
-
-	rec, execErr := d.Engine.Execute(ctx, engine.Request{
-		SHA:      sha,
-		Event:    job.Event,
-		Fork:     fork,
-		Ref:      job.Ref,
-		Repo:     repoName(d),
-		Dir:      d.Dir,
-		Pipeline: d.Pipeline,
+	rec, execErr := d.Authority.ExecuteLocked(ctx, authority.Request{
+		Claim: trust.Claim{
+			SHA: sha, Event: job.Event, Ref: job.Ref, PR: pr, Fork: job.Fork,
+			Established: established,
+		},
 	})
 	return mcpsrv.FromRun(rec), execErr
 }
@@ -366,13 +382,6 @@ func (s *Server) repoLock(ctx context.Context) (*lock.Lock, error) {
 		case <-time.After(poll):
 		}
 	}
-}
-
-func repoName(d *boot.Deps) string {
-	if d.RepoErr != nil {
-		return ""
-	}
-	return d.Repo.String()
 }
 
 func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {

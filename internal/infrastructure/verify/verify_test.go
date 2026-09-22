@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -356,6 +358,30 @@ func TestGarbageAttestationFails(t *testing.T) {
 	}
 }
 
+func TestReportExplainsPolicyAndSecrets(t *testing.T) {
+	s := statement(t, func(in *ports.AttestInput) {
+		in.PolicySource = "operator"
+		in.PolicyDigest = "sha256:policy"
+		in.EvidenceSource = "required"
+		in.SecretIDs = []string{"npm-token"}
+		in.GateReproved = false
+		in.GateVerified = true
+		in.GateTool = "warden"
+	})
+	fake := healthy(t, s)
+	report, err := New(fake).Verify(t.Context(), keyed())
+	if err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	out := report.String()
+	for _, want := range []string{"policy", "operator", "sha256:policy", "evidence", "required", "npm-token", "inherited"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report omits %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestReportRendersEveryLink(t *testing.T) {
 	fake := healthy(t, statement(t, nil))
 	report, _ := New(fake).Verify(t.Context(), keyed())
@@ -497,5 +523,111 @@ func TestCondenseKeepsTheClauseWhenTheTailIsBare(t *testing.T) {
 				t.Errorf("condense:\n got %q\nwant %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func writeBundle(t *testing.T, stmt attest.Statement, extra map[string][]byte) string {
+	t.Helper()
+	dir := t.TempDir()
+	raw, err := stmt.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, BundleStatement), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range extra {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestOfflineBundleWalksWithoutARegistry(t *testing.T) {
+	s := statement(t, nil)
+	dir := writeBundle(t, s, nil)
+	fake := execx.NewFake().Absent("cosign")
+
+	report, err := New(fake).Verify(t.Context(), Options{BundleDir: dir, CosignKey: "cosign.pub"})
+	if err != nil {
+		t.Fatalf("Verify: %v\n%s", err, report)
+	}
+	if !report.Offline || !report.OK() {
+		t.Errorf("offline walk should hold without a registry:\n%s", report)
+	}
+	if report.Complete() {
+		t.Error("a walk that skipped the registry signature is not complete")
+	}
+	if got := link(report, "signature"); got.Status != Unknown || !strings.Contains(got.Detail, "not re-checked") {
+		t.Errorf("signature = %+v", got)
+	}
+	if got := link(report, "provenance"); got.Status != Pass {
+		t.Errorf("provenance = %+v", got)
+	}
+	if fake.Ran("cosign") {
+		t.Error("offline without a local bundle must not call the registry")
+	}
+}
+
+func TestOfflineStatementPathIsEnough(t *testing.T) {
+	s := statement(t, nil)
+	raw, err := s.JSON()
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "provenance.json")
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	report, err := New(execx.NewFake()).Verify(t.Context(), Options{StatementPath: path})
+	if err != nil {
+		t.Fatalf("Verify: %v\n%s", err, report)
+	}
+	if report.Statement == nil || report.Statement.SourceCommit() != commit {
+		t.Errorf("did not read the local statement: %+v", report.Statement)
+	}
+}
+
+func TestOfflineBundleRequiresStatement(t *testing.T) {
+	dir := t.TempDir()
+	report, err := New(execx.NewFake()).Verify(t.Context(), Options{BundleDir: dir})
+	if !errors.Is(err, ErrIncomplete) {
+		t.Fatalf("err = %v", err)
+	}
+	if got := link(report, "provenance"); got.Status != Fail {
+		t.Errorf("provenance = %+v", got)
+	}
+}
+
+func TestOfflineLocalBundleIsChecked(t *testing.T) {
+	s := statement(t, nil)
+	dir := writeBundle(t, s, map[string][]byte{BundleSignature: []byte("bundle")})
+	fake := execx.NewFake()
+	fake.On("cosign verify-blob-attestation", execx.Response{})
+
+	report, err := New(fake).Verify(t.Context(), Options{BundleDir: dir, CosignKey: "cosign.pub"})
+	if err != nil {
+		t.Fatalf("Verify: %v\n%s", err, report)
+	}
+	if got := link(report, "signature"); got.Status != Pass {
+		t.Errorf("signature = %+v", got)
+	}
+	if !fake.Ran("cosign verify-blob-attestation") {
+		t.Error("a local bundle must be checked")
+	}
+}
+
+func TestOfflineSourceWithoutKeysStaysUnknown(t *testing.T) {
+	s := statement(t, nil)
+	dir := writeBundle(t, s, map[string][]byte{BundleSource: []byte(`{"payloadType":"x"}`)})
+
+	report, err := New(execx.NewFake()).Verify(t.Context(), Options{BundleDir: dir})
+	if err != nil {
+		t.Fatalf("Verify: %v\n%s", err, report)
+	}
+	if got := link(report, "source gate"); got.Status != Unknown || !strings.Contains(got.Detail, "--policy") {
+		t.Errorf("source gate = %+v", got)
 	}
 }

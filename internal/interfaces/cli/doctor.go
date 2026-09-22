@@ -14,6 +14,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/config"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/policyfile"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -182,6 +183,22 @@ func (r *doctorReport) checkPipeline(deps *boot.Deps) {
 		r.warn("on.pull_request lists publish: the isolation policy always suppresses it — " +
 			"a pull request head is a proposal, not a release")
 	}
+	mode := trust.ResolveEvidence(deps.Pipeline.Evidence.Source, len(deps.Env.TrustedKeys) > 0)
+	switch mode {
+	case trust.EvidenceRequired:
+		r.ok("evidence.source is required: a publish without a warden verdict fails")
+	default:
+		r.warn("evidence.source is best-effort: a publish may omit the source half of the chain")
+	}
+
+	if deps.Pipeline.CommitControlled() {
+		r.warn("policy.from is commit: this is an explicit trust-boundary change — " +
+			"the SHA being built supplies .kiln.yaml; discovery stays the operator's; " +
+			"a fork cannot start the commit's services")
+	} else {
+		r.ok("policy.from is operator: the checkout's .kiln.yaml governs the build")
+	}
+
 	if deps.Pipeline.Prove.Nox {
 		r.ok("prove.nox enabled")
 	}
@@ -214,6 +231,13 @@ func noxWantedBy(deps *boot.Deps) (bool, string) {
 func (r *doctorReport) checkToolchain(deps *boot.Deps) {
 	// warden is required whenever anything proves, which is every sane
 	// pipeline. Its absence is the one toolchain gap that is never a warning.
+	if execx.LandlockAvailable() {
+		r.ok("Landlock ABI %d: a fork's prove and tasks are filesystem-confined to the worktree", execx.LandlockABI())
+	} else {
+		r.warn("Landlock is not available: a fork's prove and tasks are environment-scrubbed only — " +
+			"the worktree is not a sandbox (set KILN_CONFINE=required to refuse those runs)")
+	}
+
 	if path, err := deps.Runner.LookPath(deps.Env.Warden); err != nil {
 		r.fail("%s not found: kiln cannot pass a commit without the gate (install warden or set KILN_WARDEN)",
 			deps.Env.Warden)

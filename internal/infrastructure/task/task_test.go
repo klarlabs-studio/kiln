@@ -121,6 +121,23 @@ func TestAnUntrustedHeadCannotReadSecrets(t *testing.T) {
 	}
 }
 
+func TestAForkTaskAsksForAKernelConfine(t *testing.T) {
+	fake := execx.NewFake()
+	dir := t.TempDir()
+	fork := isolation.For(isolation.EventPullRequest, true)
+
+	_ = task.New(fake).Run(t.Context(), ports.TaskRequest{
+		Name: "scan", Task: config.Task{Run: "true"}, Dir: dir, Policy: fork,
+	})
+	cmd := fake.Find("sh")
+	if cmd == nil {
+		t.Fatalf("task not run: %s", fake.Transcript())
+	}
+	if cmd.Confine != dir {
+		t.Errorf("Confine = %q, want the worktree — same request the gate makes", cmd.Confine)
+	}
+}
+
 func TestATrustedRunKeepsItsEnvironment(t *testing.T) {
 	t.Setenv("GITHUB_TOKEN", "a-real-token")
 

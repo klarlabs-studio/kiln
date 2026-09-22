@@ -21,6 +21,9 @@ import (
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/domain/trust"
+	"go.klarlabs.de/kiln/internal/domain/write"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -84,7 +87,40 @@ type Pipeline struct {
 	// suite talks to, a fake API. They run for the whole of prove and tasks
 	// and are torn down afterwards whatever happened.
 	Services map[string]Service `yaml:"services,omitempty"`
-	Watch    Watch              `yaml:"watch"`
+	// Evidence says how complete the source half of a published artifact
+	// must be. Empty is resolved later: a box with pinned trusted keys
+	// defaults to required, an adopting box to best-effort.
+	Evidence Evidence `yaml:"evidence,omitempty"`
+	// Policy says who authors this file for a run. Empty is the operator
+	// checkout — today's model. `from: commit` is an explicit
+	// trust-boundary change and must not be inferred.
+	Policy PolicySpec `yaml:"policy,omitempty"`
+	Watch  Watch      `yaml:"watch"`
+}
+
+// PolicySpec is the authorship of `.kiln.yaml` itself.
+//
+// The source being built and the policy controlling the build are different
+// objects. The default is the operator checkout. Switching to the commit
+// being built is a trust-boundary change: a pull request can then rewrite
+// routing and services, so it is opt-in and recorded in provenance.
+type PolicySpec struct {
+	// From is operator (default) or commit.
+	From string `yaml:"from,omitempty"`
+}
+
+const (
+	// PolicyFromOperator is the checkout's file. The silent default.
+	PolicyFromOperator = "operator"
+	// PolicyFromCommit is the SHA's file. Opt-in only.
+	PolicyFromCommit = "commit"
+)
+
+// Evidence is the completeness policy for the provenance chain.
+type Evidence struct {
+	// Source is required or best-effort. A required publish that cannot
+	// attach Warden's verdict is a failed publish, not a warning.
+	Source string `yaml:"source,omitempty"`
 }
 
 // Service is a container the gate needs beside it.
@@ -140,8 +176,20 @@ type PullRequest struct {
 	Title  string   `yaml:"title"`
 	Body   string   `yaml:"body,omitempty"`
 	Labels []string `yaml:"labels,omitempty"`
-	// Base is the target branch. Empty means the repository default.
+	// Base is the target branch. Empty means the watched ref.
 	Base string `yaml:"base,omitempty"`
+}
+
+// ResolvedBase is the branch a proposal targets. Empty Base is the
+// operator's watched ref, then main — the same floor validateTask uses.
+func (pr PullRequest) ResolvedBase(watched string) string {
+	if base := strings.TrimSpace(pr.Base); base != "" {
+		return base
+	}
+	if w := strings.TrimSpace(watched); w != "" {
+		return w
+	}
+	return "main"
 }
 
 // ScheduleEvent is the pseudo-event a scheduled task routes to.
@@ -187,10 +235,10 @@ type Prove struct {
 	// it. A repository whose dependencies live in a global cache, which is
 	// every Go one, needs nothing here.
 	//
-	// Honoured only for a trusted event. The pipeline is read from the commit
-	// being gated, so a fork's author writes this list, and copying what they
-	// name out of the operator's clone is exactly the thing isolation exists
-	// to prevent.
+	// Honoured only for a trusted event. The pipeline is the operator
+	// checkout's .kiln.yaml, but this list still names paths inside the
+	// worktree of the commit being gated — and a fork must not be able to
+	// pull files out of the operator clone.
 	Materialize []string `yaml:"materialize"`
 }
 
@@ -553,6 +601,12 @@ func (p Pipeline) validate() error {
 	if p.WantsPublish() && len(p.Publish) == 0 {
 		return errors.New("an event routes to publish but the publish: list is empty")
 	}
+	if err := p.validateEvidence(); err != nil {
+		return err
+	}
+	if err := p.validatePolicy(); err != nil {
+		return err
+	}
 	if err := p.validateTasks(); err != nil {
 		return err
 	}
@@ -623,6 +677,18 @@ func (p Pipeline) validateTasks() error {
 			case strings.HasPrefix(pr.Branch, "refs/"):
 				return fmt.Errorf("%s.pull_request.branch is a branch name, not a ref: %q", where, pr.Branch)
 			}
+			if err := write.Owned(pr.Branch); err != nil {
+				return fmt.Errorf("%s.pull_request.branch: %w", where, err)
+			}
+			watched := p.Watch.Ref
+			if watched == "" {
+				watched = "main"
+			}
+			base := pr.ResolvedBase(watched)
+			if pr.Branch == watched || pr.Branch == base {
+				return fmt.Errorf("%s.pull_request: %q is the watched branch; kiln does not rewrite source-of-truth",
+					where, pr.Branch)
+			}
 			for _, event := range t.On {
 				if event == "pull_request" {
 					// A task on a pull request opening pull requests is a loop
@@ -649,6 +715,61 @@ func (p Pipeline) validateTasks() error {
 	return nil
 }
 
+func (p Pipeline) validateEvidence() error {
+	if strings.TrimSpace(p.Evidence.Source) == "" {
+		return nil
+	}
+	if _, ok := trust.ParseEvidenceMode(p.Evidence.Source); !ok {
+		return fmt.Errorf("evidence.source must be %q or %q, got %q",
+			trust.EvidenceRequired, trust.EvidenceBestEffort, p.Evidence.Source)
+	}
+	return nil
+}
+
+func (p Pipeline) validatePolicy() error {
+	switch strings.TrimSpace(p.Policy.From) {
+	case "", PolicyFromOperator, PolicyFromCommit:
+		return nil
+	default:
+		return fmt.Errorf("policy.from must be %q or %q, got %q: "+
+			"commit-controlled policy is an explicit trust-boundary change and is not inferred",
+			PolicyFromOperator, PolicyFromCommit, p.Policy.From)
+	}
+}
+
+// PolicyFrom is operator unless the operator opted into commit.
+func (p Pipeline) PolicyFrom() string {
+	if strings.TrimSpace(p.Policy.From) == "" {
+		return PolicyFromOperator
+	}
+	return p.Policy.From
+}
+
+// CommitControlled reports that the SHA being built supplies `.kiln.yaml`.
+func (p Pipeline) CommitControlled() bool {
+	return p.PolicyFrom() == PolicyFromCommit
+}
+
+// ImageDigestPinned reports an immutable image reference. A tag — including
+// the implicit latest — is a moving pointer, and a service whose image can
+// change between ticks is not the same service the operator reviewed.
+func ImageDigestPinned(image string) bool {
+	_, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok || len(digest) != 64 {
+		return false
+	}
+	for _, c := range digest {
+		if !isHex(c) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
 // validateServices refuses a service that cannot work.
 func (p Pipeline) validateServices() error {
 	for name, svc := range p.Services {
@@ -661,6 +782,9 @@ func (p Pipeline) validateServices() error {
 				"variable; keep it to letters, digits, dashes and underscores", where)
 		case strings.TrimSpace(svc.Image) == "":
 			return fmt.Errorf("%s.image is required", where)
+		case !ImageDigestPinned(svc.Image):
+			return fmt.Errorf("%s.image %q is not digest-pinned: a mutable tag is a different "+
+				"image tomorrow — write image@sha256:<64-hex>", where, svc.Image)
 		case svc.Port < 0 || svc.Port > 65535:
 			return fmt.Errorf("%s.port %d is not a port", where, svc.Port)
 		case svc.Ready != "" && svc.Port == 0:

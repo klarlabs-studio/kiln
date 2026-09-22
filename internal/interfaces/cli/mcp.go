@@ -5,12 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 
-	"go.klarlabs.de/kiln/internal/application/engine"
+	"go.klarlabs.de/kiln/internal/application/authority"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/config"
-	"go.klarlabs.de/kiln/internal/domain/isolation"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
 	"go.klarlabs.de/kiln/internal/infrastructure/store"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
@@ -118,6 +117,10 @@ func (f *facade) Doctor(ctx context.Context) (mcpsrv.DoctorOutput, error) {
 		out.Warnings = append(out.Warnings,
 			"on.pull_request lists publish: the isolation policy always suppresses it")
 	}
+	if trust.ResolveEvidence(d.Pipeline.Evidence.Source, len(d.Env.TrustedKeys) > 0) == trust.EvidenceBestEffort {
+		out.Warnings = append(out.Warnings,
+			"evidence.source is best-effort: a publish may omit the source half of the chain")
+	}
 	_ = ctx
 	return out, nil
 }
@@ -183,29 +186,10 @@ func (f *facade) Run(ctx context.Context, in mcpsrv.RunRequest) (mcpsrv.RunOutpu
 		return mcpsrv.RunOutput{}, err
 	}
 
-	fork := in.Fork
-	if !fork && in.Event == isolation.EventPullRequest {
-		if in.PR > 0 {
-			fork = d.ResolvePullFork(ctx, in.PR)
-		} else {
-			// An agent that cannot name the pull request cannot vouch for it.
-			fork = boot.ForkUnknown
-		}
-	}
-
-	ref := in.Ref
-	if ref == "" && in.Event == isolation.EventPullRequest && in.PR > 0 {
-		ref = "refs/pull/" + strconv.Itoa(in.PR) + "/head"
-	}
-
-	r, execErr := d.Engine.Execute(ctx, engine.Request{
-		SHA:      sha,
-		Event:    in.Event,
-		Fork:     fork,
-		Ref:      ref,
-		Repo:     repoName(d),
-		Dir:      d.Dir,
-		Pipeline: d.Pipeline,
-	})
+	r, execErr := d.Authority.Execute(ctx, authority.Request{
+		Claim: trust.Claim{
+			SHA: sha, Event: in.Event, Ref: in.Ref, PR: in.PR, Fork: in.Fork,
+		},
+	}, "kiln mcp")
 	return mcpsrv.FromRun(r), execErr
 }

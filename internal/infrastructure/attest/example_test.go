@@ -20,23 +20,27 @@ var examplePath = filepath.Join("..", "..", "..", "examples", "provenance.exampl
 func canonical(t *testing.T) attest.Statement {
 	t.Helper()
 	s, err := attest.Build(ports.AttestInput{
-		SubjectName:   "ghcr.io/felixgeelhaar/glossa-api",
-		SubjectDigest: "sha256:9f2c1e4a7b3d5086c1f9a2b4d6e8103b5c7d9e1f2a3b4c5d6e7f8091a2b3c4d5",
-		Repo:          "felixgeelhaar/glossa",
-		SHA:           "c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
-		Ref:           "refs/tags/v0.2.0",
-		Event:         "tag",
-		ArtifactKind:  "image",
-		Config:        "Dockerfile",
-		GateTool:      "warden",
-		GateVerified:  true, // as engine.go sets it: kiln publishes nothing ungated
-		GateReproved:  true,
-		GateReason:    "warden gate passed: vet, test, lint",
-		KilnVersion:   "v0.1.0",
-		ToolVersions:  map[string]string{"warden": "0.28.0", "cosign": "3.1.3"},
-		InvocationID:  "run-20260818T060000Z-1a2b3c4d",
-		StartedOn:     time.Date(2026, 8, 18, 6, 0, 0, 0, time.UTC),
-		FinishedOn:    time.Date(2026, 8, 18, 6, 1, 30, 0, time.UTC),
+		SubjectName:    "ghcr.io/felixgeelhaar/glossa-api",
+		SubjectDigest:  "sha256:9f2c1e4a7b3d5086c1f9a2b4d6e8103b5c7d9e1f2a3b4c5d6e7f8091a2b3c4d5",
+		Repo:           "felixgeelhaar/glossa",
+		SHA:            "c3f7aca23fa4bfa8d65b3741f46c509713cd618e",
+		Ref:            "refs/tags/v0.2.0",
+		Event:          "tag",
+		ArtifactKind:   "image",
+		Config:         "Dockerfile",
+		GateTool:       "warden",
+		GateVerified:   true, // as engine.go sets it: kiln publishes nothing ungated
+		GateReproved:   true,
+		GateReason:     "warden gate passed: vet, test, lint",
+		KilnVersion:    "v0.6.0",
+		PolicySource:   "operator",
+		PolicyPath:     ".kiln.yaml",
+		PolicyDigest:   "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		EvidenceSource: "required",
+		ToolVersions:   map[string]string{"warden": "0.28.0", "cosign": "3.1.3"},
+		InvocationID:   "run-20260818T060000Z-1a2b3c4d",
+		StartedOn:      time.Date(2026, 8, 18, 6, 0, 0, 0, time.UTC),
+		FinishedOn:     time.Date(2026, 8, 18, 6, 1, 30, 0, time.UTC),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -100,6 +104,9 @@ func TestTheContractFieldsConsumersReadAreStable(t *testing.T) {
 		"predicate.buildDefinition.internalParameters.sourceGate.verified",
 		"predicate.buildDefinition.internalParameters.sourceGate.reproved",
 		"predicate.buildDefinition.internalParameters.isolated",
+		"predicate.buildDefinition.internalParameters.evidenceSource",
+		"predicate.buildDefinition.externalParameters.policy.source",
+		"predicate.buildDefinition.externalParameters.policy.digest",
 		"predicate.runDetails.builder.id",
 	} {
 		if _, ok := lookup(doc, path); !ok {

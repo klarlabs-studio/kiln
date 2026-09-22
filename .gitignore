@@ -2,6 +2,10 @@
 /bin/
 /dist/
 
+# Coverage profiles. coverctl writes .cover/; `make cover` writes coverage.out.
+/.cover/
+/coverage.out
+
 # Kiln's own runtime state — the ledger is bookkeeping, git is desired state.
 /.kiln/
 

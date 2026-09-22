@@ -11,6 +11,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/run"
+	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -733,5 +734,281 @@ func TestCallerCancellationIsNotATimeout(t *testing.T) {
 	// be reported as one.
 	if errors.Is(err, ErrPhaseTimeout) {
 		t.Errorf("cancellation reported as a timeout: %v", err)
+	}
+}
+
+func TestEstablishedTrustWinsOverLooseFields(t *testing.T) {
+	h := newHarness(t)
+	r := req(t, isolation.EventPush, false, "refs/heads/main")
+	// A caller who set push/false and also handed an established fork PR
+	// must not get publish. Trust is what authority established.
+	r.Trust = trust.Context{
+		SHA: sha, Event: isolation.EventPullRequest, Fork: true,
+		Ref: "refs/pull/1/head", Established: true,
+	}
+
+	if _, err := h.engine.Execute(t.Context(), r); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 0 {
+		t.Error("an established fork PR published")
+	}
+}
+
+func TestPublishRecordsPolicyAndEvidence(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Policy = trust.PolicyIdentity{Source: trust.PolicyOperator, Digest: "sha256:policy"}
+	h.engine.Evidence = trust.EvidenceBestEffort
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	got := h.lastPub.Provenance
+	if got.PolicySource != trust.PolicyOperator || got.PolicyDigest != "sha256:policy" {
+		t.Errorf("policy = %s %s", got.PolicySource, got.PolicyDigest)
+	}
+	if got.EvidenceSource != string(trust.EvidenceBestEffort) {
+		t.Errorf("evidence = %q", got.EvidenceSource)
+	}
+}
+
+func TestScheduledPolicyGrantsSecretsOnlyToAProposal(t *testing.T) {
+	scan := config.NamedTask{Name: "scan", Task: config.Task{Run: "true"}}
+	if got := scheduledPolicy(scan); got.Secrets {
+		t.Error("a schedule is not a push: a scan task must not inherit secrets")
+	}
+	fix := config.NamedTask{
+		Name: "remediate",
+		Task: config.Task{PullRequest: &config.PullRequest{Branch: "kiln/fix"}},
+	}
+	if got := scheduledPolicy(fix); !got.Secrets {
+		t.Error("a proposing task needs the write credential")
+	}
+	if got := scheduledPolicy(config.NamedTask{}); got.Secrets || got.Publish || got.Skip {
+		t.Errorf("empty task granted %v", got)
+	}
+}
+
+func TestRequiredSourceEvidenceFailsAPublish(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v, want a required-evidence failure", err)
+	}
+	if h.published != 0 {
+		t.Error("published an artifact without the source half of the chain")
+	}
+}
+
+type attesterFunc func() ([]byte, error)
+
+func (f attesterFunc) SourceAttestation(context.Context, string, string) ([]byte, error) {
+	return f()
+}
+
+func TestBestEffortSourceEvidenceStillPublishes(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceBestEffort
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 1 {
+		t.Error("best-effort must still produce the artifact")
+	}
+}
+
+func TestRequiredSourceEvidenceFailsWhenTheAttesterErrors(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) {
+		return nil, errors.New("no note")
+	})
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v", err)
+	}
+	if h.published != 0 {
+		t.Error("published without a source verdict")
+	}
+}
+
+func TestRequiredSourceEvidenceFailsOnAnEmptyVerdict(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) { return nil, nil })
+
+	_, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"))
+	if err == nil || !strings.Contains(err.Error(), "evidence.source") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRequiredSourceEvidenceAttachesTheVerdict(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceRequired
+	vsa := []byte(`{"payloadType":"application/vnd.in-toto+json"}`)
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) { return vsa, nil })
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if string(h.lastPub.SourceVSA) != string(vsa) {
+		t.Errorf("SourceVSA = %q", h.lastPub.SourceVSA)
+	}
+}
+
+func TestBestEffortSourceEvidencePublishesWhenTheAttesterErrors(t *testing.T) {
+	h := newHarness(t)
+	h.engine.Evidence = trust.EvidenceBestEffort
+	h.engine.SourceAttester = attesterFunc(func() ([]byte, error) {
+		return nil, errors.New("no note")
+	})
+
+	if _, err := h.engine.Execute(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main")); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if h.published != 1 {
+		t.Error("best-effort must not turn a missing verdict into a failed publish")
+	}
+	if len(h.lastPub.SourceVSA) != 0 {
+		t.Error("a failed fetch must not attach a half-verdict")
+	}
+}
+
+type recordingTasks struct {
+	last ports.TaskRequest
+	reqs []ports.TaskRequest
+	ran  int
+}
+
+func (r *recordingTasks) Run(_ context.Context, req ports.TaskRequest) ports.TaskResult {
+	r.ran++
+	r.last = req
+	r.reqs = append(r.reqs, req)
+	return ports.TaskResult{}
+}
+func (r *recordingTasks) Propose(context.Context, ports.TaskRequest, config.PullRequest, ports.PullProposer) (ports.Proposal, error) {
+	return ports.Proposal{}, nil
+}
+func (r *recordingTasks) Keep(string, string, []string) ([]ports.KeptFile, error) {
+	return nil, nil
+}
+func (r *recordingTasks) KeepDir(string, string, string) string { return "" }
+func (r *recordingTasks) Sweep(string, int) error               { return nil }
+
+type inlineTrees struct{}
+
+func (inlineTrees) With(_ context.Context, _, _ string, fn func(string) error) error {
+	return fn("/scheduled")
+}
+func (inlineTrees) Reap(context.Context, string, time.Duration) (int, error) { return 0, nil }
+
+func TestRunScheduledWithNoTasksSucceedsAndDoesNotPublish(t *testing.T) {
+	h := newHarness(t)
+	got, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), nil)
+	if err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if got.Phase != run.PhaseSucceeded {
+		t.Errorf("phase = %s", got.Phase)
+	}
+	if h.published != 0 || h.proved != 0 {
+		t.Error("a schedule proved or published")
+	}
+}
+
+func TestRunScheduledRefusesAnEmptySHA(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	_, err := h.engine.RunScheduled(t.Context(), Request{Dir: t.TempDir()}, []config.NamedTask{{
+		Name: "scan", Task: config.Task{Run: "true"},
+	}})
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if tasks.ran != 0 {
+		t.Error("ran a task with no commit")
+	}
+}
+
+func TestRunScheduledDoesNotInheritPushAuthority(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	// The request looks like a push. A schedule is not a push.
+	r := req(t, isolation.EventPush, false, "refs/heads/main")
+	if _, err := h.engine.RunScheduled(t.Context(), r, []config.NamedTask{{
+		Name: "scan", Task: config.Task{Run: "true"},
+	}}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if h.published != 0 {
+		t.Error("a schedule published")
+	}
+	if tasks.last.Policy.Secrets || tasks.last.Policy.Publish || tasks.last.Policy.Skip {
+		t.Errorf("scan inherited push policy: %+v", tasks.last.Policy)
+	}
+	if tasks.last.Event != config.ScheduleEvent {
+		t.Errorf("KILN_EVENT = %q, want schedule — the ledger already records that", tasks.last.Event)
+	}
+}
+
+func TestRunScheduledGrantsSecretsOnlyToAProposal(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	if _, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), []config.NamedTask{{
+		Name: "fix",
+		Task: config.Task{Run: "true", PullRequest: &config.PullRequest{Branch: "kiln/fix"}},
+	}}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if !tasks.last.Policy.Secrets {
+		t.Error("a proposing task needs the write credential")
+	}
+	if tasks.last.Policy.Publish || tasks.last.Policy.Skip {
+		t.Errorf("a schedule must not publish or skip: %+v", tasks.last.Policy)
+	}
+	if h.published != 0 {
+		t.Error("a proposing schedule published")
+	}
+}
+
+func TestRunScheduledDoesNotShareSecretsAcrossATick(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	if _, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), []config.NamedTask{
+		{Name: "scan", Task: config.Task{Run: "true"}},
+		{Name: "fix", Task: config.Task{Run: "true", PullRequest: &config.PullRequest{Branch: "kiln/fix"}}},
+	}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if len(tasks.reqs) != 2 {
+		t.Fatalf("ran %d tasks, want 2", len(tasks.reqs))
+	}
+	byName := map[string]isolation.Policy{}
+	for _, req := range tasks.reqs {
+		byName[req.Name] = req.Policy
+	}
+	if byName["scan"].Secrets {
+		t.Error("a scan due in the same tick as a remediator must not see the write credential")
+	}
+	if !byName["fix"].Secrets {
+		t.Error("the proposing task still needs the write credential")
 	}
 }

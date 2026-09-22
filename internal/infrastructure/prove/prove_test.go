@@ -206,6 +206,9 @@ func TestForkRunGetsAScrubbedEnvironment(t *testing.T) {
 	if !slices.Contains(cmd.Env, "KILN_ISOLATED=1") {
 		t.Error("an isolated run should be able to tell that it is isolated")
 	}
+	if cmd.Confine == "" {
+		t.Error("a fork gate must ask for a kernel confine of the worktree")
+	}
 }
 
 func TestForkScanAlsoRunsScrubbed(t *testing.T) {

@@ -6,14 +6,14 @@ follows from taking that sentence seriously.
 
 ## The matrix
 
-| Event | Fork | Secrets | Publish | Provenance skip |
-|---|---|---|---|---|
-| `pull_request` | yes | no | no | no |
-| `pull_request` | no | no | no | yes |
-| `push` / `tag` | — | yes | yes | yes |
+| Event | Fork | Secrets | Publish | Provenance skip | Confine |
+|---|---|---|---|---|---|
+| `pull_request` | yes | no | no | no | yes |
+| `pull_request` | no | no | no | yes | no |
+| `push` / `tag` | — | yes | yes | yes | no |
 
-This lives in `internal/isolation`, as a pure function of two inputs with no
-I/O. It can be exhaustively tested, and it is.
+This lives in `internal/domain/isolation`, as a pure function of two inputs
+with no I/O. It can be exhaustively tested, and it is.
 
 ## The caller states intent; the policy decides
 
@@ -24,6 +24,23 @@ HTTP client.
 
 That inversion is why new surfaces are cheap: they cannot express a way around
 the rules, because the rules are not applied at the edge.
+
+## Surfaces are not security boundaries
+
+CLI, MCP, `POST /v1/run`, the webhook, watch and schedule all ask for work.
+They do not define reality.
+
+A JSON body that says `{ "event": "push", "fork": false }` is a claim. The
+application layer resolves the SHA against the watched ref (or a tag this
+repository knows) before the engine sees a publishable event. A webhook
+delivery is different: the HMAC is the evidence, and the parsed job is
+already established.
+
+A pull request without a number, or whose forge lookup fails, is a fork.
+`--fork` and `"fork": true` are a floor, never a ceiling.
+
+Repository locking lives on the same path. MCP, CLI and HTTP cannot bypass
+it by using a different door.
 
 ## Why a pull request never publishes
 
@@ -39,14 +56,17 @@ way to smuggle a deployable artifact past review.
 A fork pull request's head contains attacker-authored code that Kiln is about
 to execute. Two consequences:
 
-**No secrets.** The gate runs with a scrubbed environment. `internal/execx`
+**No secrets.** The gate runs with a scrubbed environment. `internal/infrastructure/execx`
 drops anything matching `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `API_KEY`,
 `AUTH` and friends, plus a named list covering `GITHUB_TOKEN`, registry
-credentials, cosign material and `SSH_AUTH_SOCK` (agent forwarding is a live
-credential, not a value). Ordinary variables — `PATH`, `HOME`, `CI` — survive,
-and `KILN_ISOLATED=1` is added so a repository's own checks can tell they are
-running without credentials and skip an integration test rather than fail
-confusingly.
+credentials, cosign material, `SSH_AUTH_SOCK` (agent forwarding is a live
+credential, not a value), common connection forms (`DATABASE_URL`, `DSN`,
+`CONNECTION_STRING`, `*_PEM`, `*_URI`, `*_KID`), and paths to credential files
+(`KUBECONFIG`, `NETRC`, `GNUPGHOME`, `AWS_SHARED_CREDENTIALS_FILE`). Ordinary
+variables — `PATH`, `HOME`,
+`CI` — survive, and `KILN_ISOLATED=1` is added so a repository's own checks can
+tell they are running without credentials and skip an integration test rather
+than fail confusingly.
 
 This is a denylist, deliberately. An allowlist would be tighter but would break
 every build that needs a variable Kiln has never heard of, and an operator who
@@ -67,6 +87,7 @@ Every way that question can fail resolves to **fork**:
 - the API call failed → fork
 - `head.repo` is null (the fork was deleted) → fork
 - `kiln run --event pull_request` with no `--pr` number → fork
+- `POST /v1/run` with `event: pull_request` and no `pr` → fork
 
 The conservative guess costs a re-prove. The permissive guess hands a stranger
 the operator's registry credentials.
@@ -106,6 +127,21 @@ Without this, an uncommitted edit sitting in the operator's checkout would end
 up inside a signed image, and the digest handed to RollOps would attest to a
 commit that never contained the code it shipped.
 
+A worktree is still not a sandbox. It isolates source state from the
+operator's dirty checkout. On a **fork** pull request, Kiln additionally
+asks the kernel to Landlock-restrict the gate and tasks to that worktree
+plus toolchain paths (`/usr`, the module cache, `/proc`, …). `/dev` is
+writable so a child can use `/dev/null`; it is not a secret store.
+`/var/run/docker.sock` and the operator's home are not in the grant.
+Network is not confined. Landlock denies open, not `stat` — a path
+outside the grant can still be listed. `/proc` is granted so the
+toolchain can run; that is a known hole (`/proc/self/root`), which is
+why this is not a sandbox. Kiln records `KILN_CONFINED=landlock` on
+the child only when the LSM actually applied. If the kernel has no
+Landlock, the run continues with environment scrubbing only and does
+not claim to be confined. `KILN_CONFINE=off` disables the request;
+`KILN_CONFINE=required` fails the fork run when Landlock cannot apply.
+
 ## The webhook
 
 A delivery must carry a valid `X-Hub-Signature-256`. Only the `sha256` scheme
@@ -126,3 +162,10 @@ and sign something real.
 
 The refusal message names the variable. An agent told "internal error" has no
 move except to give up or retry identically.
+
+## Proposal writes
+
+A task may force-push only a branch under `kiln/`. `main`, `master`, the
+watched ref, and anything that escapes that namespace are load errors.
+Kiln may replace its own proposal branches. It may not rewrite
+source-of-truth.

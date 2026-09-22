@@ -16,7 +16,10 @@ kind: VerificationPolicy
 # both, because a policy naming both does not say which one has to hold.
 signature:
   # key: cosign.pub
-  identity: https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.1.0
+  # Pin the tag you are actually verifying. A hardcoded old tag makes every
+  # later release look forged — the exact failure this example used to teach
+  # when it named v0.1.0.
+  identity: https://github.com/klarlabs-studio/kiln/.github/workflows/release.yml@refs/tags/v0.6.0
   issuer: https://token.actions.githubusercontent.com
 
 # Who is allowed to have built it. A trailing @ accepts any version of that
