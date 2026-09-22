@@ -99,9 +99,18 @@ func applyLandlock(root string) error {
 		unix.LANDLOCK_ACCESS_FS_READ_DIR|
 		unix.LANDLOCK_ACCESS_FS_REFER|
 		unix.LANDLOCK_ACCESS_FS_IOCTL_DEV)
+	// /dev/null and friends are write sinks, not a secret store. RO /dev
+	// makes `cmd >/dev/null` fail even when the worktree grant is correct.
+	dev := ro | uint64(unix.LANDLOCK_ACCESS_FS_WRITE_FILE)
+	if abi >= 3 {
+		dev |= uint64(unix.LANDLOCK_ACCESS_FS_TRUNCATE)
+	}
 
 	if err := addPath(ruleset, root, rw); err != nil {
 		return fmt.Errorf("grant worktree %s: %w", root, err)
+	}
+	if err := addPath(ruleset, "/dev", dev); err != nil {
+		return fmt.Errorf("grant /dev: %w", err)
 	}
 	for _, p := range toolchainPaths() {
 		_ = addPath(ruleset, p, ro)
@@ -168,7 +177,7 @@ func addPath(ruleset int, path string, access uint64) error {
 }
 
 func toolchainPaths() []string {
-	out := []string{"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/dev", "/proc", "/sys", "/usr/local"}
+	out := []string{"/usr", "/lib", "/lib64", "/bin", "/sbin", "/etc", "/opt", "/proc", "/sys", "/usr/local"}
 	for _, key := range []string{"GOROOT", "GOMODCACHE", "GOCACHE", "GOPATH"} {
 		if v := os.Getenv(key); v != "" {
 			out = append(out, v)

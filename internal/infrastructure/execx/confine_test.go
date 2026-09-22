@@ -32,10 +32,11 @@ func TestConfinedChildCannotReadOutsideTheWorktree(t *testing.T) {
 
 	// Landlock denies open, not stat or access(2). `test -r` only looks
 	// at Unix mode bits, so a confined child can still "see" a secret
-	// that it cannot actually read. cat opens the file.
-	script := `echo confined=$KILN_CONFINED; ` +
-		`if cat "$1" >/dev/null 2>&1; then echo inside=yes; else echo inside=no; fi; ` +
-		`if cat "$2" >/dev/null 2>&1; then echo outside=yes; else echo outside=no; fi`
+	// that it cannot actually read. cat opens the file. Write the
+	// copies into the worktree so a RO /dev cannot hide a grant bug.
+	script := `echo confined=$KILN_CONFINED
+if cat "$1" >inside.out 2>inside.err; then echo inside=yes; else echo inside=no; fi
+if cat "$2" >outside.out 2>outside.err; then echo outside=yes; else echo outside=no; fi`
 
 	res, err := NewSystem().Run(t.Context(), Cmd{
 		Name:    "sh",
@@ -47,12 +48,13 @@ func TestConfinedChildCannotReadOutsideTheWorktree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Run: %v\n%s\nwork=%s outside=%s", err, res.Stderr, work, outside)
 	}
-	t.Logf("work=%s outside=%s out=%q", work, outside, res.Stdout)
+	insideErr, _ := os.ReadFile(filepath.Join(work, "inside.err"))
+	t.Logf("work=%s outside=%s out=%q inside.err=%q", work, outside, res.Stdout, insideErr)
 	if !strings.Contains(res.Stdout, "confined="+ConfinedLandlock) {
 		t.Errorf("child must record that Landlock applied: %q", res.Stdout)
 	}
 	if !strings.Contains(res.Stdout, "inside=yes") {
-		t.Errorf("confined child could not read the worktree: %q", res.Stdout)
+		t.Errorf("confined child could not read the worktree: %q err=%q", res.Stdout, insideErr)
 	}
 	if !strings.Contains(res.Stdout, "outside=no") {
 		t.Errorf("confined child read a path outside the worktree: %q", res.Stdout)

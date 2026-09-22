@@ -128,7 +128,8 @@ commit that never contained the code it shipped.
 A worktree is still not a sandbox. It isolates source state from the
 operator's dirty checkout. On a **fork** pull request, Kiln additionally
 asks the kernel to Landlock-restrict the gate and tasks to that worktree
-plus toolchain paths (`/usr`, the module cache, `/proc`, …).
+plus toolchain paths (`/usr`, the module cache, `/proc`, …). `/dev` is
+writable so a child can use `/dev/null`; it is not a secret store.
 `/var/run/docker.sock` and the operator's home are not in the grant.
 Network is not confined. Landlock denies open, not `stat` — a path
 outside the grant can still be listed. `/proc` is granted so the
