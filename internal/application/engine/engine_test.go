@@ -958,6 +958,9 @@ func TestRunScheduledDoesNotInheritPushAuthority(t *testing.T) {
 	if tasks.last.Policy.Secrets || tasks.last.Policy.Publish || tasks.last.Policy.Skip {
 		t.Errorf("scan inherited push policy: %+v", tasks.last.Policy)
 	}
+	if tasks.last.Event != config.ScheduleEvent {
+		t.Errorf("KILN_EVENT = %q, want schedule — the ledger already records that", tasks.last.Event)
+	}
 }
 
 func TestRunScheduledGrantsSecretsOnlyToAProposal(t *testing.T) {

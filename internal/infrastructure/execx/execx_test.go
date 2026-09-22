@@ -98,6 +98,7 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"GNUPGHOME=/home/op/.gnupg",
 		"AWS_SHARED_CREDENTIALS_FILE=/home/op/.aws/credentials",
 		"SSL_KEY_FILE=/home/op/client.key",
+		"JWT_KID=abc",
 		"malformed-no-equals",
 	}
 

@@ -320,7 +320,8 @@ func IsSecretVar(name string) bool {
 		return true
 	}
 	if strings.HasSuffix(upper, "_PEM") || strings.HasSuffix(upper, "_DSN") ||
-		strings.HasSuffix(upper, "_URI") || strings.HasSuffix(upper, "_URL") {
+		strings.HasSuffix(upper, "_URI") || strings.HasSuffix(upper, "_URL") ||
+		strings.HasSuffix(upper, "_KID") {
 		return true
 	}
 	for _, marker := range secretMarkers {

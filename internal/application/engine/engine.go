@@ -531,6 +531,12 @@ func (e *Engine) report(ctx context.Context, fn func() error, log ports.Logger, 
 // schedule publish?" — and the honest answer, "no, because a schedule is not
 // evidence that anything changed", is better expressed by not offering it.
 func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.NamedTask) (*run.Run, error) {
+	// The ledger already records event: schedule. The task child must see
+	// the same name — KILN_EVENT is how a script tells a watch tick from
+	// a push. isolation.Event is the three forge shapes; schedule is not
+	// one of them, and isolation.For would deny everything, which is why
+	// this path uses scheduledPolicy instead.
+	req.Event = isolation.Event(config.ScheduleEvent)
 	r := run.New(req.SHA, req.Ref, config.ScheduleEvent, false, req.Repo)
 	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", config.ScheduleEvent)
 

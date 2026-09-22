@@ -61,7 +61,7 @@ drops anything matching `TOKEN`, `SECRET`, `PASSWORD`, `CREDENTIAL`, `API_KEY`,
 `AUTH` and friends, plus a named list covering `GITHUB_TOKEN`, registry
 credentials, cosign material, `SSH_AUTH_SOCK` (agent forwarding is a live
 credential, not a value), common connection forms (`DATABASE_URL`, `DSN`,
-`CONNECTION_STRING`, `*_PEM`, `*_URI`), and paths to credential files
+`CONNECTION_STRING`, `*_PEM`, `*_URI`, `*_KID`), and paths to credential files
 (`KUBECONFIG`, `NETRC`, `GNUPGHOME`, `AWS_SHARED_CREDENTIALS_FILE`). Ordinary
 variables — `PATH`, `HOME`,
 `CI` — survive, and `KILN_ISOLATED=1` is added so a repository's own checks can

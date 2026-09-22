@@ -42,15 +42,16 @@ All notable changes to kiln are documented here. The format follows
 
 - Scheduled tasks no longer inherit synthetic push authority. Secrets
   are granted only to the task that proposes a write, not to every
-  task due in the same tick. An empty `pull_request.base` is the
-  watched ref at propose time, not the forge default.
+  task due in the same tick. `KILN_EVENT=schedule` is exported to the
+  child. An empty `pull_request.base` is the watched ref at propose
+  time, not the forge default.
 - `kiln verify` explains policy identity, evidence mode, declared
   secrets, and inherited vs reproduced source verdicts.
 - `kiln status` lists task outcomes and retained files.
 - `kiln doctor` reports evidence mode and policy authorship. A service
   image without a digest pin is a load error, not a warning.
 - Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`,
-  `*_PEM` / `*_URI` forms, and paths to credential files (`KUBECONFIG`,
+  `*_PEM` / `*_URI` / `*_KID` forms, and paths to credential files (`KUBECONFIG`,
   `NETRC`, `GNUPGHOME`, `AWS_SHARED_CREDENTIALS_FILE`, `SSL_KEY_FILE`).
 - `SECURITY.md` verifies the current release tag, not a hardcoded
   `v0.1.0`.

@@ -278,7 +278,7 @@ Watch discovery, tag peeling, and PR-ref listing all go through this adapter. Ev
 
 ### Documentation drift (not defects in the binary)
 
-These are audit findings because a supply-chain tool's docs *are* part of the trust story.
+These were audit findings because a supply-chain tool's docs *are* part of the trust story. The follow-up table below records that the listed drift was corrected on this branch; the rows stay as the audit wrote them.
 
 | Document | Drift |
 |---|---|
@@ -298,11 +298,11 @@ Kiln is unusually explicit about what it will not do, and the code generally mat
 
 **Trust boundaries are small and tested.** `isolation.For` is a pure function with an exhaustive matrix. Fork detection fails closed in the CLI, the watcher, and the webhook parser. `--fork` cannot be turned off by a later API result.
 
-**Surfaces cannot override the isolation *function*.** They can still choose the inputs. CLI, MCP, HTTP and webhook all call the same engine, so `publish` on a `pull_request` event is still suppressed. H3 is the remaining hole: kilnd lets the caller name the event. MCP push/tag is extra-gated. Webhook rejects empty secret and SHA-1 with the same 401 as a bad MAC. `deploy:` is a load error, not a feature request.
+**Surfaces cannot override the isolation *function*.** They can still choose the inputs. CLI, MCP, HTTP and webhook all call the same engine, so `publish` on a `pull_request` event is still suppressed. Authority derives event and fork; a JSON body cannot manufacture push/tag. MCP push/tag is extra-gated. Webhook rejects empty secret and SHA-1 with the same 401 as a bad MAC. `deploy:` is a load error, not a feature request.
 
 **Signing failures are loud.** Missing `cosign` fails publish. Goreleaser without `signs:` is refused before the build. `KILN_COSIGN_KEY` holding PEM (or its base64) is rejected in `boot` before the logger exists; `Cmd.String` redacts leftovers. The ledger stores `ExitError.Summary()`, not subprocess stderr — a response to a real key leak into `.kiln/state.json` (0.6.0).
 
-**Untrusted input is treated as hostile.** `keep` and `materialize` refuse `..` and absolute paths, and resolve symlinks before copy. Unknown YAML keys are load errors. JSON API bodies `DisallowUnknownFields`. Build `args` have no env passthrough; build `secrets` are `env://` only and checked present before docker runs. The ids are supposed to be recorded on the predicate (M8) and today are not.
+**Untrusted input is treated as hostile.** `keep` and `materialize` refuse `..` and absolute paths, and resolve symlinks before copy. Unknown YAML keys are load errors. JSON API bodies `DisallowUnknownFields`. Build `args` have no env passthrough; build `secrets` are `env://` only and checked present before docker runs. The ids are recorded on the predicate.
 
 **Operations look like they have been on a real box.** Tag baseline, closed-PR filtering (`refs/pull/N/head` is immortal), failure backoff (205 failed runs in an afternoon is cited from production), PATH pinning in `box install`, keychain ACL so a launchd tick does not hang on a dialog, docker prune that never deletes a moving tag or a foreign repository.
 
@@ -320,11 +320,11 @@ Kiln is unusually explicit about what it will not do, and the code generally mat
 | Race | `make race`; release workflow runs `go test -race`. |
 | Real cosign | `verify-e2e` job, not opt-in. Already caught a `condense()` bug that rendered refusals as `0 < 1`. |
 | Architecture | Import rule + release-permissions test. |
-| Examples | CI validates both pipeline and policy examples; Makefile does not (L8). |
-| Coverage floor | Disabled (L5). |
+| Examples | CI and `make examples-check` validate pipeline and policy examples. |
+| Coverage floor | `.coverctl.yaml`; CI `coverage: true`. |
 | Lint | golangci-lint v2 org bar; gosec deliberately omitted in favour of nox taint analysis in the shared workflow. |
 
-Gaps relative to the findings: no test that `pull_request.branch: main` is refused; no test that `Clone` isolates `Tasks`; no test that a long-lived watcher reloads `.kiln.yaml` (because it does not); no test that a successful publish without a source VSA is a policy choice rather than a warn-and-continue; no test that kilnd without `pr` is a fork; no test that `SecretIDs` appear on the predicate; no lock around MCP `kiln_run`; no `gitcli` unit tests.
+Those gaps are closed on this branch. Remaining backlog that is not a defect is declarative SARIF upload, which Kiln still refuses to grow into.
 
 ---
 
