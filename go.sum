@@ -25,8 +25,8 @@ github.com/rogpeppe/go-internal v1.14.1 h1:UQB4HGPB6osV0SQTLymcB4TgvyWu6ZyliaW0t
 github.com/rogpeppe/go-internal v1.14.1/go.mod h1:MaRKkUm5W0goXpeCfT7UZI6fk/L7L7so1lCWt35ZSgc=
 github.com/stretchr/testify v1.11.1 h1:7s2iGBzp5EwR7/aIZr8ao5+dra3wiQyKjjFuvgVKu7U=
 github.com/stretchr/testify v1.11.1/go.mod h1:wZwfW3scLgRK+23gO65QZefKpKQRnfz6sD981Nm4B6U=
-go.klarlabs.de/bolt v1.6.0 h1:FB8gflopgFF7pMLb/EgRls/Bbs7MBz/SFrLRmZ0Lipw=
-go.klarlabs.de/bolt v1.6.0/go.mod h1:WJ3u0hX3YTSfMxWemJbjCn/42tQL9qsocYy71Sq0rgY=
+go.klarlabs.de/bolt v1.7.0 h1:BwYaNBXpyAk6YCaSPmlN4UHDZHQVGMeuWWo9TZxOoCg=
+go.klarlabs.de/bolt v1.7.0/go.mod h1:KAA1eX8qgHP6R3sKAGizm4hbR3F0lrqCKHtAuvCsmpQ=
 go.klarlabs.de/fortify v1.10.0 h1:uJYHoAgjYg2fzTCxDAY9rSZ5UbKh70ENsXYcjDmbPWE=
 go.klarlabs.de/fortify v1.10.0/go.mod h1:NMnP89eeGi4Sk7jxNFSbwbDRFUOg0t7U9I+d/Nmz7Qc=
 go.klarlabs.de/mcp v1.27.0 h1:cwnkUPhNPizLIBIIsbtZkezSTB9wdrU2334IEdJk8lg=

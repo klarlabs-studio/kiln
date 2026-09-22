@@ -16,7 +16,7 @@ go 1.25.0
 toolchain go1.25.14
 
 require (
-	go.klarlabs.de/bolt v1.6.0
+	go.klarlabs.de/bolt v1.7.0
 	go.klarlabs.de/fortify v1.10.0
 	go.klarlabs.de/mcp v1.27.0
 	gopkg.in/yaml.v3 v3.0.1
