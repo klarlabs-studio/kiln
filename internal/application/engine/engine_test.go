@@ -773,17 +773,19 @@ func TestPublishRecordsPolicyAndEvidence(t *testing.T) {
 }
 
 func TestScheduledPolicyGrantsSecretsOnlyToAProposal(t *testing.T) {
-	if got := scheduledPolicy([]config.NamedTask{{Name: "scan", Task: config.Task{Run: "true"}}}); got.Secrets {
+	scan := config.NamedTask{Name: "scan", Task: config.Task{Run: "true"}}
+	if got := scheduledPolicy(scan); got.Secrets {
 		t.Error("a schedule is not a push: a scan task must not inherit secrets")
 	}
-	if got := scheduledPolicy([]config.NamedTask{{
+	fix := config.NamedTask{
 		Name: "remediate",
 		Task: config.Task{PullRequest: &config.PullRequest{Branch: "kiln/fix"}},
-	}}); !got.Secrets {
+	}
+	if got := scheduledPolicy(fix); !got.Secrets {
 		t.Error("a proposing task needs the write credential")
 	}
-	if got := scheduledPolicy(nil); got.Secrets || got.Publish || got.Skip {
-		t.Errorf("empty schedule granted %v", got)
+	if got := scheduledPolicy(config.NamedTask{}); got.Secrets || got.Publish || got.Skip {
+		t.Errorf("empty task granted %v", got)
 	}
 }
 
@@ -880,12 +882,14 @@ func TestBestEffortSourceEvidencePublishesWhenTheAttesterErrors(t *testing.T) {
 
 type recordingTasks struct {
 	last ports.TaskRequest
+	reqs []ports.TaskRequest
 	ran  int
 }
 
 func (r *recordingTasks) Run(_ context.Context, req ports.TaskRequest) ports.TaskResult {
 	r.ran++
 	r.last = req
+	r.reqs = append(r.reqs, req)
 	return ports.TaskResult{}
 }
 func (r *recordingTasks) Propose(context.Context, ports.TaskRequest, config.PullRequest, ports.PullProposer) (ports.Proposal, error) {
@@ -976,5 +980,32 @@ func TestRunScheduledGrantsSecretsOnlyToAProposal(t *testing.T) {
 	}
 	if h.published != 0 {
 		t.Error("a proposing schedule published")
+	}
+}
+
+func TestRunScheduledDoesNotShareSecretsAcrossATick(t *testing.T) {
+	h := newHarness(t)
+	tasks := &recordingTasks{}
+	h.engine.Tasks = tasks
+	h.engine.Worktrees = inlineTrees{}
+
+	if _, err := h.engine.RunScheduled(t.Context(), req(t, isolation.EventPush, false, "refs/heads/main"), []config.NamedTask{
+		{Name: "scan", Task: config.Task{Run: "true"}},
+		{Name: "fix", Task: config.Task{Run: "true", PullRequest: &config.PullRequest{Branch: "kiln/fix"}}},
+	}); err != nil {
+		t.Fatalf("RunScheduled: %v", err)
+	}
+	if len(tasks.reqs) != 2 {
+		t.Fatalf("ran %d tasks, want 2", len(tasks.reqs))
+	}
+	byName := map[string]isolation.Policy{}
+	for _, req := range tasks.reqs {
+		byName[req.Name] = req.Policy
+	}
+	if byName["scan"].Secrets {
+		t.Error("a scan due in the same tick as a remediator must not see the write credential")
+	}
+	if !byName["fix"].Secrets {
+		t.Error("the proposing task still needs the write credential")
 	}
 }

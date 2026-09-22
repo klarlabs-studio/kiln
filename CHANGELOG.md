@@ -41,20 +41,22 @@ All notable changes to kiln are documented here. The format follows
 ### Changed
 
 - Scheduled tasks no longer inherit synthetic push authority. Secrets
-  are granted only to a task that actually proposes a write.
+  are granted only to the task that proposes a write, not to every
+  task due in the same tick.
 - `kiln verify` explains policy identity, evidence mode, declared
   secrets, and inherited vs reproduced source verdicts.
 - `kiln status` lists task outcomes and retained files.
 - `kiln doctor` reports evidence mode and policy authorship. A service
   image without a digest pin is a load error, not a warning.
-- Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`
-  and `*_PEM` / `*_URI` forms.
+- Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`,
+  `*_PEM` / `*_URI` forms, and paths to credential files (`KUBECONFIG`,
+  `NETRC`, `GNUPGHOME`, `NPM_CONFIG_USERCONFIG`, `DOCKER_CERT_PATH`).
 - `SECURITY.md` verifies the current release tag, not a hardcoded
   `v0.1.0`.
 - A long-lived `watch --every` rereads the operator `.kiln.yaml` each
   tick instead of freezing the snapshot from process start.
 - Service containers start with `--cap-drop ALL`,
-  `no-new-privileges`, and `--tmpfs /tmp`.
+  `no-new-privileges`, `--init`, and `--tmpfs /tmp`.
 - Bearer comparison hashes both sides so token length does not leak.
 - `make examples-check` validates policy files as policies.
 

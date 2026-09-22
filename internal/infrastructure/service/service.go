@@ -135,6 +135,7 @@ func (s *Runner) start(ctx context.Context, name string, spec config.Service, ru
 		// are stripped before they reach here; these defaults stay.
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
+		"--init",
 		// Writable scratch without a writable root. Databases still write
 		// their data dir; /tmp is where images dump sockets and pid files.
 		"--tmpfs", "/tmp",

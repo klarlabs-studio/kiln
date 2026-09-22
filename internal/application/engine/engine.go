@@ -550,15 +550,14 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	log.Info("scheduled tasks", "count", len(tasks))
 
 	// A schedule is not evidence that source changed, so it does not inherit
-	// push/tag authority. Secrets are a capability granted only to tasks that
-	// actually propose a write — not a synthetic event type.
-	policy := scheduledPolicy(tasks)
-
+	// push/tag authority. Secrets are a capability of the proposing task,
+	// not of the tick: a scan due in the same minute must not see the
+	// write credential the remediator needs.
 	if e.Worktrees == nil {
 		return r, fmt.Errorf("engine: no worktree provider configured")
 	}
 	err := e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
-		return e.runTasks(ctx, req, r, policy, tasks, dir, log)
+		return e.runTasks(ctx, req, r, scheduledPolicy, tasks, dir, log)
 	})
 	if err != nil {
 		r.Fail(err)
@@ -571,11 +570,9 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	return r, nil
 }
 
-func scheduledPolicy(tasks []config.NamedTask) isolation.Policy {
-	for _, nt := range tasks {
-		if nt.Task.PullRequest != nil {
-			return isolation.Policy{Secrets: true}
-		}
+func scheduledPolicy(nt config.NamedTask) isolation.Policy {
+	if nt.Task.PullRequest != nil {
+		return isolation.Policy{Secrets: true}
 	}
 	return isolation.Policy{}
 }
@@ -630,13 +627,14 @@ func (e *Engine) doTasks(
 	// there is exactly one subprocess seam in this path and duplicating it
 	// would mean a test could stub one and not the other.
 	return e.Worktrees.With(ctx, req.Dir, req.SHA, func(dir string) error {
-		return e.runTasks(ctx, req, r, policy, wanted, dir, log)
+		return e.runTasks(ctx, req, r, func(config.NamedTask) isolation.Policy { return policy }, wanted, dir, log)
 	})
 }
 
 // runTasks executes the routed tasks inside an already-prepared worktree.
 func (e *Engine) runTasks(
-	ctx context.Context, req Request, r *run.Run, policy isolation.Policy,
+	ctx context.Context, req Request, r *run.Run,
+	policyFor func(config.NamedTask) isolation.Policy,
 	wanted []config.NamedTask, dir string, log ports.Logger,
 ) error {
 	var failed []string
@@ -647,6 +645,7 @@ func (e *Engine) runTasks(
 
 		var output strings.Builder
 		result := ports.TaskResult{}
+		policy := policyFor(nt)
 		err := e.withPhaseTimeout(ctx, "task "+nt.Name, func(ctx context.Context) error {
 			result = e.Tasks.Run(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task,

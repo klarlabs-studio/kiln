@@ -93,6 +93,9 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"MONGO_URI=mongodb://x",
 		"APP_PEM=-----BEGIN",
 		"SERVICE_URL=postgres://x",
+		"KUBECONFIG=/home/op/.kube/config",
+		"NETRC=/home/op/.netrc",
+		"GNUPGHOME=/home/op/.gnupg",
 		"malformed-no-equals",
 	}
 

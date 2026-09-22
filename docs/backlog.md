@@ -9,7 +9,8 @@ item is declarative SARIF upload.
 **Landed.** Watch fires due `on: [schedule]` tasks against the tracked
 ref's head. The ledger remembers the last run per task so an interval
 survives a restart. A schedule is not push/tag authority: secrets are
-granted only when a task actually proposes a write.
+granted only to the task that proposes a write, not to every task due
+in the same tick.
 
 ---
 
@@ -53,7 +54,7 @@ The proof, and the thing that will find what the feature list missed. Pick one p
 **Landed.** `services:` starts sidecar containers before the gate and
 tears them down after the tasks. Host ports are allocated dynamically.
 An image without `@sha256:<64-hex>` is a load error. Containers run with
-`--cap-drop ALL`, `no-new-privileges`, and `--tmpfs /tmp`.
+`--cap-drop ALL`, `no-new-privileges`, `--init`, and `--tmpfs /tmp`.
 
 Host ports are exported as `KILN_SERVICE_<NAME>_HOST` / `_PORT`.
 Readiness is waited for with a timeout.

@@ -278,6 +278,14 @@ var secretNames = map[string]bool{
 	"GOOGLE_APPLICATION_CREDENTIALS": true,
 	"AZURE_CLIENT_SECRET":            true,
 	"NPM_TOKEN":                      true,
+	// Paths to credential files. The values are not the secrets; the files
+	// they name are, and a fork that can read the path can read the file.
+	"KUBECONFIG":            true,
+	"NETRC":                 true,
+	"GNUPGHOME":             true,
+	"NPM_CONFIG_USERCONFIG": true,
+	"DOCKER_CERT_PATH":      true,
+	"DOCKER_TLS_CERTDIR":    true,
 }
 
 // Scrub removes credential-bearing variables from an environment.
