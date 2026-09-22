@@ -80,6 +80,9 @@ func TestThePortIsPublishedOnAnEphemeralHostPort(t *testing.T) {
 	if !strings.Contains(run, "--init") {
 		t.Errorf("docker run = %q, want --init so the sidecar cannot leave zombies", run)
 	}
+	if !strings.Contains(run, "--pids-limit 256") {
+		t.Errorf("docker run = %q, want a process cap", run)
+	}
 	if !strings.Contains(run, "--tmpfs /tmp") {
 		t.Errorf("docker run = %q, want a writable /tmp without a writable root", run)
 	}

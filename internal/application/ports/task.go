@@ -25,6 +25,9 @@ type TaskRequest struct {
 	// Ref and Event describe why this run happened.
 	Ref   string
 	Event string
+	// Watched is the operator's watch.ref. An empty pull_request.base
+	// resolves to this, not to the forge default branch.
+	Watched string
 	// Policy decides whether the command may see the operator's environment.
 	Policy isolation.Policy
 	// Output receives the command's stdout and stderr as it runs.

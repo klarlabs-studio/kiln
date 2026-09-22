@@ -368,7 +368,7 @@ recorded them; the table is where the work landed.
 | 5 M8 SecretIDs | SLSA `externalParameters` records ids, never values |
 | 6 M1 evidence | `evidence.source: required \| best-effort`; required is the default when `KILN_TRUSTED_KEYS` is set |
 | 7 docs | `intent.md`, `CONTRIBUTING.md`, `SECURITY.md`, `isolation.md`, `configuration.md`, `backlog.md` |
-| 8 M4 / M6 / L9 | URL/DSN/`*_PEM` scrubbing; unpinned service-image warning; `kiln status` lists kept files |
+| 8 M4 / M6 / L9 | URL/DSN/`*_PEM` and credential-path scrubbing; service digest pin is a load error; `kiln status` lists kept files |
 
 Further on this branch: the engine consumes `trust.Context` rather than
 loose caller fields; coverage floors live in `.coverctl.yaml`;

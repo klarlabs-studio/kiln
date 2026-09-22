@@ -353,8 +353,8 @@ standing between the first migrated repository and leaving Actions.
 Images must be digest-pinned (`image@sha256:` plus 64 hex). A mutable tag
 is a load error: a service whose image can change between ticks is not the
 service the operator reviewed. Containers start with `--cap-drop ALL`,
-`no-new-privileges`, `--init`, and `--tmpfs /tmp`. Services exist to support
-proving and building; they
+`no-new-privileges`, `--init`, `--pids-limit 256`, and `--tmpfs /tmp`.
+Services exist to support proving and building; they
 are not a general orchestration facility.
 
 ```yaml
@@ -473,7 +473,7 @@ tasks:
       title: "chore(sec): apply nox remediations"
       body: Opened by kiln. Review the diff before merging.
       labels: [security]
-      base: main        # optional; the repository default otherwise
+      base: main        # optional; the watched ref otherwise
 ```
 
 **Nothing happens when the worktree is clean.** A remediation task that found

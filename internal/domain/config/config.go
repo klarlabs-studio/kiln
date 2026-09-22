@@ -176,8 +176,20 @@ type PullRequest struct {
 	Title  string   `yaml:"title"`
 	Body   string   `yaml:"body,omitempty"`
 	Labels []string `yaml:"labels,omitempty"`
-	// Base is the target branch. Empty means the repository default.
+	// Base is the target branch. Empty means the watched ref.
 	Base string `yaml:"base,omitempty"`
+}
+
+// ResolvedBase is the branch a proposal targets. Empty Base is the
+// operator's watched ref, then main — the same floor validateTask uses.
+func (pr PullRequest) ResolvedBase(watched string) string {
+	if base := strings.TrimSpace(pr.Base); base != "" {
+		return base
+	}
+	if w := strings.TrimSpace(watched); w != "" {
+		return w
+	}
+	return "main"
 }
 
 // ScheduleEvent is the pseudo-event a scheduled task routes to.
@@ -672,10 +684,7 @@ func (p Pipeline) validateTasks() error {
 			if watched == "" {
 				watched = "main"
 			}
-			base := strings.TrimSpace(pr.Base)
-			if base == "" {
-				base = watched
-			}
+			base := pr.ResolvedBase(watched)
 			if pr.Branch == watched || pr.Branch == base {
 				return fmt.Errorf("%s.pull_request: %q is the watched branch; kiln does not rewrite source-of-truth",
 					where, pr.Branch)

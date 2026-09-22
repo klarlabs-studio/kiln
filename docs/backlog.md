@@ -54,7 +54,7 @@ The proof, and the thing that will find what the feature list missed. Pick one p
 **Landed.** `services:` starts sidecar containers before the gate and
 tears them down after the tasks. Host ports are allocated dynamically.
 An image without `@sha256:<64-hex>` is a load error. Containers run with
-`--cap-drop ALL`, `no-new-privileges`, `--init`, and `--tmpfs /tmp`.
+`--cap-drop ALL`, `no-new-privileges`, `--init`, `--pids-limit 256`, and `--tmpfs /tmp`.
 
 Host ports are exported as `KILN_SERVICE_<NAME>_HOST` / `_PORT`.
 Readiness is waited for with a timeout.

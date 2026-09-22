@@ -96,6 +96,8 @@ func TestScrubRemovesCredentials(t *testing.T) {
 		"KUBECONFIG=/home/op/.kube/config",
 		"NETRC=/home/op/.netrc",
 		"GNUPGHOME=/home/op/.gnupg",
+		"AWS_SHARED_CREDENTIALS_FILE=/home/op/.aws/credentials",
+		"SSL_KEY_FILE=/home/op/client.key",
 		"malformed-no-equals",
 	}
 

@@ -42,7 +42,8 @@ All notable changes to kiln are documented here. The format follows
 
 - Scheduled tasks no longer inherit synthetic push authority. Secrets
   are granted only to the task that proposes a write, not to every
-  task due in the same tick.
+  task due in the same tick. An empty `pull_request.base` is the
+  watched ref at propose time, not the forge default.
 - `kiln verify` explains policy identity, evidence mode, declared
   secrets, and inherited vs reproduced source verdicts.
 - `kiln status` lists task outcomes and retained files.
@@ -50,13 +51,13 @@ All notable changes to kiln are documented here. The format follows
   image without a digest pin is a load error, not a warning.
 - Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`,
   `*_PEM` / `*_URI` forms, and paths to credential files (`KUBECONFIG`,
-  `NETRC`, `GNUPGHOME`, `NPM_CONFIG_USERCONFIG`, `DOCKER_CERT_PATH`).
+  `NETRC`, `GNUPGHOME`, `AWS_SHARED_CREDENTIALS_FILE`, `SSL_KEY_FILE`).
 - `SECURITY.md` verifies the current release tag, not a hardcoded
   `v0.1.0`.
 - A long-lived `watch --every` rereads the operator `.kiln.yaml` each
   tick instead of freezing the snapshot from process start.
 - Service containers start with `--cap-drop ALL`,
-  `no-new-privileges`, `--init`, and `--tmpfs /tmp`.
+  `no-new-privileges`, `--init`, `--pids-limit 256`, and `--tmpfs /tmp`.
 - Bearer comparison hashes both sides so token length does not leak.
 - `make examples-check` validates policy files as policies.
 

@@ -650,7 +650,8 @@ func (e *Engine) runTasks(
 			result = e.Tasks.Run(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task,
 				Dir: dir, SHA: req.SHA, Ref: req.Ref, Event: req.Event.String(),
-				Policy: policy, ServiceEnv: req.ServiceEnv,
+				Watched: req.Pipeline.Watch.Ref,
+				Policy:  policy, ServiceEnv: req.ServiceEnv,
 				// Tee: the operator watching a terminal sees it live, and the
 				// check body gets the same text without a second run.
 				Output: io.MultiWriter(&output, orDiscard(req.Output)),
@@ -690,6 +691,7 @@ func (e *Engine) runTasks(
 			proposal, perr := e.Tasks.Propose(ctx, ports.TaskRequest{
 				Name: nt.Name, Task: nt.Task, Dir: dir, SHA: req.SHA,
 				Ref: req.Ref, Event: req.Event.String(), Policy: policy,
+				Watched: req.Pipeline.Watch.Ref,
 			}, *spec, e.Proposer)
 			if perr != nil {
 				result.Err = perr

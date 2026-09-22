@@ -58,7 +58,7 @@ func (t *Runner) Propose(
 		return proposal, nil
 	}
 
-	number, opened, err := forge.OpenPullRequest(ctx, spec.Branch, spec.Base, spec.Title, spec.Body)
+	number, opened, err := forge.OpenPullRequest(ctx, spec.Branch, spec.ResolvedBase(req.Watched), spec.Title, spec.Body)
 	if err != nil {
 		return proposal, err
 	}

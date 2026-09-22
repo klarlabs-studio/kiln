@@ -514,8 +514,8 @@ tasks:
 }
 
 func TestEmptyProposalBaseIsTheWatchedRef(t *testing.T) {
-	// An empty base is the repository default, which is the watched branch.
-	// Equality is judged against that, not against the empty string.
+	// An empty base is the watched branch. Equality is judged against that,
+	// not against the empty string.
 	err := parseErr(t, minimal+`
 watch:
   ref: kiln/docs
@@ -529,6 +529,18 @@ tasks:
 `)
 	if err == nil || !strings.Contains(err.Error(), "watched branch") {
 		t.Errorf("want a watched-branch refusal when base is empty, got %v", err)
+	}
+}
+
+func TestResolvedBasePrefersExplicitThenWatchedThenMain(t *testing.T) {
+	if got := (PullRequest{Base: "develop"}).ResolvedBase("release"); got != "develop" {
+		t.Errorf("explicit base = %q", got)
+	}
+	if got := (PullRequest{}).ResolvedBase("release"); got != "release" {
+		t.Errorf("empty base = %q, want the watched ref", got)
+	}
+	if got := (PullRequest{}).ResolvedBase(""); got != "main" {
+		t.Errorf("no watched ref = %q, want main", got)
 	}
 }
 
