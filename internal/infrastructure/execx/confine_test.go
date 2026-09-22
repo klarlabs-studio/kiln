@@ -1,0 +1,139 @@
+package execx
+
+import (
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestConfinedChildCannotReadOutsideTheWorktree(t *testing.T) {
+	if !LandlockAvailable() {
+		t.Skip("Landlock is not available on this kernel")
+	}
+
+	work := t.TempDir()
+	inside := filepath.Join(work, "inside.txt")
+	if err := os.WriteFile(inside, []byte("ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A sibling under /tmp can share an overlay with the worktree on
+	// some boxes. Put the secret on a different hierarchy.
+	outsideDir := t.TempDir()
+	outside := filepath.Join(outsideDir, "secret.txt")
+	if home, err := os.UserHomeDir(); err == nil && home != "" && !strings.HasPrefix(work, home) {
+		outside = filepath.Join(home, "kiln-confine-secret.txt")
+		t.Cleanup(func() { _ = os.Remove(outside) })
+	}
+	if err := os.WriteFile(outside, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Landlock denies open, not stat or access(2). `test -r` only looks
+	// at Unix mode bits, so a confined child can still "see" a secret
+	// that it cannot actually read. cat opens the file.
+	script := `echo confined=$KILN_CONFINED; ` +
+		`if cat "$1" >/dev/null 2>&1; then echo inside=yes; else echo inside=no; fi; ` +
+		`if cat "$2" >/dev/null 2>&1; then echo outside=yes; else echo outside=no; fi`
+
+	res, err := NewSystem().Run(t.Context(), Cmd{
+		Name:    "sh",
+		Args:    []string{"-c", script, "confine-test", inside, outside},
+		Dir:     work,
+		Confine: work,
+		Env:     []string{"PATH=" + os.Getenv("PATH")},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v\n%s\nwork=%s outside=%s", err, res.Stderr, work, outside)
+	}
+	t.Logf("work=%s outside=%s out=%q", work, outside, res.Stdout)
+	if !strings.Contains(res.Stdout, "confined="+ConfinedLandlock) {
+		t.Errorf("child must record that Landlock applied: %q", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "inside=yes") {
+		t.Errorf("confined child could not read the worktree: %q", res.Stdout)
+	}
+	if !strings.Contains(res.Stdout, "outside=no") {
+		t.Errorf("confined child read a path outside the worktree: %q", res.Stdout)
+	}
+}
+
+func TestApplyLandlockDeniesAForeignPath(t *testing.T) {
+	if !LandlockAvailable() {
+		t.Skip("Landlock is not available on this kernel")
+	}
+	if os.Getenv("KILN_LL_PROBE") == "1" {
+		if err := applyLandlock(os.Getenv("KILN_LL_ROOT")); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if _, err := os.ReadFile(os.Getenv("KILN_LL_INSIDE")); err != nil {
+			t.Fatalf("inside: %v", err)
+		}
+		if _, err := os.ReadFile(os.Getenv("KILN_LL_SECRET")); err == nil {
+			t.Fatal("secret was readable after Landlock")
+		}
+		return
+	}
+
+	root := t.TempDir()
+	inside := filepath.Join(root, "in.txt")
+	if err := os.WriteFile(inside, []byte("ok\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	secret := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(secret, []byte("no\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestApplyLandlockDeniesAForeignPath", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"KILN_LL_PROBE=1",
+		"KILN_LL_ROOT="+root,
+		"KILN_LL_INSIDE="+inside,
+		"KILN_LL_SECRET="+secret,
+	)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("probe: %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "PASS") {
+		t.Fatalf("probe output:\n%s", out)
+	}
+}
+
+func TestConfineOffRunsUnconfined(t *testing.T) {
+	t.Setenv("KILN_CONFINE", "off")
+	outside := filepath.Join(t.TempDir(), "visible.txt")
+	if err := os.WriteFile(outside, []byte("x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	work := t.TempDir()
+
+	res, err := NewSystem().Run(t.Context(), Cmd{
+		Name:    "sh",
+		Args:    []string{"-c", "test -r " + outside + " && printf yes"},
+		Dir:     work,
+		Confine: work,
+		Env:     []string{"PATH=" + os.Getenv("PATH")},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if res.Stdout != "yes" {
+		t.Errorf("KILN_CONFINE=off must not restrict the child: %q", res.Stdout)
+	}
+}
+
+func TestRequiredConfineFailsWhenUnavailable(t *testing.T) {
+	if LandlockAvailable() {
+		t.Skip("this kernel has Landlock; the refusal path needs one that does not")
+	}
+	t.Setenv("KILN_CONFINE", "required")
+	_, err := NewSystem().Run(t.Context(), Cmd{
+		Name: "true", Confine: t.TempDir(),
+	})
+	if err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("err = %v, want a required-but-unavailable refusal", err)
+	}
+}

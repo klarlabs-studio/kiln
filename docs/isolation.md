@@ -6,11 +6,11 @@ follows from taking that sentence seriously.
 
 ## The matrix
 
-| Event | Fork | Secrets | Publish | Provenance skip |
-|---|---|---|---|---|
-| `pull_request` | yes | no | no | no |
-| `pull_request` | no | no | no | yes |
-| `push` / `tag` | — | yes | yes | yes |
+| Event | Fork | Secrets | Publish | Provenance skip | Confine |
+|---|---|---|---|---|---|
+| `pull_request` | yes | no | no | no | yes |
+| `pull_request` | no | no | no | yes | no |
+| `push` / `tag` | — | yes | yes | yes | no |
 
 This lives in `internal/domain/isolation`, as a pure function of two inputs
 with no I/O. It can be exhaustively tested, and it is.
@@ -124,6 +124,20 @@ cancelled one, because that is exactly when it matters).
 Without this, an uncommitted edit sitting in the operator's checkout would end
 up inside a signed image, and the digest handed to RollOps would attest to a
 commit that never contained the code it shipped.
+
+A worktree is still not a sandbox. It isolates source state from the
+operator's dirty checkout. On a **fork** pull request, Kiln additionally
+asks the kernel to Landlock-restrict the gate and tasks to that worktree
+plus toolchain paths (`/usr`, the module cache, `/proc`, …).
+`/var/run/docker.sock` and the operator's home are not in the grant.
+Network is not confined. Landlock denies open, not `stat` — a path
+outside the grant can still be listed. `/proc` is granted so the
+toolchain can run; that is a known hole (`/proc/self/root`), which is
+why this is not a sandbox. Kiln records `KILN_CONFINED=landlock` on
+the child only when the LSM actually applied. If the kernel has no
+Landlock, the run continues with environment scrubbing only and does
+not claim to be confined. `KILN_CONFINE=off` disables the request;
+`KILN_CONFINE=required` fails the fork run when Landlock cannot apply.
 
 ## The webhook
 

@@ -102,7 +102,13 @@ exists to catch.
   and your Dockerfile/`.goreleaser.yaml` say to run, in a disposable worktree,
   with the permissions of the user running kiln. **The worktree is isolation
   from your working copy, not a sandbox.** Treat those files as trusted code
-  and review changes to them accordingly.
+  and review changes to them accordingly. A fork's prove and tasks are
+  additionally Landlock-restricted to the worktree and toolchain paths when
+  the kernel supports it (filesystem open is denied; `stat` is not, and
+  network stays open). That is a kernel fact, recorded as
+  `KILN_CONFINED=landlock` on the child. Without Landlock the child is
+  environment-scrubbed only. `KILN_CONFINE=required` refuses the fork run
+  in that case.
 
 - **The signing identity is ambient.** Kiln invokes `cosign` and inherits
   whatever key or OIDC identity the environment gives it. Kiln does not manage

@@ -32,6 +32,11 @@ All notable changes to kiln are documented here. The format follows
   `statement.json` (and optional `source.json` / `signature.bundle`)
   without a registry or a clone. A missing local cosign bundle is
   reported as offline, not as a pass.
+- **Landlock on fork prove and tasks.** When the kernel can, repository-
+  authored commands on a fork are filesystem-restricted to the worktree
+  and toolchain paths. The worktree is still not a sandbox. Network is
+  not confined. `KILN_CONFINE=off` disables; `KILN_CONFINE=required`
+  fails the run if Landlock cannot apply.
 
 ### Changed
 

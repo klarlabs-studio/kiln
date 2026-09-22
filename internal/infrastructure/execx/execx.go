@@ -37,6 +37,11 @@ type Cmd struct {
 	// stream progress to a terminal and inspect the output afterwards.
 	Stdout io.Writer
 	Stderr io.Writer
+	// Confine, when set, is the worktree a repository-authored command may
+	// write. The kernel Landlock LSM enforces it. Empty means unconfined.
+	// This is not a claim that a worktree is a sandbox: network is open,
+	// and without Landlock the request is ignored unless KILN_CONFINE=required.
+	Confine string
 }
 
 // String renders the command for logs and error messages. It prints arguments
@@ -180,11 +185,21 @@ func (s System) Run(ctx context.Context, c Cmd) (Result, error) {
 		return Result{}, err
 	}
 
+	if c.Confine != "" {
+		confined, res, err := s.maybeConfine(ctx, c)
+		if confined || err != nil {
+			return res, err
+		}
+	}
+
 	cmd := exec.CommandContext(ctx, c.Name, c.Args...) //nolint:gosec // the binary set is fixed by Kiln, not by repo content
 	cmd.Dir = c.Dir
 	cmd.Env = c.Env
 	cmd.Stdin = c.Stdin
+	return finish(cmd, c)
+}
 
+func finish(cmd *exec.Cmd, c Cmd) (Result, error) {
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = tee(&stdout, c.Stdout)
 	cmd.Stderr = tee(&stderr, c.Stderr)

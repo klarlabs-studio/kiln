@@ -78,7 +78,8 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 	env := w.env(req)
 
 	if _, err := w.Runner.Run(ctx, execx.Cmd{
-		Name: w.WardenBin,
+		Name:    w.WardenBin,
+		Confine: confineRoot(req, dir),
 		// --attest-only is not optional, and it is not a tuning knob.
 		//
 		// `warden run pre-push` is a git hook implementation: it gates AND then
@@ -114,12 +115,13 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 	// Kiln may invoke, not a second CI system: if `.warden.yaml` already runs
 	// it as a step, this is redundant and `prove.nox: false` is the answer.
 	if _, err := w.Runner.Run(ctx, execx.Cmd{
-		Name:   w.NoxBin,
-		Args:   []string{"scan", "."},
-		Dir:    dir,
-		Env:    env,
-		Stdout: req.Output,
-		Stderr: req.Output,
+		Name:    w.NoxBin,
+		Args:    []string{"scan", "."},
+		Dir:     dir,
+		Env:     env,
+		Stdout:  req.Output,
+		Stderr:  req.Output,
+		Confine: confineRoot(req, dir),
 	}); err != nil {
 		if _, isExit := execx.ExitCode(err); isExit {
 			return fmt.Errorf("%w: nox scan reported findings: %w", ports.ErrGateFailed, err)
@@ -139,6 +141,13 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 // concrete meaning of the fork row in the isolation matrix: the code about to
 // execute was authored by whoever opened the pull request, so the environment
 // it executes in must not contain a registry password to steal.
+func confineRoot(req ports.ProveRequest, dir string) string {
+	if !req.Policy.Confine {
+		return ""
+	}
+	return dir
+}
+
 func (w *Warden) env(req ports.ProveRequest) []string {
 	if req.Policy.Secrets {
 		if len(req.ServiceEnv) == 0 {

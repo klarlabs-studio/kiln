@@ -231,6 +231,13 @@ func noxWantedBy(deps *boot.Deps) (bool, string) {
 func (r *doctorReport) checkToolchain(deps *boot.Deps) {
 	// warden is required whenever anything proves, which is every sane
 	// pipeline. Its absence is the one toolchain gap that is never a warning.
+	if execx.LandlockAvailable() {
+		r.ok("Landlock ABI %d: a fork's prove and tasks are filesystem-confined to the worktree", execx.LandlockABI())
+	} else {
+		r.warn("Landlock is not available: a fork's prove and tasks are environment-scrubbed only — " +
+			"the worktree is not a sandbox (set KILN_CONFINE=required to refuse those runs)")
+	}
+
 	if path, err := deps.Runner.LookPath(deps.Env.Warden); err != nil {
 		r.fail("%s not found: kiln cannot pass a commit without the gate (install warden or set KILN_WARDEN)",
 			deps.Env.Warden)

@@ -380,8 +380,9 @@ Kiln's own Dockerfile bases are digest-pinned (L6). `POST /v1/run`
 admits one caller at a time (L3). Service images require a digest pin.
 `policy.from: commit` is an explicit opt-in; the default stays
 operator-owned. `kiln verify --bundle` walks a local `statement.json`
-without a registry. Still later: a process sandbox that is not fiction.
-Those do not change the handoff.
+without a registry. Fork prove/tasks request Landlock on the worktree
+when the kernel has it; the worktree is still not a sandbox. Those do
+not change the handoff.
 
 ---
 

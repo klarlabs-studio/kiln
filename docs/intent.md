@@ -98,7 +98,9 @@ No Actions clone. No generic CI platform. No deploy/canary/rollback.
 No second check language beside `.warden.yaml`. No claim that a worktree
 is a sandbox.
 
-A worktree isolates source state. It does not isolate privileges.
+A worktree isolates source state. It does not isolate privileges. A fork
+child may also be Landlock-restricted to that tree; that is a kernel
+restriction, and Kiln only claims it when the LSM actually applied.
 
 ## Product test
 

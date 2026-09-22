@@ -267,13 +267,13 @@ prompts, which is the same hang in a different place. An unencrypted key needs
 
 Policy is a function of event and fork, enforced in the engine — **not** in the pipeline file. A `.kiln.yaml` edited on a fork pull request to demand a publish gets overruled, not obeyed.
 
-| Event | Fork | Secrets | Publish | Provenance skip |
-|---|---|---|---|---|
-| `pull_request` | yes | no | no | no |
-| `pull_request` | no | no | no | yes |
-| `push` / `tag` | — | yes | yes | yes |
+| Event | Fork | Secrets | Publish | Provenance skip | Confine |
+|---|---|---|---|---|---|
+| `pull_request` | yes | no | no | no | yes |
+| `pull_request` | no | no | no | yes | no |
+| `push` / `tag` | — | yes | yes | yes | no |
 
-Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket.
+Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket. They also request a Landlock filesystem confine of the worktree when the kernel has it. That is not a sandbox: network stays open, and without Landlock the child is scrubbed only.
 
 A same-repo pull request may skip the re-prove but still may not publish. An image built from an unmerged head is one nobody should be able to ship.
 
