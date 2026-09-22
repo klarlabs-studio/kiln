@@ -377,12 +377,13 @@ test refuses a surface that constructs `engine.Request` or calls
 `Engine.Execute`.
 
 Kiln's own Dockerfile bases are digest-pinned (L6). `POST /v1/run`
-admits one caller at a time (L3). Service images require a digest pin.
+admits one caller at a time (L3). Service images require a digest pin
+and start with `--cap-drop ALL`, `no-new-privileges`, and `--tmpfs /tmp`.
 `policy.from: commit` is an explicit opt-in; the default stays
 operator-owned. `kiln verify --bundle` walks a local `statement.json`
 without a registry. Fork prove/tasks request Landlock on the worktree
-when the kernel has it; the worktree is still not a sandbox. Those do
-not change the handoff.
+when the kernel has it; the worktree is still not a sandbox. `execx` is
+on the coverctl floor. Those do not change the handoff.
 
 ---
 
@@ -390,4 +391,4 @@ not change the handoff.
 
 Kiln is a small, opinionated build-and-attest tool with a clear place in a larger system and an unusually adult threat model for an 0.x project. The isolation matrix, fail-closed fork handling, unsigned-publish refusal, worktree discipline, and the recent key-material / ledger-redaction work are real engineering, not brochure security.
 
-The main gaps are where the *new* surface (`tasks`, especially `pull_request` + `schedule`) meets write credentials, where kilnd lets the caller name the trust event, and where the docs still describe a world the code has already left (backlog items that shipped) or a world the code never implemented (pipeline loaded from the commit; secret ids on the predicate). Fix those without widening the product and the claim — two authorities, one commit, nothing unsigned — stays honest.
+The gaps this audit named — kilnd letting a JSON body name the trust event, unsigned publish as warn-and-continue, secret ids promised and dropped, MCP skipping the repo lock, `branch: main` as a force-push destination — have been closed on this branch. What remains is what Kiln has always refused to become: an Actions clone, a deploy system, a second check language, or a claimed worktree sandbox. A fork child may be Landlock-restricted; that is a kernel fact, recorded only when the LSM applied. Two authorities, one commit, nothing unsigned.

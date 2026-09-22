@@ -141,6 +141,27 @@ func TestConfineOffRunsUnconfined(t *testing.T) {
 	}
 }
 
+func TestRequiredConfineAppliesWhenAvailable(t *testing.T) {
+	if !LandlockAvailable() {
+		t.Skip("needs a Landlock kernel")
+	}
+	t.Setenv("KILN_CONFINE", "required")
+	work := t.TempDir()
+	res, err := NewSystem().Run(t.Context(), Cmd{
+		Name:    "sh",
+		Args:    []string{"-c", "printf %s \"$KILN_CONFINED\""},
+		Dir:     work,
+		Confine: work,
+		Env:     []string{"PATH=" + os.Getenv("PATH")},
+	})
+	if err != nil {
+		t.Fatalf("Run: %v\n%s", err, res.Stderr)
+	}
+	if res.Stdout != ConfinedLandlock {
+		t.Errorf("KILN_CONFINE=required produced %q, want %s", res.Stdout, ConfinedLandlock)
+	}
+}
+
 func TestRequiredConfineFailsWhenUnavailable(t *testing.T) {
 	if LandlockAvailable() {
 		t.Skip("this kernel has Landlock; the refusal path needs one that does not")

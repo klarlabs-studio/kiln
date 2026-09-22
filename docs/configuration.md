@@ -352,8 +352,9 @@ standing between the first migrated repository and leaving Actions.
 
 Images must be digest-pinned (`image@sha256:` plus 64 hex). A mutable tag
 is a load error: a service whose image can change between ticks is not the
-service the operator reviewed. Containers start with `--cap-drop ALL` and
-`no-new-privileges`. Services exist to support proving and building; they
+service the operator reviewed. Containers start with `--cap-drop ALL`,
+`no-new-privileges`, and `--tmpfs /tmp`. Services exist to support proving
+and building; they
 are not a general orchestration facility.
 
 ```yaml

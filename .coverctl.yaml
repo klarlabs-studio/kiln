@@ -30,5 +30,8 @@ policy:
     - name: engine
       match: ["./internal/application/engine", "./internal/application/engine/..."]
       min: 65
+    - name: execx
+      match: ["./internal/infrastructure/execx", "./internal/infrastructure/execx/..."]
+      min: 55
 exclude:
   - "**/testdata/**"

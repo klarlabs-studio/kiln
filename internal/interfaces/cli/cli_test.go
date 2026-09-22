@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/gittest"
+	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 )
 
@@ -188,6 +189,27 @@ func TestDoctorOnAPublishingRepo(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Errorf("doctor output missing %q:\n%s", want, out)
 		}
+	}
+}
+
+func TestDoctorReportsLandlockHonestly(t *testing.T) {
+	repoWith(t, publishingPipeline)
+	out, _, _ := capture(t, "doctor")
+
+	if execx.LandlockAvailable() {
+		if !strings.Contains(out, "Landlock ABI") || !strings.Contains(out, "filesystem-confined") {
+			t.Errorf("Landlock is available; doctor must say the fork is confined:\n%s", out)
+		}
+		if strings.Contains(out, "environment-scrubbed only") {
+			t.Errorf("must not claim scrub-only when Landlock can apply:\n%s", out)
+		}
+		return
+	}
+	if !strings.Contains(out, "environment-scrubbed only") {
+		t.Errorf("no Landlock; doctor must not claim a sandbox:\n%s", out)
+	}
+	if strings.Contains(out, "filesystem-confined") {
+		t.Errorf("must not claim confined when Landlock is absent:\n%s", out)
 	}
 }
 

@@ -77,6 +77,9 @@ func TestThePortIsPublishedOnAnEphemeralHostPort(t *testing.T) {
 	if !strings.Contains(run, "--cap-drop ALL") || !strings.Contains(run, "no-new-privileges") {
 		t.Errorf("docker run = %q, want least-privilege defaults", run)
 	}
+	if !strings.Contains(run, "--tmpfs /tmp") {
+		t.Errorf("docker run = %q, want a writable /tmp without a writable root", run)
+	}
 }
 
 func TestReadinessIsWaitedFor(t *testing.T) {
