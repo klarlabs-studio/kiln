@@ -382,7 +382,8 @@ and start with `--cap-drop ALL`, `no-new-privileges`, and `--tmpfs /tmp`.
 `policy.from: commit` is an explicit opt-in; the default stays
 operator-owned. `kiln verify --bundle` walks a local `statement.json`
 without a registry. Fork prove/tasks request Landlock on the worktree
-when the kernel has it; the worktree is still not a sandbox. `execx` is
+when the kernel has it; the worktree is still not a sandbox. A schedule
+tick grants write credentials only to the proposing task. `execx` is
 on the coverctl floor. Those do not change the handoff.
 
 ---
