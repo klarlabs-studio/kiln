@@ -89,11 +89,17 @@ func TestApplyLandlockDeniesAForeignPath(t *testing.T) {
 	}
 
 	cmd := exec.Command(os.Args[0], "-test.run=TestApplyLandlockDeniesAForeignPath", "-test.v")
-	cmd.Env = append(os.Environ(),
+	// Coverage counters and MkdirTemp must land in the granted tree. The
+	// parent `go test -cover` points both at /tmp; after restrict those
+	// writes are permission denied and the probe exits 2.
+	cmd.Env = overlayEnv(os.Environ(),
 		"KILN_LL_PROBE=1",
 		"KILN_LL_ROOT="+root,
 		"KILN_LL_INSIDE="+inside,
 		"KILN_LL_SECRET="+secret,
+		"TMPDIR="+root,
+		"TMP="+root,
+		"GOCOVERDIR="+root,
 	)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
@@ -101,6 +107,14 @@ func TestApplyLandlockDeniesAForeignPath(t *testing.T) {
 	}
 	if !strings.Contains(string(out), "PASS") {
 		t.Fatalf("probe output:\n%s", out)
+	}
+}
+
+func TestOverlayEnvReplacesRatherThanAppends(t *testing.T) {
+	got := overlayEnv([]string{"HOME=/op", "PATH=/bin", "HOME=/dup"}, "HOME=/work", "TMPDIR=/work")
+	want := []string{"PATH=/bin", "HOME=/work", "TMPDIR=/work"}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("overlayEnv = %q, want %q", got, want)
 	}
 }
 

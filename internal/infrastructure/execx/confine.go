@@ -59,6 +59,26 @@ func enterConfine() {
 	}
 }
 
+// overlayEnv copies env, drops any key that extra sets, then appends extra.
+// Linux getenv uses the first match; appending a second HOME would leave
+// the operator's value in force on a confined child.
+func overlayEnv(env []string, extra ...string) []string {
+	drop := make(map[string]struct{}, len(extra))
+	for _, kv := range extra {
+		name, _, _ := strings.Cut(kv, "=")
+		drop[name] = struct{}{}
+	}
+	out := make([]string, 0, len(env)+len(extra))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if _, skip := drop[name]; skip {
+			continue
+		}
+		out = append(out, kv)
+	}
+	return append(out, extra...)
+}
+
 func stripConfineEnv(in []string) []string {
 	out := make([]string, 0, len(in))
 	for _, kv := range in {
@@ -120,15 +140,18 @@ func (s System) runConfined(ctx context.Context, c Cmd) (Result, error) {
 	if env == nil {
 		env = os.Environ()
 	}
-	env = append(append([]string{}, env...),
+	// Replace, do not append: Linux getenv keeps the first HOME/TMPDIR.
+	// GOCOVERDIR belongs in the worktree too — an instrumented trampoline
+	// (go test -cover) otherwise writes counters to /tmp after restrict
+	// and dies with permission denied. Production kiln is not covered.
+	env = overlayEnv(env,
 		confineRootEnv+"="+c.Confine,
 		confineCmdEnv+"="+resolved,
 		confineArgsEnv+"="+string(payload),
-		// Point scratch dirs at the worktree. Granting all of /tmp would
-		// let a fork read every other job's files sitting there.
 		"TMPDIR="+c.Confine,
 		"TMP="+c.Confine,
 		"HOME="+c.Confine,
+		"GOCOVERDIR="+c.Confine,
 	)
 
 	inner := Cmd{
