@@ -560,3 +560,71 @@ func TestEvidenceSourceRequiredLoads(t *testing.T) {
 		t.Errorf("source = %q", p.Evidence.Source)
 	}
 }
+
+func TestPolicyFromDefaultsToOperator(t *testing.T) {
+	p := parse(t, minimal)
+	if p.PolicyFrom() != PolicyFromOperator || p.CommitControlled() {
+		t.Errorf("absent policy.from must stay operator-owned: %+v", p.Policy)
+	}
+}
+
+func TestPolicyFromCommitIsOptIn(t *testing.T) {
+	p := parse(t, minimal+"\npolicy:\n  from: commit\n")
+	if !p.CommitControlled() {
+		t.Errorf("policy.from: commit was not honoured: %+v", p.Policy)
+	}
+}
+
+func TestUnknownPolicyFromIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+"\npolicy:\n  from: worktree\n")
+	if !strings.Contains(err.Error(), "trust-boundary") {
+		t.Errorf("want an explicit opt-in refusal, got %v", err)
+	}
+}
+
+const pinnedPostgres = "postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func TestPinnedServiceImageLoads(t *testing.T) {
+	p := parse(t, minimal+`
+services:
+  db:
+    image: `+pinnedPostgres+`
+    port: 5432
+`)
+	if p.Services["db"].Image != pinnedPostgres {
+		t.Errorf("image = %q", p.Services["db"].Image)
+	}
+}
+
+func TestUnpinnedServiceImageIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+`
+services:
+  db:
+    image: postgres:16
+    port: 5432
+`)
+	if !strings.Contains(err.Error(), "digest-pinned") {
+		t.Errorf("want a digest-pin refusal, got %v", err)
+	}
+}
+
+func TestShortServiceDigestIsRejected(t *testing.T) {
+	err := parseErr(t, minimal+`
+services:
+  db:
+    image: postgres@sha256:abcd
+    port: 5432
+`)
+	if !strings.Contains(err.Error(), "digest-pinned") {
+		t.Errorf("a truncated digest must not count as pinned, got %v", err)
+	}
+}
+
+func TestImageDigestPinned(t *testing.T) {
+	if ImageDigestPinned("postgres:16") {
+		t.Error("a tag is not pinned")
+	}
+	if !ImageDigestPinned(pinnedPostgres) {
+		t.Error("a 64-hex digest must count")
+	}
+}

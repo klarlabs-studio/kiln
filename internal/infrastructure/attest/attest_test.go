@@ -136,6 +136,19 @@ func TestPolicyIdentityIsRecorded(t *testing.T) {
 	}
 }
 
+func TestCommitPolicyIdentityCarriesTheSHA(t *testing.T) {
+	in := input()
+	in.PolicySource = "commit"
+	in.PolicyPath = ".kiln.yaml"
+	in.PolicyDigest = "sha256:abc"
+	in.PolicyCommit = in.SHA
+
+	p := build(t, in).Predicate.BuildDefinition.ExternalParameters.Policy
+	if p == nil || p.Source != "commit" || p.Commit != in.SHA {
+		t.Errorf("commit policy = %+v", p)
+	}
+}
+
 func TestIsolationIsRecorded(t *testing.T) {
 	in := input()
 	in.Isolated = true

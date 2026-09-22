@@ -39,6 +39,12 @@ func TestResolveEvidence(t *testing.T) {
 	}
 }
 
+func TestPolicyCommitIsANamedSource(t *testing.T) {
+	if PolicyCommit != "commit" || PolicyOperator != "operator" {
+		t.Errorf("policy sources drifted: %q %q", PolicyCommit, PolicyOperator)
+	}
+}
+
 func TestClaimedPushIsNotYetAPolicy(t *testing.T) {
 	// A caller saying "this is a push" is a claim. The engine must not see
 	// it until Resolve has established membership.

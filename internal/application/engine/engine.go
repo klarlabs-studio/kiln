@@ -481,6 +481,7 @@ func (e *Engine) provenanceInput(
 		PolicySource:   e.Policy.Source,
 		PolicyPath:     e.Policy.Path,
 		PolicyDigest:   e.Policy.Digest,
+		PolicyCommit:   e.Policy.Commit,
 		EvidenceSource: string(e.effectiveEvidence()),
 	}
 }

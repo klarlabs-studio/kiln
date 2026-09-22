@@ -62,6 +62,9 @@ type Report struct {
 	// SourceRequired records that the policy demanded a source verdict, so
 	// OK() can treat an unestablished one as a break rather than a caveat.
 	SourceRequired bool
+	// Offline records that the walk used a local bundle rather than a
+	// registry. A missing registry signature is then a caveat, not a break.
+	Offline bool
 }
 
 // essentialLinks are the ones that must be positively established, not merely
@@ -95,10 +98,16 @@ func (r Report) OK() bool {
 // between "we would like the commit to have been gated" and "we do not deploy
 // commits that were not".
 func (r Report) essential() []string {
-	if r.SourceRequired {
-		return append(slices.Clone(essentialLinks), "source gate")
+	links := slices.Clone(essentialLinks)
+	if r.Offline {
+		// The statement is already in hand. The registry signature is
+		// not re-checked unless a local cosign bundle was present.
+		links = []string{"provenance", "builder"}
 	}
-	return essentialLinks
+	if r.SourceRequired {
+		return append(links, "source gate")
+	}
+	return links
 }
 
 // Complete reports whether the chain was fully established — no link left
@@ -132,6 +141,9 @@ func explainStatement(b *strings.Builder, s attest.Statement) {
 	internal := s.Predicate.BuildDefinition.InternalParameters
 	if p := ext.Policy; p != nil && (p.Source != "" || p.Digest != "") {
 		fmt.Fprintf(b, "  %-8s %-12s %s", "", "policy", orNone(p.Source))
+		if p.Commit != "" {
+			fmt.Fprintf(b, " @ %s", short(p.Commit))
+		}
 		if p.Digest != "" {
 			fmt.Fprintf(b, " %s", p.Digest)
 		}
@@ -200,6 +212,17 @@ type Options struct {
 	// SourceRequired turns an unestablished source verdict from a caveat into
 	// a failure.
 	SourceRequired bool
+
+	// BundleDir is a directory holding a previously exported evidence
+	// bundle. When set, the walk does not contact a registry.
+	//
+	//	statement.json    required SLSA provenance
+	//	source.json       optional gate VSA / DSSE envelope
+	//	signature.bundle  optional local cosign bundle
+	BundleDir string
+	// StatementPath is a single provenance file. Implies an offline
+	// provenance walk without a full bundle.
+	StatementPath string
 }
 
 // Verifier walks the chain.
@@ -218,6 +241,10 @@ var ErrIncomplete = errors.New("provenance chain incomplete")
 // link failed; the report is populated either way, because a caller needs to
 // see which link broke.
 func (v *Verifier) Verify(ctx context.Context, opts Options) (Report, error) {
+	if opts.offline() {
+		return v.verifyOffline(ctx, opts)
+	}
+
 	report := Report{Reference: opts.Reference, SourceRequired: opts.SourceRequired}
 
 	if err := checkReferenceShape(opts.Reference); err != nil {

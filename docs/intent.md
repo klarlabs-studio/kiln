@@ -61,7 +61,13 @@ policy:
   digest: sha256:...
 ```
 
-Commit-controlled policy is a later, explicit trust-boundary change.
+Commit-controlled policy is an explicit trust-boundary change, not the
+default. The operator must write `policy.from: commit` in the checkout's
+`.kiln.yaml`. Then the SHA being built supplies the file, discovery
+(`watch`) stays operator-owned, and a fork cannot start the commit's
+services. Isolation still suppresses secrets and publish. Absence of
+`.kiln.yaml` at that SHA fails the run. Provenance records
+`source: commit` and the SHA.
 
 ## Evidence completeness
 

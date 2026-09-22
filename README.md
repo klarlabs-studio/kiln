@@ -168,8 +168,10 @@ Owned by Warden. Kiln shells out to `warden run pre-push --attest-only` and does
 ### `.kiln.yaml` — publish and routing
 
 Kiln reads this file from the **operator checkout**, not from the commit
-being built. A pull request cannot rewrite routing, services or proposal
-destinations. The file's identity (`operator` or `default`, plus
+being built, unless the operator writes `policy.from: commit`. That is
+an explicit trust-boundary change: the SHA supplies the file, discovery
+stays the operator's, and a fork cannot start the commit's services.
+The file's identity (`operator`, `default`, or `commit`, plus
 `sha256:` of the bytes) is recorded in provenance. See
 [intent.md](docs/intent.md).
 
@@ -294,6 +296,7 @@ to — that shared commit is what makes the two statements one chain.
 
 ```bash
 kiln verify ghcr.io/felixgeelhaar/glossa-api@sha256:… --key cosign.pub --dir .
+kiln verify --bundle ./evidence   # statement.json, optional source.json / signature.bundle
 ```
 
 ```
@@ -455,7 +458,7 @@ Same engine, four ways in.
 | `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
-| `kiln verify <ref>` | Walk a published artifact's whole provenance chain. `--policy` for artifacts kiln did not build; `--json` for a gate |
+| `kiln verify <ref>` | Walk a published artifact's whole provenance chain. `--policy` for artifacts kiln did not build; `--bundle` / `--statement` for a local walk without a registry; `--json` for a gate |
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 

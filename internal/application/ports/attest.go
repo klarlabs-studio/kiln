@@ -52,6 +52,9 @@ type AttestInput struct {
 	PolicySource string
 	PolicyDigest string
 	PolicyPath   string
+	// PolicyCommit is the SHA whose tree supplied the file when the
+	// operator opted into commit-controlled policy.
+	PolicyCommit string
 	// EvidenceSource is required or best-effort: whether the source half of
 	// the chain had to be present for this publish to succeed.
 	EvidenceSource string

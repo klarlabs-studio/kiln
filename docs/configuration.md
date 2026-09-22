@@ -14,12 +14,25 @@ says. It is deliberately small, and the things it *cannot* express are as much
 a part of the design as the things it can.
 
 Kiln reads `.kiln.yaml` from the **operator checkout**, not from the commit
-being built. The source being built and the policy controlling the build are
-different objects. That is a security decision: a pull request must not be
-able to rewrite routing, services or proposal destinations. The file's
-identity (`operator` or `default`, plus `sha256:` of the bytes) is recorded
-in provenance so a verifier can say "commit X produced artifact Y under
-policy Z". See [intent.md](intent.md).
+being built, unless the operator opts into the other model. The source being
+built and the policy controlling the build are different objects. That is a
+security decision: a pull request must not be able to rewrite routing,
+services or proposal destinations by default. The file's identity
+(`operator`, `default`, or `commit`, plus `sha256:` of the bytes) is
+recorded in provenance so a verifier can say "commit X produced artifact Y
+under policy Z". See [intent.md](intent.md).
+
+```yaml
+# Default. Omit the block and the checkout's file governs the build.
+policy:
+  from: operator
+
+# Explicit trust-boundary change. The SHA being built supplies .kiln.yaml.
+# Watch stays the operator's. A fork cannot start the commit's services.
+# Missing or invalid at that SHA fails the run.
+# policy:
+#   from: commit
+```
 
 Every unknown key is a load error. A typo that silently does nothing is worse
 than a failure, because it looks like it worked.
@@ -68,6 +81,9 @@ watch:
 
 evidence:
   source: required      # or best-effort; see Evidence below
+
+policy:
+  from: operator        # or commit; see Operator-owned build policy
 ```
 
 ---
@@ -334,15 +350,16 @@ Containers the gate needs beside it — the database a test suite talks to, a
 fake API. This is the Actions `services:` equivalent, and it was the one thing
 standing between the first migrated repository and leaving Actions.
 
-Images should be digest-pinned (`image@sha256:…`). `kiln doctor` warns on a
-mutable tag. Containers start with `--cap-drop ALL` and `no-new-privileges`.
-Services exist to support proving and building; they are not a general
-orchestration facility.
+Images must be digest-pinned (`image@sha256:` plus 64 hex). A mutable tag
+is a load error: a service whose image can change between ticks is not the
+service the operator reviewed. Containers start with `--cap-drop ALL` and
+`no-new-privileges`. Services exist to support proving and building; they
+are not a general orchestration facility.
 
 ```yaml
 services:
   postgres:
-    image: postgres:16
+    image: postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
     port: 5432                    # the port *inside* the container
     env:
       POSTGRES_PASSWORD: test
@@ -555,6 +572,33 @@ provenance and shown by `kiln verify` and `kiln doctor`.
 Best-effort exists for migration. It is not silent: a production
 configuration that meant to require the chain and quietly published without
 it would be a failed publication dressed as a warning.
+
+## `policy`
+
+Who authors `.kiln.yaml` for a run.
+
+```yaml
+policy:
+  from: operator   # default: the checkout's file
+  # from: commit   # the SHA being built supplies the file
+```
+
+`from: commit` is an explicit trust-boundary change. Discovery (`watch`)
+stays the operator's. A fork cannot start the commit's services. Isolation
+still suppresses secrets and publish. Missing or invalid at that SHA fails
+the run. Provenance records `source: commit` and the SHA.
+
+A local evidence walk does not need a registry:
+
+```bash
+kiln verify --bundle ./evidence
+# evidence/statement.json     required
+# evidence/source.json        optional signed gate VSA
+# evidence/signature.bundle   optional local cosign bundle
+```
+
+Without `signature.bundle` the signature link is reported as offline, not
+as a pass. `--statement file` is the same walk for a single provenance file.
 
 ---
 

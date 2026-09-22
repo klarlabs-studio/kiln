@@ -105,3 +105,38 @@ func TestResolveRejectsAnEmptyRef(t *testing.T) {
 		t.Fatal("empty ref must fail")
 	}
 }
+
+func TestShowReadsAFileFromACommit(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", ".kiln.yaml", "from-commit\n")
+	repo.Write(".kiln.yaml", "from-workdir\n")
+	g := New(execx.NewSystem())
+
+	got, err := g.Show(t.Context(), repo.Dir, sha, ".kiln.yaml")
+	if err != nil {
+		t.Fatalf("Show: %v", err)
+	}
+	if string(got) != "from-commit\n" {
+		t.Errorf("Show = %q, want the commit's bytes, not the worktree", got)
+	}
+}
+
+func TestShowRefusesAMissingFile(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", "app.txt", "one\n")
+	g := New(execx.NewSystem())
+
+	if _, err := g.Show(t.Context(), repo.Dir, sha, ".kiln.yaml"); err == nil {
+		t.Fatal("a missing path must fail")
+	}
+}
+
+func TestShowRefusesAPathEscape(t *testing.T) {
+	g := New(execx.NewSystem())
+	if _, err := g.Show(t.Context(), t.TempDir(), "abc", "../.kiln.yaml"); err == nil {
+		t.Fatal("a path escape must fail")
+	}
+	if _, err := g.Show(t.Context(), t.TempDir(), "--output=/tmp/x", ".kiln.yaml"); err == nil {
+		t.Fatal("a flag-shaped SHA must fail")
+	}
+}

@@ -33,24 +33,34 @@ func runVerify(ctx context.Context, args []string, io IO) error {
 	identity := fs.String("identity", "", "certificate identity to require, for keyless verification")
 	issuer := fs.String("issuer", "", "certificate OIDC issuer to require, for keyless verification")
 	trusted := fs.String("trusted-keys", "", "comma-separated warden signers the note must match")
+	bundle := fs.String("bundle", "", "directory of statement.json plus optional source.json and signature.bundle; no registry")
+	statement := fs.String("statement", "", "local SLSA provenance file; no registry")
 	asJSON := fs.Bool("json", false, "emit the report as JSON, for a gate that has to act on it")
 	if err := fs.Parse(args); err != nil {
 		return wrapExit(ExitUsage, err)
 	}
 
+	if *bundle != "" && *statement != "" {
+		return failWith(ExitUsage, "--bundle already names statement.json; drop --statement")
+	}
+
 	reference := fs.Arg(0)
-	if strings.TrimSpace(reference) == "" {
+	if strings.TrimSpace(reference) == "" && *bundle == "" && *statement == "" {
 		return failWith(ExitUsage,
-			"usage: kiln verify <image-ref> [--policy p.yaml | --key k | --identity i --issuer u]")
+			"usage: kiln verify <image-ref> [--policy p.yaml | --key k | --identity i --issuer u]\n"+
+				"       kiln verify --bundle <dir>\n"+
+				"       kiln verify --statement <file>")
 	}
 
 	opts := verify.Options{
-		Reference:   reference,
-		RepoDir:     *dir,
-		CosignKey:   *key,
-		Identity:    *identity,
-		Issuer:      *issuer,
-		TrustedKeys: splitCommas(*trusted),
+		Reference:     reference,
+		RepoDir:       *dir,
+		CosignKey:     *key,
+		Identity:      *identity,
+		Issuer:        *issuer,
+		TrustedKeys:   splitCommas(*trusted),
+		BundleDir:     *bundle,
+		StatementPath: *statement,
 	}
 
 	var checks []string

@@ -58,18 +58,22 @@ func ResolveEvidence(explicit string, hasTrustedKeys bool) EvidenceMode {
 // a security decision, not an accident, and it is recorded so a verifier
 // can say "commit X produced artifact Y under policy Z".
 type PolicyIdentity struct {
-	// Source is "operator" when the box checkout supplied the file, or
-	// "default" when no .kiln.yaml existed.
+	// Source is operator when the box checkout supplied the file, default
+	// when no .kiln.yaml existed, or commit when the operator opted into
+	// the SHA's file.
 	Source string `json:"source"`
 	// Path is the file, relative to the checkout when it came from one.
 	Path string `json:"path,omitempty"`
 	// Digest is sha256:<hex> of the file bytes. Empty when there was no file.
 	Digest string `json:"digest,omitempty"`
+	// Commit is the SHA whose tree supplied the file when Source is commit.
+	Commit string `json:"commit,omitempty"`
 }
 
 const (
 	PolicyOperator = "operator"
 	PolicyDefault  = "default"
+	PolicyCommit   = "commit"
 )
 
 // Context is the established trust classification for one run.

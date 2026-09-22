@@ -110,6 +110,8 @@ type BuildPolicy struct {
 	Source string `json:"source"`
 	Path   string `json:"path,omitempty"`
 	Digest string `json:"digest,omitempty"`
+	// Commit is set when the SHA being built supplied the file.
+	Commit string `json:"commit,omitempty"`
 }
 
 // InternalParameters records what the platform decided, including the two
@@ -323,6 +325,7 @@ func buildPolicy(in ports.AttestInput) *BuildPolicy {
 		Source: in.PolicySource,
 		Path:   in.PolicyPath,
 		Digest: in.PolicyDigest,
+		Commit: in.PolicyCommit,
 	}
 }
 

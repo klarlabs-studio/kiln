@@ -3,10 +3,12 @@ package authority
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"go.klarlabs.de/kiln/internal/application/engine"
 	"go.klarlabs.de/kiln/internal/application/ports"
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/isolation"
 	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/gittest"
@@ -259,5 +261,127 @@ func TestExecuteLockedDoesNotAcquire(t *testing.T) {
 		Claim: trust.Claim{SHA: sha, Event: isolation.EventPush},
 	}); err != nil {
 		t.Fatalf("ExecuteLocked: %v", err)
+	}
+}
+
+const (
+	operatorImage = "ghcr.io/operator/box"
+	commitImage   = "ghcr.io/commit/app"
+	pinnedDB      = "postgres@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
+
+func kilnDoc(image, extra string) string {
+	return `apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+  push: [prove, publish]
+prove:
+  from: warden
+publish:
+  - kind: image
+    image: ` + image + `
+    tags: [sha, latest]
+` + extra
+}
+
+func parsePipe(t *testing.T, doc string) config.Pipeline {
+	t.Helper()
+	p, err := config.Parse(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	return p
+}
+
+func TestOperatorPolicyIsNotTheCommitUnlessOptedIn(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", ".kiln.yaml", kilnDoc(commitImage, ""))
+	r := testRunner(t, repo)
+	r.Pipeline = parsePipe(t, kilnDoc(operatorImage, ""))
+
+	pipe, restore, err := r.bindPolicy(t.Context(), trust.Context{SHA: sha})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if pipe.Publish[0].Image != operatorImage {
+		t.Errorf("image = %q: today's default must stay the operator file", pipe.Publish[0].Image)
+	}
+}
+
+func TestCommitPolicyIsLoadedOnlyWhenOptedIn(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", ".kiln.yaml", kilnDoc(commitImage, `
+watch:
+  ref: from-the-commit
+`))
+	r := testRunner(t, repo)
+	r.Pipeline = parsePipe(t, kilnDoc(operatorImage, `
+policy:
+  from: commit
+watch:
+  ref: operator-main
+`))
+	r.Engine.Policy = trust.PolicyIdentity{Source: trust.PolicyOperator, Digest: "sha256:operator"}
+
+	pipe, restore, err := r.bindPolicy(t.Context(), trust.Context{SHA: sha})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pipe.Publish[0].Image != commitImage {
+		t.Errorf("image = %q, want the commit's publish", pipe.Publish[0].Image)
+	}
+	if pipe.Watch.Ref != "operator-main" {
+		t.Errorf("watch.ref = %q: discovery stays operator-owned", pipe.Watch.Ref)
+	}
+	if r.Engine.Policy.Source != trust.PolicyCommit || r.Engine.Policy.Commit != sha {
+		t.Errorf("recorded identity = %+v, want source=commit", r.Engine.Policy)
+	}
+	restore()
+	if r.Engine.Policy.Source != trust.PolicyOperator {
+		t.Errorf("restore left %+v", r.Engine.Policy)
+	}
+}
+
+func TestCommitPolicyStripsForkServices(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", ".kiln.yaml", kilnDoc(commitImage, `
+services:
+  db:
+    image: `+pinnedDB+`
+    port: 5432
+`))
+	r := testRunner(t, repo)
+	r.Pipeline = parsePipe(t, kilnDoc(operatorImage, "policy:\n  from: commit\n"))
+
+	pipe, restore, err := r.bindPolicy(t.Context(), trust.Context{SHA: sha, Fork: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if len(pipe.Services) != 0 {
+		t.Errorf("a fork kept services: %v", pipe.Services)
+	}
+
+	kept, restore, err := r.bindPolicy(t.Context(), trust.Context{SHA: sha, Fork: false})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restore()
+	if kept.Services["db"].Image != pinnedDB {
+		t.Errorf("same-repo must keep the commit's services: %v", kept.Services)
+	}
+}
+
+func TestCommitPolicyMissingFileFailsTheRun(t *testing.T) {
+	repo := gittest.New(t)
+	sha := repo.Commit("first", "app.txt", "one\n")
+	r := testRunner(t, repo)
+	r.Pipeline = parsePipe(t, kilnDoc(operatorImage, "policy:\n  from: commit\n"))
+
+	_, _, err := r.bindPolicy(t.Context(), trust.Context{SHA: sha})
+	if err == nil || !strings.Contains(err.Error(), ".kiln.yaml") {
+		t.Fatalf("err = %v, want a missing-file refusal", err)
 	}
 }

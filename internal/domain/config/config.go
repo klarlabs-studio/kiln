@@ -91,8 +91,30 @@ type Pipeline struct {
 	// must be. Empty is resolved later: a box with pinned trusted keys
 	// defaults to required, an adopting box to best-effort.
 	Evidence Evidence `yaml:"evidence,omitempty"`
-	Watch    Watch    `yaml:"watch"`
+	// Policy says who authors this file for a run. Empty is the operator
+	// checkout — today's model. `from: commit` is an explicit
+	// trust-boundary change and must not be inferred.
+	Policy PolicySpec `yaml:"policy,omitempty"`
+	Watch  Watch      `yaml:"watch"`
 }
+
+// PolicySpec is the authorship of `.kiln.yaml` itself.
+//
+// The source being built and the policy controlling the build are different
+// objects. The default is the operator checkout. Switching to the commit
+// being built is a trust-boundary change: a pull request can then rewrite
+// routing and services, so it is opt-in and recorded in provenance.
+type PolicySpec struct {
+	// From is operator (default) or commit.
+	From string `yaml:"from,omitempty"`
+}
+
+const (
+	// PolicyFromOperator is the checkout's file. The silent default.
+	PolicyFromOperator = "operator"
+	// PolicyFromCommit is the SHA's file. Opt-in only.
+	PolicyFromCommit = "commit"
+)
 
 // Evidence is the completeness policy for the provenance chain.
 type Evidence struct {
@@ -570,6 +592,9 @@ func (p Pipeline) validate() error {
 	if err := p.validateEvidence(); err != nil {
 		return err
 	}
+	if err := p.validatePolicy(); err != nil {
+		return err
+	}
 	if err := p.validateTasks(); err != nil {
 		return err
 	}
@@ -692,6 +717,50 @@ func (p Pipeline) validateEvidence() error {
 	return nil
 }
 
+func (p Pipeline) validatePolicy() error {
+	switch strings.TrimSpace(p.Policy.From) {
+	case "", PolicyFromOperator, PolicyFromCommit:
+		return nil
+	default:
+		return fmt.Errorf("policy.from must be %q or %q, got %q: "+
+			"commit-controlled policy is an explicit trust-boundary change and is not inferred",
+			PolicyFromOperator, PolicyFromCommit, p.Policy.From)
+	}
+}
+
+// PolicyFrom is operator unless the operator opted into commit.
+func (p Pipeline) PolicyFrom() string {
+	if strings.TrimSpace(p.Policy.From) == "" {
+		return PolicyFromOperator
+	}
+	return p.Policy.From
+}
+
+// CommitControlled reports that the SHA being built supplies `.kiln.yaml`.
+func (p Pipeline) CommitControlled() bool {
+	return p.PolicyFrom() == PolicyFromCommit
+}
+
+// ImageDigestPinned reports an immutable image reference. A tag — including
+// the implicit latest — is a moving pointer, and a service whose image can
+// change between ticks is not the same service the operator reviewed.
+func ImageDigestPinned(image string) bool {
+	_, digest, ok := strings.Cut(image, "@sha256:")
+	if !ok || len(digest) != 64 {
+		return false
+	}
+	for _, c := range digest {
+		if !isHex(c) {
+			return false
+		}
+	}
+	return true
+}
+
+func isHex(r rune) bool {
+	return (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+}
+
 // validateServices refuses a service that cannot work.
 func (p Pipeline) validateServices() error {
 	for name, svc := range p.Services {
@@ -704,6 +773,9 @@ func (p Pipeline) validateServices() error {
 				"variable; keep it to letters, digits, dashes and underscores", where)
 		case strings.TrimSpace(svc.Image) == "":
 			return fmt.Errorf("%s.image is required", where)
+		case !ImageDigestPinned(svc.Image):
+			return fmt.Errorf("%s.image %q is not digest-pinned: a mutable tag is a different "+
+				"image tomorrow — write image@sha256:<64-hex>", where, svc.Image)
 		case svc.Port < 0 || svc.Port > 65535:
 			return fmt.Errorf("%s.port %d is not a port", where, svc.Port)
 		case svc.Ready != "" && svc.Port == 0:

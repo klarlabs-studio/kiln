@@ -130,9 +130,9 @@ func (s *Runner) start(ctx context.Context, name string, spec config.Service, ru
 
 	args := []string{
 		"run", "--detach", "--rm", "--name", container,
-		// Least privilege that still lets a database listen. Services are
-		// operator-authored today; these defaults stay if they ever become
-		// commit-controlled, which would be a major trust-boundary change.
+		// Least privilege that still lets a database listen. When the
+		// operator opts into commit-controlled policy, a fork's services
+		// are stripped before they reach here; these defaults stay.
 		"--cap-drop", "ALL",
 		"--security-opt", "no-new-privileges",
 	}

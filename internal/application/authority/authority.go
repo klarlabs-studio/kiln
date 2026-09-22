@@ -7,7 +7,10 @@
 package authority
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -31,6 +34,9 @@ type Git interface {
 	HeadSHA(ctx context.Context, dir, remote, branch string) (string, error)
 	Tags(ctx context.Context, dir string) ([]ports.Ref, error)
 	Resolve(ctx context.Context, dir, ref string) (string, error)
+	// Show reads one file out of a commit. Used only when the operator
+	// opted into commit-controlled policy.
+	Show(ctx context.Context, dir, sha, path string) ([]byte, error)
 }
 
 // ForkLookup answers whether a pull request is from a fork. Missing or
@@ -242,6 +248,73 @@ func unique(in []string) []string {
 
 func short(sha string) string { return run.ShortSHA(sha) }
 
+// bindPolicy selects the pipeline this run is governed by.
+//
+// Today's default is the operator checkout. `policy.from: commit` is an
+// explicit trust-boundary change: the SHA supplies `.kiln.yaml`, discovery
+// (Watch) stays operator-owned, and a fork cannot start the commit's
+// services. The engine's recorded identity is swapped for the duration of
+// the run and restored afterwards so a long-lived process does not keep
+// the last SHA's digest.
+func (r *Runner) bindPolicy(ctx context.Context, established trust.Context) (config.Pipeline, func(), error) {
+	noop := func() {}
+	if r == nil {
+		return config.Pipeline{}, noop, nil
+	}
+	if !r.Pipeline.CommitControlled() {
+		return r.Pipeline, noop, nil
+	}
+
+	pipe, id, err := r.loadCommitPolicy(ctx, established)
+	if err != nil {
+		return config.Pipeline{}, noop, err
+	}
+	if r.Engine == nil {
+		return pipe, noop, nil
+	}
+	saved := r.Engine.Policy
+	r.Engine.Policy = id
+	return pipe, func() { r.Engine.Policy = saved }, nil
+}
+
+func (r *Runner) loadCommitPolicy(ctx context.Context, established trust.Context) (config.Pipeline, trust.PolicyIdentity, error) {
+	if r.Resolver == nil || r.Resolver.Git == nil {
+		return config.Pipeline{}, trust.PolicyIdentity{}, fmt.Errorf(
+			"authority: policy.from is commit but there is no repository to read %s from", config.FileName)
+	}
+
+	raw, err := r.Resolver.Git.Show(ctx, r.Dir, established.SHA, config.FileName)
+	if err != nil {
+		return config.Pipeline{}, trust.PolicyIdentity{}, fmt.Errorf(
+			"authority: policy.from is commit but %s has no %s: %w",
+			short(established.SHA), config.FileName, err)
+	}
+
+	pipe, err := config.Parse(bytes.NewReader(raw))
+	if err != nil {
+		return config.Pipeline{}, trust.PolicyIdentity{}, fmt.Errorf(
+			"authority: %s:%s: %w", short(established.SHA), config.FileName, err)
+	}
+
+	// Discovery is the operator's. A commit must not retarget the box.
+	pipe.Watch = r.Pipeline.Watch
+	if established.Fork {
+		// A fork that authors services is "run this image as docker"
+		// before the gate. Isolation already strips secrets and publish;
+		// this is the remaining privilege the commit would otherwise get.
+		pipe.Services = nil
+	}
+
+	sum := sha256.Sum256(raw)
+	id := trust.PolicyIdentity{
+		Source: trust.PolicyCommit,
+		Path:   config.FileName,
+		Digest: "sha256:" + hex.EncodeToString(sum[:]),
+		Commit: established.SHA,
+	}
+	return pipe, id, nil
+}
+
 // Runner is the common execute path every mutating surface should call.
 type Runner struct {
 	Engine   *engine.Engine
@@ -276,6 +349,12 @@ func (r *Runner) execute(ctx context.Context, in Request, holder string, acquire
 		return nil, err
 	}
 
+	pipeline, restore, err := r.bindPolicy(ctx, established)
+	if err != nil {
+		return nil, err
+	}
+	defer restore()
+
 	runFn := func() (*run.Run, error) {
 		return r.Engine.Execute(ctx, engine.Request{
 			Trust:    established,
@@ -285,7 +364,7 @@ func (r *Runner) execute(ctx context.Context, in Request, holder string, acquire
 			Ref:      established.Ref,
 			Repo:     r.Repo,
 			Dir:      r.Dir,
-			Pipeline: r.Pipeline,
+			Pipeline: pipeline,
 			Output:   in.Output,
 		})
 	}

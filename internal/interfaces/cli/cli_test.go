@@ -400,7 +400,7 @@ func TestDoctorReportsRequiredEvidenceWhenKeysArePinned(t *testing.T) {
 	}
 }
 
-func TestDoctorWarnsAboutAnUnpinnedServiceImage(t *testing.T) {
+func TestDoctorRefusesAnUnpinnedServiceImage(t *testing.T) {
 	repoWith(t, `apiVersion: kiln.klarlabs.de/v1
 kind: Pipeline
 on:
@@ -412,10 +412,26 @@ services:
     port: 5432
 `)
 
+	_, errOut, code := capture(t, "doctor")
+
+	if code != ExitConfig {
+		t.Errorf("code = %d, want a load error", code)
+	}
+	if !strings.Contains(errOut, "digest-pinned") {
+		t.Errorf("an unpinned service must be a load error:\n%s", errOut)
+	}
+}
+
+func TestDoctorNamesCommitControlledPolicy(t *testing.T) {
+	repoWith(t, publishingPipeline+`
+policy:
+  from: commit
+`)
+
 	out, _, _ := capture(t, "doctor")
 
-	if !strings.Contains(out, "not digest-pinned") {
-		t.Errorf("doctor should warn about a mutable service tag:\n%s", out)
+	if !strings.Contains(out, "policy.from is commit") {
+		t.Errorf("the opt-in must be visible:\n%s", out)
 	}
 }
 
@@ -834,6 +850,16 @@ func TestVerifyRequiresAReference(t *testing.T) {
 
 	if code != ExitUsage || !strings.Contains(errOut, "kiln verify <image-ref>") {
 		t.Errorf("code = %d, stderr = %q", code, errOut)
+	}
+}
+
+func TestVerifyBundleDoesNotNeedAReference(t *testing.T) {
+	repoWith(t, "")
+
+	_, errOut, code := capture(t, "verify", "--bundle", t.TempDir())
+
+	if code == ExitUsage {
+		t.Errorf("a bundle directory is a complete invocation: %s", errOut)
 	}
 }
 

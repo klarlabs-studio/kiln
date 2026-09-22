@@ -140,10 +140,6 @@ func (r *doctorReport) collect(ctx context.Context, deps *boot.Deps, sha, ref st
 			} else {
 				r.ok("%s from %s (no port published)", name, svc.Image)
 			}
-			if !imageDigestPinned(svc.Image) {
-				r.warn("  %s image %s is not digest-pinned; a mutable tag is a different image tomorrow",
-					name, svc.Image)
-			}
 			if svc.Ready == "" {
 				// Not an error, but it is the cause of the flake that follows:
 				// the gate starts the instant the container does, which is
@@ -193,6 +189,14 @@ func (r *doctorReport) checkPipeline(deps *boot.Deps) {
 		r.ok("evidence.source is required: a publish without a warden verdict fails")
 	default:
 		r.warn("evidence.source is best-effort: a publish may omit the source half of the chain")
+	}
+
+	if deps.Pipeline.CommitControlled() {
+		r.warn("policy.from is commit: this is an explicit trust-boundary change — " +
+			"the SHA being built supplies .kiln.yaml; discovery stays the operator's; " +
+			"a fork cannot start the commit's services")
+	} else {
+		r.ok("policy.from is operator: the checkout's .kiln.yaml governs the build")
 	}
 
 	if deps.Pipeline.Prove.Nox {
@@ -544,13 +548,6 @@ func resolveCommit(ctx context.Context, deps *boot.Deps, commitish string) (stri
 // see that the rule they thought they wrote is the rule that will run, which
 // is the failure a silently-ignored field would otherwise cause at the worst
 // possible time.
-// imageDigestPinned reports an immutable image reference. A tag — including
-// the implicit latest — is a moving pointer, and a service whose image can
-// change between ticks is not the same service the operator reviewed.
-func imageDigestPinned(image string) bool {
-	return strings.Contains(image, "@sha256:")
-}
-
 func checkPolicy(io IO, path string) error {
 	p, err := policyfile.Load(path)
 	if err != nil {

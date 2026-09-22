@@ -137,3 +137,31 @@ func (g *Git) Contains(ctx context.Context, dir, sha, tip string) (bool, error) 
 	// A non-zero exit is the answer "no", not a failure to answer.
 	return err == nil, nil
 }
+
+// Show reads one file out of a commit's tree.
+//
+// Used when the operator has opted into commit-controlled policy: the SHA
+// being built supplies `.kiln.yaml`, and that read must not become a way
+// to run `git show` against an arbitrary path.
+func (g *Git) Show(ctx context.Context, dir, sha, path string) ([]byte, error) {
+	if strings.TrimSpace(sha) == "" {
+		return nil, fmt.Errorf("gitcli: no commit")
+	}
+	if strings.HasPrefix(sha, "-") || strings.ContainsAny(sha, ": \t\n") {
+		return nil, fmt.Errorf("gitcli: refuse to show from %q", sha)
+	}
+	if path == "" || strings.Contains(path, "..") || strings.Contains(path, ":") ||
+		strings.HasPrefix(path, "/") || strings.HasPrefix(path, "-") {
+		return nil, fmt.Errorf("gitcli: refuse to show %q", path)
+	}
+	spec := sha + ":" + path
+	res, err := g.Runner.Run(ctx, execx.Cmd{
+		Name: "git",
+		Args: []string{"show", spec},
+		Dir:  dir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gitcli: show %s: %w", spec, err)
+	}
+	return []byte(res.Stdout), nil
+}

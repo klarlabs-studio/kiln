@@ -24,6 +24,14 @@ All notable changes to kiln are documented here. The format follows
 - **Declared secret IDs in provenance.** Values never do.
 - **Proposal branches are structurally `kiln/*`.** `branch: main` is a
   load error, not a force-push destination.
+- **Opt-in commit-controlled policy.** `policy.from: commit` loads the
+  SHA's `.kiln.yaml`. Watch stays the operator's. A fork cannot start
+  the commit's services. Provenance records `source: commit` and the SHA.
+  Absent this key, the checkout's file still governs the build.
+- **`kiln verify --bundle` / `--statement`.** Walk a local
+  `statement.json` (and optional `source.json` / `signature.bundle`)
+  without a registry or a clone. A missing local cosign bundle is
+  reported as offline, not as a pass.
 
 ### Changed
 
@@ -32,8 +40,8 @@ All notable changes to kiln are documented here. The format follows
 - `kiln verify` explains policy identity, evidence mode, declared
   secrets, and inherited vs reproduced source verdicts.
 - `kiln status` lists task outcomes and retained files.
-- `kiln doctor` reports evidence mode and warns on unpinned service
-  images.
+- `kiln doctor` reports evidence mode and policy authorship. A service
+  image without a digest pin is a load error, not a warning.
 - Environment scrubbing covers `DATABASE_URL`, `DSN`, `CONNECTION_STRING`
   and `*_PEM` / `*_URI` forms.
 - `SECURITY.md` verifies the current release tag, not a hardcoded
