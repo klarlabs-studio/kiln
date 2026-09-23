@@ -84,7 +84,9 @@ exists for migration and must be visible in verification output.
 
 CLI, MCP, HTTP, webhook, watch and schedule all reduce to a claim. The
 application layer establishes source, event, fork status, repository
-exclusivity and capabilities. A new interface should be boring.
+exclusivity and capabilities. A new interface should be boring. A new
+forge is the same idea: GitHub, Gitea or Forgejo implement the host
+port. They do not define trust.
 
 ## Repository writes
 

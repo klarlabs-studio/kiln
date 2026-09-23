@@ -11,6 +11,7 @@ func TestLoadDefaults(t *testing.T) {
 		"KILN_DB", "KILN_DRY", "KILN_WARDEN", "KILN_NOX", "KILN_TRUSTED_KEYS",
 		"GITHUB_TOKEN", "GH_TOKEN", "GITHUB_REPOSITORY", "KILN_MCP_ALLOW_RUN",
 		"KILN_ADDR", "KILN_TOKEN", "KILN_WEBHOOK_SECRET", "KILN_DIR", "KILN_LOG_LEVEL",
+		"KILN_FORGE", "KILN_FORGE_URL", "KILN_REPOSITORY", "GITEA_TOKEN", "FORGEJO_TOKEN",
 	} {
 		t.Setenv(k, "")
 	}
@@ -32,6 +33,9 @@ func TestLoadDefaults(t *testing.T) {
 	if env.TrustedKeys != nil {
 		t.Errorf("TrustedKeys = %v, want nil", env.TrustedKeys)
 	}
+	if env.Forge != ForgeGitHub || env.ForgeURL != "" {
+		t.Errorf("forge defaults = %q %q, want github and empty URL", env.Forge, env.ForgeURL)
+	}
 }
 
 func TestTokenFallsBackToGHToken(t *testing.T) {
@@ -40,6 +44,49 @@ func TestTokenFallsBackToGHToken(t *testing.T) {
 
 	if got := Load().Token; got != "gh-value" {
 		t.Errorf("Token = %q, want gh-value", got)
+	}
+}
+
+func TestGiteaTokenWinsOnAGiteaBox(t *testing.T) {
+	t.Setenv("KILN_FORGE", "gitea")
+	t.Setenv("GITEA_TOKEN", "gitea-tok")
+	t.Setenv("GITHUB_TOKEN", "github-tok")
+	t.Setenv("FORGEJO_TOKEN", "forgejo-tok")
+
+	env := Load()
+	if env.Forge != ForgeGitea {
+		t.Errorf("Forge = %q", env.Forge)
+	}
+	if env.Token != "gitea-tok" {
+		t.Errorf("Token = %q, want the Gitea credential", env.Token)
+	}
+}
+
+func TestForgejoTokenWinsOnAForgejoBox(t *testing.T) {
+	t.Setenv("KILN_FORGE", "forgejo")
+	t.Setenv("FORGEJO_TOKEN", "forgejo-tok")
+	t.Setenv("GITEA_TOKEN", "gitea-tok")
+	t.Setenv("GITHUB_TOKEN", "github-tok")
+
+	if got := Load().Token; got != "forgejo-tok" {
+		t.Errorf("Token = %q, want the Forgejo credential", got)
+	}
+}
+
+func TestKilnRepositoryWinsOverGitHubRepository(t *testing.T) {
+	t.Setenv("KILN_REPOSITORY", "acme/app")
+	t.Setenv("GITHUB_REPOSITORY", "someone/else")
+
+	if got := Load().Repository; got != "acme/app" {
+		t.Errorf("Repository = %q", got)
+	}
+}
+
+func TestUnknownForgeIsKeptForValidate(t *testing.T) {
+	t.Setenv("KILN_FORGE", "gitlab")
+
+	if got := Load().Forge; got != "gitlab" {
+		t.Errorf("Forge = %q, want the raw value so Validate can name it", got)
 	}
 }
 

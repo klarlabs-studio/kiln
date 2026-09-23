@@ -56,5 +56,25 @@ func ValidateCosignKey(v string) error {
 
 // Validate reports configuration that cannot work, before anything runs.
 func (e Env) Validate() error {
-	return ValidateCosignKey(e.CosignKey)
+	if err := ValidateCosignKey(e.CosignKey); err != nil {
+		return err
+	}
+	return e.ValidateForge()
+}
+
+// ValidateForge refuses an unknown KILN_FORGE and a self-hosted forge
+// without an instance URL. A typo that silently used api.github.com would
+// look like "every pull request is a fork" and never say why.
+func (e Env) ValidateForge() error {
+	switch e.Forge {
+	case "", ForgeGitHub:
+		return nil
+	case ForgeGitea, ForgeForgejo:
+		if strings.TrimSpace(e.ForgeURL) == "" {
+			return fmt.Errorf("envconfig: KILN_FORGE=%s requires KILN_FORGE_URL (the instance origin, e.g. https://gitea.example.com)", e.Forge)
+		}
+		return nil
+	default:
+		return fmt.Errorf("envconfig: unknown KILN_FORGE %q (github, gitea or forgejo)", e.Forge)
+	}
 }

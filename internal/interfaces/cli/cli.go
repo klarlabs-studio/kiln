@@ -73,7 +73,7 @@ RollOps is the only thing allowed to ship it.
 Usage:
   kiln version                          print version, commit and build date
   kiln init [--force]                   write a .kiln.yaml for this repository
-  kiln login [--status | --logout]      store a GitHub token in the OS keychain
+  kiln login [--status | --logout]      store a forge token in the OS keychain
   kiln box install [--every 5m]         schedule this repository on this machine
   kiln doctor [--config-only]           validate configuration and toolchain; run nothing
   kiln run --sha S --event E [flags]    build one commit
@@ -89,7 +89,7 @@ Usage:
 Run flags:
   --sha S        commit to build; "HEAD" and other commit-ish values are resolved
   --event E      pull_request, push or tag
-  --fork         treat the head as untrusted (implied when no GITHUB_TOKEN is set)
+  --fork         treat the head as untrusted (implied when no forge token is set)
   --ref R        ref the commit was found on, e.g. refs/heads/main
   --dir D        repository directory (default: the working directory)
   --pipeline P   pipeline file (default: <dir>/.kiln.yaml)
@@ -100,7 +100,11 @@ Environment:
   KILN_WARDEN          warden binary name
   KILN_NOX             nox binary name
   KILN_TRUSTED_KEYS    signer keys that permit a provenance skip
-  GITHUB_TOKEN         checks and pull request lookup
+  GITHUB_TOKEN         GitHub statuses and pull request lookup
+  GITEA_TOKEN          same, when KILN_FORGE=gitea
+  FORGEJO_TOKEN        same, when KILN_FORGE=forgejo
+  KILN_FORGE           github (default), gitea or forgejo
+  KILN_FORGE_URL       instance origin for Gitea, Forgejo or GitHub Enterprise
   KILN_LOG_LEVEL       debug, info, warn or error
 
 Verify flags:

@@ -34,7 +34,8 @@ The claim kiln competes on is narrow and stated honestly in `docs/competitive.md
 1. **Warden's note** on the commit — the configured checks ran and passed (ed25519, carried unmodified).
 2. **Kiln's SLSA v1 provenance** on the artifact — it was built from that commit, and whether this build ran the checks or inherited a trusted note.
 
-GitHub stays the forge (PRs, Checks, usually GHCR). Kiln takes the compute and the build provenance. Status: OSS MVP, MIT, single-tenant, self-hosted.
+The forge is a door: GitHub today, Gitea or Forgejo when `KILN_FORGE` says so.
+Kiln takes the compute and the build provenance. Status: OSS MVP, MIT, single-tenant, self-hosted.
 
 The operator it can serve honestly is also narrow: private source outside GitHub Enterprise Cloud (where Artifact Attestations are not free), an existing Linux box, and a source gate whose verdict they want *carried* rather than paraphrased. For a public repo already on Actions, GitHub's own attestations are strictly less to operate.
 

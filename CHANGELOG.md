@@ -8,6 +8,11 @@ All notable changes to kiln are documented here. The format follows
 
 ### Added
 
+- **Gitea and Forgejo as a forge door.** `KILN_FORGE=gitea` or `forgejo`
+  plus `KILN_FORGE_URL` talks to `/api/v1` for fork lookup, open pull
+  requests, proposals and commit statuses. Authority stays above the
+  adapter: a failed lookup is still a fork. Not an Actions clone, not
+  a webhook rewrite, not a second check language.
 - **Authority resolution below every mutating surface.** CLI, MCP and
   `POST /v1/run` submit a claim. Push and tag authority is established by
   membership on a trusted ref; a pull request without a number, or whose

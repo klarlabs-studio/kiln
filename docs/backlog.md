@@ -1,8 +1,9 @@
 The items below were the original migration list. Schedule, `keep`,
-task `pull_request`, and `services:` have landed. Near-term work now
-lives in [intent.md](intent.md): strengthen evidence and authority
-rather than grow the workflow language. The remaining real backlog
-item is declarative SARIF upload.
+task `pull_request`, `services:`, and the Gitea/Forgejo forge door have
+landed. Near-term work now lives in [intent.md](intent.md): strengthen
+evidence and authority rather than grow the workflow language. The
+remaining named backlog item is declarative SARIF upload — a product
+decision, because it increases GitHub coupling.
 
 ## Fire scheduled tasks from the watch loop
 

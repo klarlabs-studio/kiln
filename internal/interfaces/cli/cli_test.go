@@ -41,6 +41,7 @@ func repoWith(t *testing.T, pipeline string) *gittest.Repo {
 	for _, k := range []string{
 		"GITHUB_TOKEN", "GH_TOKEN", "KILN_TRUSTED_KEYS", "KILN_DRY",
 		"KILN_DB", "KILN_DIR", "GITHUB_REPOSITORY", "KILN_MCP_ALLOW_RUN",
+		"KILN_FORGE", "KILN_FORGE_URL", "KILN_REPOSITORY", "GITEA_TOKEN", "FORGEJO_TOKEN",
 	} {
 		t.Setenv(k, "")
 	}

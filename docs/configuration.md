@@ -503,7 +503,7 @@ write credential in it, and the config refuses to load. An untrusted head is
 refused a second time at runtime, for any caller that assembles a request by
 hand.
 
-With no `GITHUB_TOKEN` the branch is still pushed and the check says so. The
+With no forge token the branch is still pushed and the check says so. The
 work is not thrown away; it just needs a human to notice it.
 
 | Field | Meaning |
@@ -520,8 +520,9 @@ published. The last fire time is kept beside the ledger, so the interval
 survives a restart, and a box that was off for a week fires each due task once
 rather than replaying the backlog.
 
-Each task posts its own GitHub Check, named `Kiln / <task>`, so branch
-protection can require one and a red check names the thing that broke.
+Each task posts its own commit status (or GitHub Check, when the token is a
+GitHub App), named `Kiln / <task>`, so branch protection can require one
+and a red check names the thing that broke.
 
 **A task cannot mint provenance.** That is the line this feature does not
 cross: the signed artifacts of a run are exactly what `publish:` produced, and
@@ -555,6 +556,10 @@ away.
 `remote` and `ref` name the branch a tick follows. `pull_requests` and `tags`
 default to `true`; setting either `false` is honoured (they are tri-state
 internally, so "absent" and "explicitly false" are distinguishable).
+
+Which forge answers "is this pull request a fork" is **not** in this file.
+`KILN_FORGE` / `KILN_FORGE_URL` live in the operator environment, the same
+as the token. A `.kiln.yaml` on a fork must not retarget the box.
 
 ## `evidence`
 

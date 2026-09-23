@@ -29,6 +29,13 @@ const (
 	// legitimately slow; finite, because a hung docker pull would otherwise
 	// pin a watcher until somebody noticed.
 	DefaultPhaseTimeout = 45 * time.Minute
+
+	// Forge names Kiln recognises. Anything else is a load error: a typo
+	// silently talking to api.github.com from a Gitea box would look like
+	// "every pull request is a fork" forever.
+	ForgeGitHub  = "github"
+	ForgeGitea   = "gitea"
+	ForgeForgejo = "forgejo"
 )
 
 // Env is the resolved operator environment for one process.
@@ -75,11 +82,17 @@ type Env struct {
 	// filename, fail, and the failing argument would reach the logs and the
 	// git-tracked run ledger.
 	CosignKey string
-	// Token authorizes GitHub Checks and the PR fork lookup. Without it, Kiln
-	// posts no Checks and treats every pull request as a fork.
+	// Token authorizes forge statuses and the PR fork lookup. Without it,
+	// Kiln posts no statuses and treats every pull request as a fork.
 	Token string
 	// Repository is owner/name, used when the git remote is absent.
 	Repository string
+	// Forge is the code host: github (default), gitea or forgejo.
+	// Operator environment — never the pipeline file.
+	Forge string
+	// ForgeURL is the instance origin for Gitea, Forgejo or GitHub Enterprise
+	// (KILN_FORGE_URL). Empty means api.github.com when Forge is github.
+	ForgeURL string
 	// MCPAllowRun opts the MCP surface into push/tag runs (KILN_MCP_ALLOW_RUN=1).
 	MCPAllowRun bool
 	// Addr, DaemonToken and WebhookSecret configure kilnd.
@@ -107,6 +120,7 @@ type Env struct {
 // or an empty value, and the surfaces that actually require one (kilnd's
 // bearer token) say so at boot with a message naming the variable.
 func Load() Env {
+	forge := parseForge(os.Getenv("KILN_FORGE"))
 	return Env{
 		DB:            firstNonEmpty(os.Getenv("KILN_DB"), DefaultDB),
 		Dry:           truthy(os.Getenv("KILN_DRY")),
@@ -115,8 +129,10 @@ func Load() Env {
 		Goreleaser:    firstNonEmpty(os.Getenv("KILN_GORELEASER"), DefaultGoreleaser),
 		TrustedKeys:   splitList(os.Getenv("KILN_TRUSTED_KEYS")),
 		CosignKey:     strings.TrimSpace(os.Getenv("KILN_COSIGN_KEY")),
-		Token:         firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
-		Repository:    os.Getenv("GITHUB_REPOSITORY"),
+		Token:         loadToken(forge),
+		Repository:    firstNonEmpty(os.Getenv("KILN_REPOSITORY"), os.Getenv("GITHUB_REPOSITORY")),
+		Forge:         forge,
+		ForgeURL:      strings.TrimSpace(os.Getenv("KILN_FORGE_URL")),
 		MCPAllowRun:   truthy(os.Getenv("KILN_MCP_ALLOW_RUN")),
 		Addr:          firstNonEmpty(os.Getenv("KILN_ADDR"), DefaultAddr),
 		DaemonToken:   os.Getenv("KILN_TOKEN"),
@@ -184,4 +200,42 @@ func firstNonEmpty(vals ...string) string {
 		}
 	}
 	return ""
+}
+
+func parseForge(v string) string {
+	v = strings.ToLower(strings.TrimSpace(v))
+	if v == "" {
+		return ForgeGitHub
+	}
+	return v
+}
+
+// loadToken picks the credential that belongs to the configured forge.
+// GitHub names stay first on a GitHub box so an existing GITHUB_TOKEN is
+// unchanged. A Gitea box prefers GITEA_TOKEN so a leftover GitHub token
+// cannot silently authorize the wrong host.
+func loadToken(forge string) string {
+	switch forge {
+	case ForgeGitea:
+		return firstNonEmpty(
+			os.Getenv("GITEA_TOKEN"),
+			os.Getenv("FORGEJO_TOKEN"),
+			os.Getenv("GITHUB_TOKEN"),
+			os.Getenv("GH_TOKEN"),
+		)
+	case ForgeForgejo:
+		return firstNonEmpty(
+			os.Getenv("FORGEJO_TOKEN"),
+			os.Getenv("GITEA_TOKEN"),
+			os.Getenv("GITHUB_TOKEN"),
+			os.Getenv("GH_TOKEN"),
+		)
+	default:
+		return firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN"))
+	}
+}
+
+// SelfHosted reports whether this process talks to a Gitea or Forgejo instance.
+func (e Env) SelfHosted() bool {
+	return e.Forge == ForgeGitea || e.Forge == ForgeForgejo
 }

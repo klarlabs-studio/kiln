@@ -47,8 +47,8 @@ type Job struct {
 	Label string
 }
 
-// Forge is the part of the GitHub client discovery needs: which pull requests
-// are open, and which of those come from a fork.
+// Forge is the part of the code-host client discovery needs: which pull
+// requests are open, and which of those come from a fork.
 //
 // Nil, or Enabled reporting false, means the question cannot be asked. That is
 // not the same as "none are open", and the difference decides whether a pull
@@ -410,8 +410,9 @@ func (w *Watcher) fetch(ctx context.Context) error {
 	}
 
 	if w.Pipeline.WatchPullRequests() {
-		// GitHub exposes pull request heads as refs/pull/N/head. A non-GitHub
-		// remote simply has none, and the failure is not interesting.
+		// GitHub, Gitea and Forgejo expose pull request heads as
+		// refs/pull/N/head. A remote that does not simply has none, and the
+		// failure is not interesting.
 		if err := w.fetchWithRetry(ctx, remote, "+refs/pull/*/head:"+PRRefNamespace+"*"); err != nil {
 			log.Debug("no pull request refs on this remote", "remote", remote, "err", err)
 		}
@@ -743,7 +744,7 @@ func pullDecision(number int, open map[int]bool, authoritative bool, merged func
 // the map is then known to be closed, rather than merely unknown.
 func (w *Watcher) forkStatus(ctx context.Context) (map[int]bool, bool) {
 	if w.Forge == nil || !w.Forge.Enabled() {
-		w.logger().Warn("no github token: treating every pull request as a fork",
+		w.logger().Warn("no forge token: treating every pull request as a fork",
 			"effect", "no secrets, no publish, no provenance skip on any PR")
 		return nil, false
 	}

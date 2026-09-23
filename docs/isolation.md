@@ -80,10 +80,10 @@ one less thing a hostile head can influence.
 
 ## Fail closed on "I don't know"
 
-Kiln asks GitHub whether a pull request head lives in the same repository.
+Kiln asks the forge whether a pull request head lives in the same repository.
 Every way that question can fail resolves to **fork**:
 
-- no `GITHUB_TOKEN` → fork
+- no forge token → fork
 - the API call failed → fork
 - `head.repo` is null (the fork was deleted) → fork
 - `kiln run --event pull_request` with no `--pr` number → fork

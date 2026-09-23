@@ -1,10 +1,10 @@
-// Package github talks to the forge.
+// Package github talks to GitHub (and GitHub Enterprise).
 //
-// GitHub stays the forge: it owns pull requests, Checks and (usually) the
-// registry. Kiln takes the compute. This package is therefore small and
-// one-directional — it reports what Kiln did and asks two questions it cannot
-// answer locally (is this pull request from a fork, and what commit is at its
-// head). It implements no runner protocol and receives no work from Actions.
+// Kiln takes the compute. This package is small and one-directional — it
+// reports what Kiln did and asks two questions it cannot answer locally (is
+// this pull request from a fork, and what commit is at its head). Gitea and
+// Forgejo live in the sibling gitea package. Neither implements a runner
+// protocol or receives work from Actions.
 package github
 
 import (
@@ -32,6 +32,8 @@ import (
 // it through the client's BaseURL field.
 const DefaultBaseURL = "https://api.github.com"
 
+var _ ports.Host = (*Client)(nil)
+
 // Repo identifies a repository.
 type Repo struct {
 	Owner string
@@ -45,25 +47,56 @@ func (r Repo) String() string { return r.Owner + "/" + r.Name }
 func (r Repo) Valid() bool { return r.Owner != "" && r.Name != "" }
 
 // ParseRepo parses "owner/name", tolerating a full URL or a .git suffix so an
-// operator can paste whatever they have to hand.
+// operator can paste whatever they have to hand. The host is not assumed to
+// be github.com: a Gitea or Forgejo remote is the same two path segments.
 func ParseRepo(s string) (Repo, error) {
-	s = strings.TrimSpace(s)
-	s = strings.TrimSuffix(s, ".git")
-	if i := strings.Index(s, "github.com"); i >= 0 {
-		s = s[i+len("github.com"):]
-		s = strings.TrimLeft(s, ":/")
+	raw := strings.TrimSpace(s)
+	s = strings.TrimSuffix(raw, ".git")
+	if s == "" {
+		return Repo{}, fmt.Errorf("cannot read owner/name from %q", raw)
 	}
-	owner, name, ok := strings.Cut(strings.Trim(s, "/"), "/")
-	if !ok || owner == "" || name == "" || strings.Contains(name, "/") {
-		return Repo{}, fmt.Errorf("cannot read owner/name from %q", s)
+
+	path, hosted := stripRemoteHost(s)
+	path = strings.Trim(path, "/")
+	owner, name, ok := strings.Cut(path, "/")
+	if hosted && ok && strings.Contains(name, "/") {
+		// Instance installed under a subpath: https://git.example/git/owner/name
+		parts := strings.Split(path, "/")
+		owner, name = parts[len(parts)-2], parts[len(parts)-1]
+	}
+	if owner == "" || name == "" || strings.Contains(name, "/") {
+		return Repo{}, fmt.Errorf("cannot read owner/name from %q", raw)
 	}
 	return Repo{Owner: owner, Name: name}, nil
 }
 
+// stripRemoteHost peels a URL or scp-style remote down to the repository path.
+// hosted is true when a host was present, so a leftover path prefix can be
+// treated as an instance subdir rather than as garbage.
+func stripRemoteHost(s string) (string, bool) {
+	if u, err := url.Parse(s); err == nil && u.Scheme != "" && u.Host != "" {
+		return strings.Trim(u.Path, "/"), true
+	}
+	if at := strings.Index(s, "@"); at >= 0 {
+		rest := s[at+1:]
+		if i := strings.IndexAny(rest, ":/"); i >= 0 {
+			return strings.Trim(rest[i+1:], "/"), true
+		}
+	}
+	if i := strings.Index(s, "github.com"); i >= 0 {
+		return strings.TrimLeft(s[i+len("github.com"):], ":/"), true
+	}
+	if i := strings.Index(s, "/"); i > 0 && strings.Contains(s[:i], ".") {
+		return strings.Trim(s[i+1:], "/"), true
+	}
+	return strings.Trim(s, "/"), false
+}
+
 // DiscoverRepo resolves the repository from the git remote, falling back to
-// GITHUB_REPOSITORY. The remote is preferred because it is what the operator
-// actually configured; the variable exists for checkouts with no remote and
-// for containers that were handed a bare tree.
+// the environment (GITHUB_REPOSITORY / KILN_REPOSITORY). The remote is
+// preferred because it is what the operator actually configured; the
+// variable exists for checkouts with no remote and for containers that were
+// handed a bare tree.
 func DiscoverRepo(ctx context.Context, r execx.Runner, dir, remote, envRepo string) (Repo, error) {
 	if remote == "" {
 		remote = "origin"
@@ -79,7 +112,7 @@ func DiscoverRepo(ctx context.Context, r execx.Runner, dir, remote, envRepo stri
 	if envRepo != "" {
 		return ParseRepo(envRepo)
 	}
-	return Repo{}, fmt.Errorf("no github repository: %q has no usable url and GITHUB_REPOSITORY is unset", remote)
+	return Repo{}, fmt.Errorf("no forge repository: %q has no usable url and no repository environment is set", remote)
 }
 
 // Client is a minimal GitHub REST client.
@@ -257,15 +290,15 @@ func (c *Client) ListOpenPulls(ctx context.Context) ([]forge.Pull, error) {
 // on the next scheduled tick, in a log nobody is reading, into something said
 // at the moment it is pasted.
 func WhoAmI(ctx context.Context, token string) (string, error) {
-	// NewClient, not a hand-built struct: a literal here left HTTP nil and
-	// BaseURL empty, and `kiln login` panicked on a nil-pointer dereference
-	// before it ever reached the API. Step two of the three-command quick
-	// start, on every path including the documented --with-token one.
-	//
-	// The repo is a placeholder — /user is not repository-scoped — but the
-	// constructor requires one, and giving it a real-looking pair is cheaper
-	// than a second constructor for the one call that needs no repo.
-	return whoAmIAt(ctx, token, DefaultBaseURL)
+	return WhoAmIAt(ctx, token, DefaultBaseURL)
+}
+
+// WhoAmIAt is WhoAmI against an explicit API base, for GitHub Enterprise.
+func WhoAmIAt(ctx context.Context, token, baseURL string) (string, error) {
+	if strings.TrimSpace(baseURL) == "" {
+		baseURL = DefaultBaseURL
+	}
+	return whoAmIAt(ctx, token, baseURL)
 }
 
 // whoAmIAt is WhoAmI with the API base injectable, so the constructor path —

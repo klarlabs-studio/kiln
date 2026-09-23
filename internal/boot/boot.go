@@ -28,6 +28,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitea"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
@@ -71,8 +72,11 @@ type Deps struct {
 	// simply off in that case.
 	RepoErr error
 
-	Runner    execx.Runner
-	Store     *store.File
+	Runner execx.Runner
+	Store  *store.File
+	// Forge answers the authority-critical questions: which pull requests
+	// are open, and whether a given one is a fork. GitHub, Gitea or Forgejo.
+	Forge     ports.Host
 	GitHub    *github.Client
 	Checks    ports.Reporter
 	Engine    *engine.Engine
@@ -88,8 +92,8 @@ type Deps struct {
 // Dry reports whether this process will only plan a publish.
 func (d *Deps) Dry() bool { return d.Env.Dry }
 
-// ChecksEnabled reports whether Kiln can post to GitHub Checks.
-func (d *Deps) ChecksEnabled() bool { return d.GitHub != nil && d.GitHub.Enabled() }
+// ChecksEnabled reports whether Kiln can post a verdict to the forge.
+func (d *Deps) ChecksEnabled() bool { return d.Forge != nil && d.Forge.Enabled() }
 
 // Build assembles everything.
 //
@@ -133,7 +137,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	policyID := identifyPolicy(pipelineFile, found)
 
 	// A token from the environment wins — CI sets one, and an operator
-	// exporting GITHUB_TOKEN for one command means it. Otherwise the stored
+	// exporting a forge token for one command means it. Otherwise the stored
 	// one, so a schedule needs no credential in its unit file and no token in
 	// plaintext next to it.
 	//
@@ -158,8 +162,8 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	}
 
 	deps.Repo, deps.RepoErr = github.DiscoverRepo(ctx, runner, dir, pipeline.Watch.Remote, env.Repository)
-	deps.GitHub = buildClient(env, deps.Repo, log)
-	deps.Checks = buildReporter(deps.GitHub, log)
+	deps.Forge, deps.GitHub = buildForge(env, deps.Repo, log)
+	deps.Checks = buildReporter(env, deps.Forge, deps.GitHub, log)
 
 	// One warden binding serves both roles: deciding whether a re-prove can be
 	// skipped, and carrying warden's verdict onto the artifact.
@@ -178,7 +182,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		SourceAttester:   wardenProvenance,
 		Tasks:            task.New(runner),
 		Worktrees:        worktree.NewTrees(runner),
-		Proposer:         github.NewProposer(deps.GitHub),
+		Proposer:         buildProposer(deps.Forge),
 		KeepRoot:         filepath.Dir(deps.Store.Path()),
 		Services:         service.New(runner, log),
 		Checks:           deps.Checks,
@@ -241,10 +245,10 @@ func repoName(d *Deps) string {
 }
 
 func (d *Deps) lookupFork(ctx context.Context, number int) (bool, bool) {
-	if d.GitHub == nil || !d.GitHub.Enabled() {
+	if d.Forge == nil || !d.Forge.Enabled() {
 		return true, false
 	}
-	pull, err := d.GitHub.LookupPull(ctx, number)
+	pull, err := d.Forge.LookupPull(ctx, number)
 	if err != nil {
 		d.Log.Warn("could not look up pull request: treating it as a fork", "pr", number, "err", err)
 		return true, false
@@ -333,20 +337,51 @@ func identifyPolicy(path string, found bool) trust.PolicyIdentity {
 	return id
 }
 
-func buildClient(env envconfig.Env, repo github.Repo, log ports.Logger) *github.Client {
+func buildForge(env envconfig.Env, repo github.Repo, log ports.Logger) (ports.Host, *github.Client) {
 	if env.Token == "" || !repo.Valid() {
-		return nil
+		return nil, nil
 	}
-	return github.NewClient(env.Token, repo, log)
+	if env.SelfHosted() {
+		c := gitea.NewClient(env.Token, gitea.Repo{Owner: repo.Owner, Name: repo.Name}, env.ForgeURL, log)
+		if !c.Enabled() {
+			return nil, nil
+		}
+		return c, nil
+	}
+	gh := github.NewClient(env.Token, repo, log)
+	if env.ForgeURL != "" {
+		gh.BaseURL = strings.TrimSuffix(env.ForgeURL, "/")
+	}
+	return gh, gh
 }
 
-func buildReporter(c *github.Client, log ports.Logger) ports.Reporter {
-	if c == nil || !c.Enabled() {
+func buildProposer(host ports.Host) ports.PullProposer {
+	switch c := host.(type) {
+	case *github.Client:
+		return github.NewProposer(c)
+	case *gitea.Client:
+		return gitea.NewProposer(c)
+	default:
+		return nil
+	}
+}
+
+func buildReporter(env envconfig.Env, host ports.Host, gh *github.Client, log ports.Logger) ports.Reporter {
+	if host == nil || !host.Enabled() {
 		// No token: gate the commit, print the result, tell nobody. Failing
 		// here would make a laptop run impossible.
 		return ports.NoopReporter{}
 	}
-	return checks.NewGitHub(c, log)
+	if env.SelfHosted() {
+		if poster, ok := host.(checks.StatusPoster); ok {
+			return checks.NewStatuses(poster, log)
+		}
+		return ports.NoopReporter{}
+	}
+	if gh == nil || !gh.Enabled() {
+		return ports.NoopReporter{}
+	}
+	return checks.NewGitHub(gh, log)
 }
 
 // buildPublisher honours KILN_DRY. The dry publisher is a rehearsal that
@@ -439,7 +474,7 @@ func firstVersionToken(s string) string {
 	return ""
 }
 
-// ForkUnknown is the fork status to assume when GitHub cannot be asked.
+// ForkUnknown is the fork status to assume when the forge cannot be asked.
 //
 // True, always. Without a token Kiln cannot distinguish a maintainer's branch
 // from a stranger's fork, and the permissive guess hands a stranger the
@@ -450,12 +485,12 @@ const ForkUnknown = true
 // ResolvePullFork answers "is this pull request from a fork" as well as the
 // available credentials allow.
 func (d *Deps) ResolvePullFork(ctx context.Context, number int) bool {
-	if d.GitHub == nil || !d.GitHub.Enabled() {
-		d.Log.Warn("no github token: treating pull request as a fork",
+	if d.Forge == nil || !d.Forge.Enabled() {
+		d.Log.Warn("no forge token: treating pull request as a fork",
 			"pr", number, "effect", "no secrets, no publish, no provenance skip")
 		return ForkUnknown
 	}
-	pull, err := d.GitHub.LookupPull(ctx, number)
+	pull, err := d.Forge.LookupPull(ctx, number)
 	if err != nil {
 		d.Log.Warn("could not look up pull request: treating it as a fork", "pr", number, "err", err)
 		return ForkUnknown

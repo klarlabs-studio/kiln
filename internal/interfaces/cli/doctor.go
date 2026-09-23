@@ -379,11 +379,17 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	if deps.ChecksEnabled() {
 		// Deliberately not promising check runs. The Checks API only accepts a
 		// GitHub App token; a personal access token gets a 403 and kiln falls
-		// back to commit statuses. Both work as required contexts, and saying
-		// "checks will be posted" flatly would be false half the time.
-		r.ok("GITHUB_TOKEN present: results post as %q, %q and one per task",
+		// back to commit statuses. Gitea and Forgejo have no Checks API at
+		// all. Both statuses and check runs work as required contexts.
+		r.ok("forge token present: results post as %q, %q and one per task",
 			"Kiln / Prove", "Kiln / Publish")
-		r.note("a personal access token posts commit statuses; check runs need a GitHub App")
+		if deps.Env.SelfHosted() {
+			r.note("KILN_FORGE=%s posts commit statuses; Gitea and Forgejo have no Checks API", deps.Env.Forge)
+		} else {
+			r.note("a personal access token posts commit statuses; check runs need a GitHub App")
+		}
+	} else if deps.Env.SelfHosted() {
+		r.warn("no usable forge token: no statuses, and every pull request is treated as a fork")
 	} else {
 		r.warn("no usable GITHUB_TOKEN: no checks, and every pull request is treated as a fork")
 	}

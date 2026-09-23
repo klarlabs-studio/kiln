@@ -8,6 +8,7 @@ import (
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/domain/trust"
 	"go.klarlabs.de/kiln/internal/gittest"
+	"go.klarlabs.de/kiln/internal/infrastructure/checks"
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/publish"
@@ -268,5 +269,57 @@ func TestResolvePullForkWithoutATokenAssumesFork(t *testing.T) {
 
 	if !deps.ResolvePullFork(t.Context(), 7) {
 		t.Error("a pull request that cannot be identified must be treated as a fork")
+	}
+}
+
+func TestGiteaForgeWiresStatusesNotGitHubChecks(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	e := env(t)
+	e.Token = "gitea-tok"
+	e.Repository = "klarlabs-studio/kiln"
+	e.Forge = envconfig.ForgeGitea
+	e.ForgeURL = "https://gitea.example.com"
+
+	deps := build(t, repo.Dir, e)
+
+	if !deps.ChecksEnabled() {
+		t.Fatal("ChecksEnabled = false on a configured Gitea box")
+	}
+	if deps.GitHub != nil {
+		t.Error("a Gitea box must not build a GitHub client")
+	}
+	if deps.Forge == nil || !deps.Forge.Enabled() {
+		t.Fatal("Forge was not wired")
+	}
+	if _, ok := deps.Checks.(*checks.Statuses); !ok {
+		t.Errorf("reporter = %T, want *checks.Statuses", deps.Checks)
+	}
+	if deps.Engine.Proposer == nil {
+		t.Error("a Gitea box with a token must still be able to propose")
+	}
+}
+
+func TestUnknownForgeIsRefusedAtBoot(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	e := env(t)
+	e.Forge = "gitlab"
+
+	_, err := Build(t.Context(), Options{Dir: repo.Dir, Env: &e, Log: obs.Discard()})
+	if err == nil || !strings.Contains(err.Error(), "gitlab") {
+		t.Errorf("err = %v, want unknown KILN_FORGE refused", err)
+	}
+}
+
+func TestGiteaWithoutAnInstanceURLIsRefusedAtBoot(t *testing.T) {
+	repo := gittest.New(t)
+	repo.Commit("first", "app.txt", "one\n")
+	e := env(t)
+	e.Forge = envconfig.ForgeGitea
+
+	_, err := Build(t.Context(), Options{Dir: repo.Dir, Env: &e, Log: obs.Discard()})
+	if err == nil || !strings.Contains(err.Error(), "KILN_FORGE_URL") {
+		t.Errorf("err = %v, want KILN_FORGE_URL required", err)
 	}
 }

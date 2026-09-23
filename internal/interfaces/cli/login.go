@@ -9,7 +9,9 @@ import (
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/infrastructure/credstore"
+	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gitea"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
 )
 
@@ -55,7 +57,7 @@ func runLogin(ctx context.Context, args []string, io IO) error {
 	// Checked before it is stored. A token that cannot read the repository is
 	// a token somebody will spend an afternoon on, and the failure would
 	// otherwise appear on the next scheduled tick, in a log nobody is reading.
-	login, err := github.WhoAmI(ctx, token)
+	login, err := identifyToken(ctx, token)
 	if err != nil {
 		return failWith(ExitConfig, "that token did not work: %v", err)
 	}
@@ -86,9 +88,9 @@ func loginStatus(ctx context.Context, store *credstore.Store, io IO) error {
 		return wrapExit(ExitError, err)
 	}
 
-	login, err := github.WhoAmI(ctx, token)
+	login, err := identifyToken(ctx, token)
 	if err != nil {
-		io.print(fmt.Sprintf("a token is stored in the %s, but GitHub rejected it: %v\n", kind, err))
+		io.print(fmt.Sprintf("a token is stored in the %s, but the forge rejected it: %v\n", kind, err))
 		return failWith(ExitConfig, "the stored token no longer works")
 	}
 	io.print(fmt.Sprintf("logged in as %s, from the %s\n", login, kind))
@@ -105,13 +107,17 @@ func readToken(io IO, fromStdin bool) (string, error) {
 		return strings.TrimSpace(line), nil
 	}
 
-	io.print("kiln needs a GitHub token to post check results and, if a task opens\n" +
-		"pull requests, to push a branch.\n\n")
-	io.print("Create one here — the permissions are pre-filled:\n  " + tokenURL + "\n\n")
-	io.print("  Repository access:  only the repositories kiln will watch\n")
-	io.print("  Commit statuses:    read and write\n")
-	io.print("  Contents:           read   (write, if a task opens pull requests)\n")
-	io.print("  Pull requests:      read and write, for the same reason\n\n")
+	if envconfig.Load().SelfHosted() {
+		printSelfHostedTokenPrompt(io)
+	} else {
+		io.print("kiln needs a GitHub token to post check results and, if a task opens\n" +
+			"pull requests, to push a branch.\n\n")
+		io.print("Create one here — the permissions are pre-filled:\n  " + tokenURL + "\n\n")
+		io.print("  Repository access:  only the repositories kiln will watch\n")
+		io.print("  Commit statuses:    read and write\n")
+		io.print("  Contents:           read   (write, if a task opens pull requests)\n")
+		io.print("  Pull requests:      read and write, for the same reason\n\n")
+	}
 	io.print("Paste it here (it will not be echoed to the terminal by your shell): ")
 
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
@@ -120,4 +126,32 @@ func readToken(io IO, fromStdin bool) (string, error) {
 	}
 	io.print("\n")
 	return strings.TrimSpace(line), nil
+}
+
+func printSelfHostedTokenPrompt(io IO) {
+	env := envconfig.Load()
+	io.print("kiln needs a token for this Gitea/Forgejo instance to post commit\n" +
+		"statuses and, if a task opens pull requests, to push a branch.\n\n")
+	if env.ForgeURL != "" {
+		io.print("  instance: " + env.ForgeURL + "\n")
+	} else {
+		io.print("  set KILN_FORGE_URL to the instance origin before pasting a token\n")
+	}
+	io.print("  repository: read\n")
+	io.print("  commit statuses: write\n")
+	io.print("  pull requests: read and write, if a task proposes a change\n\n")
+}
+
+// identifyToken asks the configured forge who this token is. The check
+// happens before the credential is stored so a bad paste fails here, not
+// on the next unattended tick.
+func identifyToken(ctx context.Context, token string) (string, error) {
+	env := envconfig.Load()
+	if err := env.ValidateForge(); err != nil {
+		return "", err
+	}
+	if env.SelfHosted() {
+		return gitea.WhoAmI(ctx, token, env.ForgeURL)
+	}
+	return github.WhoAmIAt(ctx, token, env.ForgeURL)
 }

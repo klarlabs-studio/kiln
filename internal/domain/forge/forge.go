@@ -1,6 +1,6 @@
 // Package forge holds what kiln needs to know about the code-hosting service
-// a repository lives on — GitHub today, and nothing in this package assumes
-// that stays true.
+// a repository lives on — GitHub, Gitea or Forgejo. Nothing in this package
+// assumes which HTTP adapter produced a Pull.
 //
 // It sits in the domain because the isolation policy is decided from it. Which
 // HTTP call produced a Pull is an adapter's business; whether the head lives in
