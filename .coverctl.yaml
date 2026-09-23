@@ -33,5 +33,8 @@ policy:
     - name: execx
       match: ["./internal/infrastructure/execx", "./internal/infrastructure/execx/..."]
       min: 55
+    - name: gitea
+      match: ["./internal/infrastructure/gitea", "./internal/infrastructure/gitea/..."]
+      min: 75
 exclude:
   - "**/testdata/**"

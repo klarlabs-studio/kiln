@@ -311,3 +311,32 @@ func TestNewProposerNilWhenDisabled(t *testing.T) {
 		t.Error("disabled client must yield a nil proposer")
 	}
 }
+
+func TestProposerOpensAndLabels(t *testing.T) {
+	c := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet:
+			_, _ = w.Write([]byte(`[]`))
+		case strings.Contains(r.URL.Path, "/labels"):
+			w.WriteHeader(http.StatusOK)
+		default:
+			_, _ = w.Write([]byte(`{
+				"number": 12,
+				"head": {"sha": "abc", "ref": "kiln/deps", "repo": {"full_name": "klarlabs-studio/kiln"}},
+				"base": {"repo": {"full_name": "klarlabs-studio/kiln"}}
+			}`))
+		}
+	})
+
+	p := NewProposer(c)
+	if p == nil {
+		t.Fatal("an enabled client must yield a proposer")
+	}
+	n, opened, err := p.OpenPullRequest(t.Context(), "kiln/deps", "main", "deps", "body")
+	if err != nil || !opened || n != 12 {
+		t.Fatalf("OpenPullRequest = %d opened=%v err=%v", n, opened, err)
+	}
+	if err := p.LabelPull(t.Context(), n, []string{"kiln"}); err != nil {
+		t.Fatal(err)
+	}
+}
