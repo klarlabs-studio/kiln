@@ -33,6 +33,11 @@ func TestParseRepo(t *testing.T) {
 		"https://github.com/felixgeelhaar/glossa.git",
 		"git@github.com:felixgeelhaar/glossa.git",
 		"ssh://git@github.com/felixgeelhaar/glossa",
+		"https://gitea.example.com/felixgeelhaar/glossa.git",
+		"git@gitea.example.com:felixgeelhaar/glossa.git",
+		"https://codeberg.org/felixgeelhaar/glossa",
+		"gitea.example.com/felixgeelhaar/glossa",
+		"https://git.example.com/git/felixgeelhaar/glossa.git",
 	} {
 		got, err := ParseRepo(in)
 		if err != nil {

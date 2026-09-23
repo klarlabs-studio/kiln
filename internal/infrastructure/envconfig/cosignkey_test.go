@@ -79,3 +79,20 @@ func TestValidateReachesTheCosignKey(t *testing.T) {
 		t.Errorf("Env.Validate rejected a file path: %v", err)
 	}
 }
+
+func TestValidateForgeRequiresAURLOnGitea(t *testing.T) {
+	err := (Env{Forge: ForgeGitea}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "KILN_FORGE_URL") {
+		t.Errorf("err = %v, want it to name KILN_FORGE_URL", err)
+	}
+	if err := (Env{Forge: ForgeGitea, ForgeURL: "https://gitea.example.com"}).Validate(); err != nil {
+		t.Errorf("a Gitea box with an instance URL must be accepted: %v", err)
+	}
+}
+
+func TestValidateForgeRejectsAnUnknownHost(t *testing.T) {
+	err := (Env{Forge: "gitlab"}).Validate()
+	if err == nil || !strings.Contains(err.Error(), "gitlab") {
+		t.Errorf("err = %v, want it to name the unknown forge", err)
+	}
+}

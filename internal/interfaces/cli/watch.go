@@ -254,7 +254,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool, pipelinePath string) *watch.
 		Authority:    deps.Authority,
 		Store:        deps.Store,
 		Git:          gitcli.New(deps.Runner),
-		Forge:        deps.GitHub,
+		Forge:        deps.Forge,
 		Log:          deps.Log,
 		Dir:          deps.Dir,
 		Pipeline:     deps.Pipeline,

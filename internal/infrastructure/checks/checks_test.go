@@ -1,6 +1,7 @@
 package checks
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -304,5 +305,54 @@ func TestPublishSummaryForAFailure(t *testing.T) {
 	}
 	if !strings.Contains(summary, "cosign sign refused") {
 		t.Errorf("summary = %q", summary)
+	}
+}
+
+type recordingPoster struct {
+	calls []statusCall
+}
+
+type statusCall struct {
+	sha, state, context, description string
+}
+
+func (p *recordingPoster) Enabled() bool { return true }
+
+func (p *recordingPoster) CreateStatus(_ context.Context, sha, state, context, description string) error {
+	p.calls = append(p.calls, statusCall{sha, state, context, description})
+	return nil
+}
+
+func TestStatusesReporterPostsPendingThenVerdict(t *testing.T) {
+	p := &recordingPoster{}
+	r := NewStatuses(p, obs.Discard())
+
+	if err := r.Start(t.Context(), ports.NameProve, "abc"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionSuccess, "gate passed", "ignored"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(p.calls) != 2 {
+		t.Fatalf("calls = %d, want pending then success", len(p.calls))
+	}
+	if p.calls[0].state != "pending" || p.calls[0].description != "running" {
+		t.Errorf("start = %+v", p.calls[0])
+	}
+	if p.calls[1].state != "success" || p.calls[1].description != "gate passed" {
+		t.Errorf("complete = %+v", p.calls[1])
+	}
+}
+
+func TestStatusesReporterMapsFailure(t *testing.T) {
+	p := &recordingPoster{}
+	r := NewStatuses(p, obs.Discard())
+
+	if err := r.Complete(t.Context(), ports.NameProve, "abc", ports.ConclusionFailure, "gate failed", ""); err != nil {
+		t.Fatal(err)
+	}
+	if p.calls[0].state != "failure" {
+		t.Errorf("state = %q, want failure", p.calls[0].state)
 	}
 }

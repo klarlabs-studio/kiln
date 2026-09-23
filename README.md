@@ -217,7 +217,11 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_WARDEN` / `KILN_NOX` / `KILN_GORELEASER` | Binary names |
 | `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** Also defaults `evidence.source` to `required`. |
 | `KILN_COSIGN_KEY` | Signing key for publish. Empty means keyless, which needs an ambient OIDC identity. Takes any form cosign's `--key` does: a path, `env://VAR`, `k8s://ns/name`, or a KMS URI. **Required on a self-hosted builder** — see [Signing](#signing). |
-| `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
+| `GITHUB_TOKEN` / `GH_TOKEN` | GitHub statuses and pull request fork lookup |
+| `GITEA_TOKEN` / `FORGEJO_TOKEN` | Same, when `KILN_FORGE` is `gitea` or `forgejo` |
+| `KILN_FORGE` | `github` (default), `gitea` or `forgejo` |
+| `KILN_FORGE_URL` | Instance origin for Gitea, Forgejo or GitHub Enterprise |
+| `KILN_REPOSITORY` | `owner/name`, preferred over `GITHUB_REPOSITORY` when the git remote is absent |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
 | `KILN_ADDR` | kilnd bind address (default `127.0.0.1:8088`) |
 | `KILN_TOKEN` | kilnd bearer token — **required to boot**. Equivalent to registry write plus signing: a leaked token can ask this box to build. Push/tag still require the SHA to be on a trusted ref. |
@@ -273,7 +277,9 @@ Policy is a function of event and fork, enforced in the engine — **not** in th
 | `pull_request` | no | no | no | yes | no |
 | `push` / `tag` | — | yes | yes | yes | no |
 
-Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket. They also request a Landlock filesystem confine of the worktree when the kernel has it. That is not a sandbox: network stays open, and without Landlock the child is scrubbed only.
+Without a forge token, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket. They also request a Landlock filesystem confine of the worktree when the kernel has it. That is not a sandbox: network stays open, and without Landlock the child is scrubbed only.
+
+A Gitea or Forgejo box is the same factory pointed at a different host. Set `KILN_FORGE=gitea` (or `forgejo`) and `KILN_FORGE_URL` to the instance origin. Kiln posts commit statuses — those forges have no Checks API — and asks the same two questions: which pull requests are open, and whether the head lives in someone else's repository. It does not grow a workflow language and it does not become their Actions runner.
 
 A same-repo pull request may skip the re-prove but still may not publish. An image built from an unmerged head is one nobody should be able to ship.
 

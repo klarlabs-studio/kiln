@@ -66,11 +66,11 @@ picture.
 
 **A self-hosted forge with Actions-compatible runners** — Gitea or Forgejo —
 is the real substitute for the operator kiln targets, in the way Dokploy is the
-substitute for RollOps. It answers "where do I build this privately" by owning
-the forge, and once it does, an Actions-shaped workflow is the obvious place to
-put a cosign step. The counter-argument is not that it cannot sign; it is that
-signing remains a step somebody has to write, get right and keep right, and
-that nothing checks whether they did.
+substitute for RollOps. It answers "where do I host this privately" by owning
+the forge. Kiln talks to that forge as a door — fork lookup, open pulls,
+proposals, commit statuses — and stays the factory. An Actions-shaped workflow
+on the same box is the thing Kiln is not: signing remains a step somebody has
+to write, get right and keep right, and nothing checks whether they did.
 
 ## Adjacent, not competing
 

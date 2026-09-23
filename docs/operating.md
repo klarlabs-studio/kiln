@@ -12,7 +12,8 @@ Kiln runs other programs. A machine that runs Kiln needs, on `PATH`:
 - `nox` — only with `prove.nox: true`
 
 It also needs a checkout of the repository and credentials for the registry
-(`docker login`) and the forge (`GITHUB_TOKEN`).
+(`docker login`) and the forge (`GITHUB_TOKEN`, or `GITEA_TOKEN` /
+`FORGEJO_TOKEN` when `KILN_FORGE` is `gitea` or `forgejo`).
 
 Check all of it at once:
 
@@ -62,10 +63,10 @@ wants to know now whether it works, not in five minutes.
 ### What a tick does
 
 1. `git fetch` the tracked branch (fatal if it fails)
-2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a non-GitHub
-   remote simply has none)
+2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a remote
+   without pull refs simply has none)
 3. `git fetch +refs/tags/*` (not fatal)
-4. Ask GitHub which pull requests are open, and which of those are same-repo;
+4. Ask the forge which pull requests are open, and which of those are same-repo;
    without a token, every one is a fork
 5. Drop any pull ref whose pull request is no longer open
 6. Drop any tag the box inherited (see *What a new box does not do*)
@@ -313,6 +314,28 @@ protection, a one-line description instead of a body.
 If you want the richer output, register a GitHub App for your org, install it
 on the repositories kiln watches, and give kiln an installation token.
 
+## A Gitea or Forgejo box
+
+Kiln is a factory, not a forge. Pointing it at a self-hosted host does not
+grow a workflow language and does not become their Actions runner. It asks
+the same two questions it asks GitHub — which pull requests are open, and
+whether the head lives in someone else's repository — and posts commit
+statuses under the same names branch protection can require.
+
+```bash
+export KILN_FORGE=gitea          # or forgejo
+export KILN_FORGE_URL=https://gitea.example.com
+export GITEA_TOKEN=…             # FORGEJO_TOKEN on a Forgejo box
+kiln login
+kiln doctor
+kiln watch --every 5m
+```
+
+Gitea and Forgejo have no Checks API. Statuses are the report. The GitHub
+webhook endpoint stays GitHub-only; `watch --every` is the self-host path.
+Release-asset upload is still GitHub-only. A failed or missing lookup is
+still a fork.
+
 ## Disk
 
 Each watch tick reaps worktrees left by killed runs — directories under the
@@ -486,7 +509,7 @@ should not. Upgrade.
 **"publish: tag plan for ref ... produces no moving tag"** — `tags: [sha,
 semver]` on a branch push. Add `latest`, or route `semver` only to tag events.
 
-**Every pull request shows as a fork** — no `GITHUB_TOKEN`, or the API call
+**Every pull request shows as a fork** — no forge token, or the API call
 failed. Kiln cannot tell a maintainer's branch from a stranger's, and the
 permissive guess would hand over credentials.
 
@@ -494,7 +517,7 @@ permissive guess would hand over credentials.
 note signed by a key the operator pinned; an unpinned verify would accept a key
 the PR author just generated.
 
-**Nothing appears in GitHub Checks** — no token, or the repository could not be
+**Nothing appears as a commit status** — no token, or the repository could not be
 identified. `kiln doctor` says which.
 
 **`docker buildx build` fails on multi-arch** — the default `docker` driver
