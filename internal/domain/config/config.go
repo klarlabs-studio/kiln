@@ -233,7 +233,13 @@ type Artifact struct {
 	// commit, and reproducibility from the commit is the whole claim kiln
 	// makes about an artifact.
 	//
-	// They are recorded in the provenance, because two images built from one
+	// A value may reference what is derived from the commit or tag being
+	// built — ${kiln.sha}, ${kiln.short_sha}, ${kiln.version}, ${kiln.ref} —
+	// which keeps the build reproducible from the commit, unlike an
+	// environment passthrough. Unknown ${kiln.*} names are a load error;
+	// ${kiln.version} needs a semver tag ref. See ResolveArgs.
+	//
+	// They are recorded (resolved) in the provenance, because two images built from one
 	// commit and one Dockerfile — senat-api and senat-runtime differ only by
 	// BIN= — are otherwise indistinguishable in their attestations.
 	Args map[string]string `yaml:"args"`
@@ -779,6 +785,9 @@ func (a Artifact) validateImage(where string) error {
 	}
 	if strings.TrimSpace(a.Context) == "" {
 		return fmt.Errorf("%s.context must not be empty", where)
+	}
+	if err := validateArgPlaceholders(where, a.Args); err != nil {
+		return err
 	}
 	for id, ref := range a.Secrets {
 		if strings.TrimSpace(id) == "" {
