@@ -26,7 +26,9 @@ type Plan struct {
 	// Dockerfile and Context are relative to the checked-out tree.
 	Dockerfile string
 	Context    string
-	// Args are the build arguments, as explicit key=value pairs.
+	// Args are the build arguments, as explicit key=value pairs, with any
+	// ${kiln.*} placeholders already resolved. These are the values docker
+	// receives and the provenance records.
 	Args map[string]string
 	// Secrets are BuildKit build secrets, as id -> environment variable name.
 	// The VALUES are never held here: the plan is printed to operators and
@@ -177,9 +179,15 @@ func BuildPlan(cfg config.Artifact, sha, ref string) (Plan, error) {
 		Platforms:  cfg.Platforms,
 		Dockerfile: cfg.Dockerfile,
 		Context:    cfg.Context,
-		Args:       cfg.Args,
 		Secrets:    secretEnvs(cfg),
 	}
+	args, err := config.ResolveArgs(cfg.Args, config.ArgContext{
+		SHA: sha, ShortSHA: shortSHA(sha), Version: semverVersion(ref), Ref: ref,
+	})
+	if err != nil {
+		return Plan{}, fmt.Errorf("publish: %w", err)
+	}
+	plan.Args = args
 	if len(plan.Platforms) == 0 {
 		plan.Platforms = []string{"linux/amd64"}
 	}
@@ -238,6 +246,19 @@ func semverTag(ref string) (tag, note string) {
 		return rewritten, fmt.Sprintf("semver build metadata rewritten for OCI: %s → %s", name, rewritten)
 	}
 	return name, ""
+}
+
+// semverVersion is the version of a semver tag ref without a leading "v", or ""
+// when the ref is not one. It accepts exactly what the semver tag kind does.
+// Build metadata is kept as written: a build argument may contain '+', which
+// only a Docker tag forbids.
+func semverVersion(ref string) string {
+	name := strings.TrimPrefix(ref, "refs/tags/")
+	if name == ref || !semverRef.MatchString(name) {
+		return ""
+	}
+
+	return strings.TrimPrefix(name, "v")
 }
 
 func shortSHA(sha string) string {

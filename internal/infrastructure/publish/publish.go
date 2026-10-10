@@ -134,7 +134,7 @@ func (d *Docker) build(ctx context.Context, req ports.PublishRequest, plan Plan,
 	if err := d.sign(ctx, reference, req); err != nil {
 		return ports.PublishResult{}, err
 	}
-	if err := d.attest(ctx, plan.Image, digest, reference, req); err != nil {
+	if err := d.attest(ctx, plan, plan.Image, digest, reference, req); err != nil {
 		return ports.PublishResult{}, err
 	}
 	if err := d.attachSBOM(ctx, reference, req); err != nil {
@@ -161,7 +161,10 @@ func (d *Docker) build(ctx context.Context, req ports.PublishRequest, plan Plan,
 // signature but no provenance is one whose origin cannot be checked, and
 // "signed by someone" is a much weaker claim than the one kiln exists to
 // make. Better to fail a build than to quietly downgrade what shipped.
-func (d *Docker) attest(ctx context.Context, image, digest, reference string, req ports.PublishRequest) error {
+// imageAttestInput is the attestation input for one image. Build arguments come
+// from the plan, not the config: the provenance must record the values the
+// image was built with, and a ${kiln.*} placeholder is only a template.
+func imageAttestInput(plan Plan, image, digest string, req ports.PublishRequest) ports.AttestInput {
 	in := req.Provenance
 	in.SubjectName = image
 	in.SubjectDigest = digest
@@ -172,9 +175,15 @@ func (d *Docker) attest(ctx context.Context, image, digest, reference string, re
 	// Two images can share a commit and a Dockerfile and differ only by their
 	// build arguments; without recording them the attestations are identical
 	// while the images are not.
-	in.BuildArgs = req.Artifact.Args
+	in.BuildArgs = plan.Args
 	// Ids only — a provenance statement is published beside the image.
 	in.SecretIDs = req.Artifact.SecretIDs()
+
+	return in
+}
+
+func (d *Docker) attest(ctx context.Context, plan Plan, image, digest, reference string, req ports.PublishRequest) error {
+	in := imageAttestInput(plan, image, digest, req)
 
 	stmt, err := attest.Build(in)
 	if err != nil {

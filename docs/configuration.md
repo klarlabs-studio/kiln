@@ -43,7 +43,7 @@ publish:                          # a LIST of artifacts
     dockerfile: Dockerfile
     context: .
     args:                         # docker build arguments, optional
-      BIN: api
+      BIN: api                    # values may use ${kiln.sha}, ${kiln.version}, …
     secrets:                      # BuildKit build secrets, optional
       node_auth: env://NODE_AUTH_TOKEN
 
@@ -207,8 +207,40 @@ FOO from the environment". A build whose output depends on the box's
 environment is not reproducible from the commit, and reproducibility from the
 commit is the entire claim kiln makes about an artifact.
 
-The arguments are **recorded in the provenance**, under
-`buildDefinition.externalParameters.buildArgs`. They have to be: two images
+### Placeholders derived from the commit
+
+A value may reference what kiln already knows about the commit or tag it is
+building. Nothing is read from the environment, so the same commit always
+resolves the same way and the image stays reproducible from it:
+
+```yaml
+args:
+  VERSION: "${kiln.version}"
+  REVISION: "${kiln.sha}"
+```
+
+| Placeholder | Value |
+|---|---|
+| `${kiln.sha}` | the full commit SHA |
+| `${kiln.short_sha}` | the short SHA used in `sha-…` tags (7 characters) |
+| `${kiln.version}` | the semver of the tag being built, without the leading `v` (`v1.2.3` gives `1.2.3`; prerelease and `+build` metadata are kept as written) |
+| `${kiln.ref}` | the ref being built, e.g. `refs/tags/v1.2.3` |
+
+A placeholder may sit inside a longer string (`v${kiln.version}-x`). Only the
+exact `${kiln.<name>}` form is substituted: an unknown `${kiln.…}` name is a
+load error listing the known ones, and anything else (`${HOME}`, `$PATH`) is a
+literal, passed to docker as written. There is no escape syntax and no shell
+expansion.
+
+`${kiln.version}` needs a semver tag ref. Like the `semver` tag kind it has
+nothing to derive on a branch push, but where that kind just produces no tag,
+an argument has no sensible fallback, so planning that publish fails with an
+error rather than building an image labelled with an empty version. Publish the
+artifact only on tag events (`on: [tag]`) when it uses `${kiln.version}`;
+`kiln doctor` plans a tag-only artifact against a representative tag.
+
+The arguments are **recorded in the provenance**, resolved,, under
+`buildDefinition.externalParameters.buildArgs` (the resolved values, not the placeholders). They have to be: two images
 built from one commit and one Dockerfile are otherwise indistinguishable in
 their attestations while their contents differ. Anyone reproducing the build
 needs them, which is what `externalParameters` is for.

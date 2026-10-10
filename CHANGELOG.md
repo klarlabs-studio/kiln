@@ -6,6 +6,17 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Commit-derived build arguments.** `publish[].args` values may reference
+  `${kiln.sha}`, `${kiln.short_sha}`, `${kiln.version}` (semver of the tag being
+  built, no leading `v`) and `${kiln.ref}`, so an image can carry its revision
+  and version without hand-bumping `.kiln.yaml`. They are derived from the
+  commit, not the environment, so builds stay reproducible. Unknown
+  `${kiln.*}` names fail at load; `${kiln.version}` on a non-tag ref fails the
+  plan. The resolved values are what docker receives and what the provenance
+  records.
+
 ## [0.6.0] - 2026-08-29
 
 A private key that reached the ledger, a form of key storage doctor called
