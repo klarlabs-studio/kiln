@@ -15,6 +15,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
@@ -68,6 +69,11 @@ type Watcher struct {
 	// function to be testable at all. ports.PullProposer is the same idea.
 	Forge Forge
 	Log   ports.Logger
+	// Output receives the subprocess output of every run a tick starts —
+	// warden's step results, the image build. Nil keeps them quiet. On an
+	// unattended box it is the only record of why a gate failed, so a
+	// surface that has somewhere to write must set it.
+	Output io.Writer
 
 	// Dir is the repository to watch.
 	Dir string
@@ -197,6 +203,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 			Repo:     w.Repo,
 			Dir:      w.Dir,
 			Pipeline: w.Pipeline,
+			Output:   w.Output,
 		})
 		if runErr != nil {
 			log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
@@ -548,6 +555,7 @@ func (w *Watcher) runScheduled(ctx context.Context) {
 	log.Info("running scheduled tasks", "count", len(fire), "sha", run.ShortSHA(head.SHA))
 	if _, err := w.Engine.RunScheduled(ctx, engine.Request{
 		Dir: w.Dir, SHA: head.SHA, Ref: head.Ref, Repo: w.Repo, Pipeline: w.Pipeline,
+		Output: w.Output,
 	}, fire); err != nil {
 		log.Error("scheduled tasks failed", "err", err)
 	}

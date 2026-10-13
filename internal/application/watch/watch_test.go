@@ -1,8 +1,10 @@
 package watch
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -108,6 +110,34 @@ func TestOnceBuildsTheTrackedBranch(t *testing.T) {
 	}
 	if job.SHA != f.upstream.Head() {
 		t.Errorf("SHA = %s, want the upstream head %s", job.SHA, f.upstream.Head())
+	}
+}
+
+// A box runs unattended, so its log is the only record of why a gate failed.
+// The watcher used to build engine requests without an Output, which sent
+// warden's step results to nowhere: a failure logged "exit 1" and nothing a
+// person could act on.
+func TestOnceStreamsGateOutputToTheWatcherOutput(t *testing.T) {
+	f := newFixture(t)
+	f.watcher.Engine.Prover = ports.ProveFunc(func(_ context.Context, req ports.ProveRequest) error {
+		if req.Output == nil {
+			return errors.New("prove request carried no output writer")
+		}
+		_, err := io.WriteString(req.Output, "FAIL integration: container start timed out\n")
+		return err
+	})
+	var out bytes.Buffer
+	f.watcher.Output = &out
+
+	res, err := f.watcher.Once(t.Context(), false)
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if len(res.Executed) != 1 || res.Executed[0].Err != nil {
+		t.Fatalf("executed = %+v", res.Executed)
+	}
+	if !strings.Contains(out.String(), "FAIL integration: container start timed out") {
+		t.Errorf("watcher output = %q, want the gate's output", out.String())
 	}
 }
 
