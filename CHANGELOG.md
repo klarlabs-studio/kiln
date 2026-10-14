@@ -6,6 +6,15 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-14
+
+### Fixed
+
+- **`kiln watch` and `kiln poll` stream run output.** The watcher handed the
+  engine no output writer, so everything a gate or a build printed was
+  discarded and a failing job on a box logged only `exit 1`. Watch runs now
+  stream to the same output `kiln run` uses, and `--quiet` still silences it.
+
 ## [0.7.0] - 2026-10-10
 
 Build arguments that carry the commit and the release version, without
@@ -801,7 +810,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/klarlabs-studio/kiln/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/klarlabs-studio/kiln/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/klarlabs-studio/kiln/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/klarlabs-studio/kiln/compare/v0.4.1...v0.5.0
