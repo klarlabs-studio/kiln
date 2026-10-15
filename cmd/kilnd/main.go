@@ -42,7 +42,8 @@ func start() int {
 
 func run(ctx context.Context) error {
 	// Output is nil: a daemon's subprocess output belongs in the structured
-	// log, not interleaved on its stdout.
+	// log, not interleaved on its stdout. The server captures each run's
+	// output itself and logs its tail when the run fails.
 	deps, err := boot.Build(ctx, boot.Options{})
 	if err != nil {
 		return err

@@ -6,6 +6,13 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **kilnd logs why a run failed.** The daemon has no terminal to stream to,
+  so a run's output was discarded and a failed build logged only the gate's
+  exit status. It now keeps the last 16 KiB of each run's output and logs it
+  as `output_tail` on the `run failed` entry.
+
 ## [0.7.1] - 2026-10-14
 
 ### Fixed
