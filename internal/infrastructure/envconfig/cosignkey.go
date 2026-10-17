@@ -56,5 +56,8 @@ func ValidateCosignKey(v string) error {
 
 // Validate reports configuration that cannot work, before anything runs.
 func (e Env) Validate() error {
-	return ValidateCosignKey(e.CosignKey)
+	if err := ValidateCosignKey(e.CosignKey); err != nil {
+		return err
+	}
+	return e.validateGitHubApp()
 }

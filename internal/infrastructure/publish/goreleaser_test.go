@@ -503,3 +503,21 @@ func flagValue(args []string, flag string) string {
 	}
 	return ""
 }
+
+// With a GitHub App the token is minted per release, not fixed at boot: a
+// daemon that booted two hours ago holds no token that still works.
+func TestReleaseAsksTheTokenSourceAtReleaseTime(t *testing.T) {
+	repo, head, fake := releaseRepo(t, signingConfig)
+
+	g := NewGoreleaser(fake, obs.Discard(), "", false)
+	g.Tokens = func(context.Context) (string, error) { return "minted-at-release", nil }
+	if _, err := g.Publish(t.Context(), ports.PublishRequest{
+		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Contains(fake.Find("goreleaser release").Env, "GITHUB_TOKEN=minted-at-release") {
+		t.Error("goreleaser did not get the minted token")
+	}
+}

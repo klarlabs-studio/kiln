@@ -47,6 +47,9 @@ type Goreleaser struct {
 	Cosign string
 	// Token is the forge credential goreleaser needs to create the release.
 	Token string
+	// Tokens, when set, supplies the credential at release time instead of
+	// Token: a GitHub App installation token expires within the hour.
+	Tokens func(ctx context.Context) (string, error)
 	// Uploader attaches the provenance bundle to the release goreleaser made.
 	// Nil disables the attachment, which the dry path relies on.
 	Uploader AssetUploader
@@ -129,7 +132,7 @@ func (g *Goreleaser) preflight(req ports.PublishRequest) error {
 	// goreleaser cannot create a GitHub Release without a credential, and
 	// discovering that after a five-minute cross-compile is a poor way to
 	// learn it.
-	if !g.Dry && g.Token == "" {
+	if !g.Dry && g.Token == "" && g.Tokens == nil {
 		return errors.New("publish: a binary release needs GITHUB_TOKEN to create the release " +
 			"(export one, or set KILN_DRY=1 to build without uploading)")
 	}
@@ -161,8 +164,16 @@ func (g *Goreleaser) release(ctx context.Context, req ports.PublishRequest, dir 
 	}
 
 	env := os.Environ()
-	if g.Token != "" {
-		env = append(env, "GITHUB_TOKEN="+g.Token)
+	token := g.Token
+	if g.Tokens != nil && !g.Dry {
+		minted, err := g.Tokens(ctx)
+		if err != nil {
+			return ports.PublishResult{}, fmt.Errorf("publish: get a release token: %w", err)
+		}
+		token = minted
+	}
+	if token != "" {
+		env = append(env, "GITHUB_TOKEN="+token)
 	}
 
 	if _, err := g.Runner.Run(ctx, execx.Cmd{

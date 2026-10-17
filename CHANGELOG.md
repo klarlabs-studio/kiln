@@ -6,6 +6,16 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **GitHub App credentials.** `KILN_GITHUB_APP_ID`,
+  `KILN_GITHUB_APP_INSTALLATION_ID` and `KILN_GITHUB_APP_KEY_FILE` make kiln
+  mint short-lived installation tokens instead of holding a personal token,
+  renewing them before expiry, so `kilnd` and `--every` loops keep working
+  past the hour. The key is a file, not a keychain item, so upgrading kiln
+  no longer cuts a box off from its credential. Partial configuration is
+  refused at boot; `kiln doctor` reports which credential is in use.
+
 ### Fixed
 
 - **A keychain that refuses an upgraded kiln is reported, not hidden.**
