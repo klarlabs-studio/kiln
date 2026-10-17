@@ -510,14 +510,14 @@ func TestReleaseAsksTheTokenSourceAtReleaseTime(t *testing.T) {
 	repo, head, fake := releaseRepo(t, signingConfig)
 
 	g := NewGoreleaser(fake, obs.Discard(), "", false)
-	g.Tokens = func(context.Context) (string, error) { return "ghs_minted", nil }
+	g.Tokens = func(context.Context) (string, error) { return "minted-at-release", nil }
 	if _, err := g.Publish(t.Context(), ports.PublishRequest{
 		RepoDir: repo.Dir, SHA: head, Ref: "refs/tags/v1.4.0", Artifact: binariesArtifact(),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	if !slices.Contains(fake.Find("goreleaser release").Env, "GITHUB_TOKEN=ghs_minted") {
+	if !slices.Contains(fake.Find("goreleaser release").Env, "GITHUB_TOKEN=minted-at-release") {
 		t.Error("goreleaser did not get the minted token")
 	}
 }
