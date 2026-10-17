@@ -44,6 +44,16 @@ var ErrNotFound = errors.New("no stored token")
 // standing between the process and it.
 var ErrKeychainBlocked = errors.New("keychain did not answer")
 
+// ErrKeychainRefused reports that the keychain holds a token but would not
+// hand it to this binary. macOS binds an item's access list to the reader's
+// code signature, and an ad-hoc signed kiln is a new identity after every
+// upgrade, so this is what `brew upgrade` leaves behind.
+var ErrKeychainRefused = errors.New("keychain refused this kiln binary")
+
+// securityItemNotFound is errSecItemNotFound as `security` exits with it:
+// nothing stored, as opposed to something stored and refused.
+const securityItemNotFound = 44
+
 // Store reads and writes the token.
 type Store struct {
 	// Runner shells out to the platform keychain tool.
@@ -104,7 +114,7 @@ func (s *Store) Get(ctx context.Context) (string, Kind, error) {
 		// A blocked keychain is reported, not swallowed: falling through to
 		// "no token" would leave a box quietly treating every pull request as
 		// a fork and posting no checks, with nothing said about why.
-		if errors.Is(err, ErrKeychainBlocked) {
+		if errors.Is(err, ErrKeychainBlocked) || errors.Is(err, ErrKeychainRefused) {
 			return "", "", err
 		}
 	case "linux":
@@ -244,6 +254,11 @@ func (s *Store) keychainGet(ctx context.Context) (string, error) {
 			// asking a question nobody can see.
 			return "", fmt.Errorf("%w: the keychain did not answer in %s — it is most likely showing a permission dialog; "+
 				"run `kiln login` again from this terminal, or set GITHUB_TOKEN for an unattended box", ErrKeychainBlocked, keychainReadTimeout)
+		}
+		if code, ok := execx.ExitCode(err); ok && code != securityItemNotFound {
+			return "", fmt.Errorf("%w (security exited %d): macOS ties keychain access to a binary's signature, "+
+				"and an upgraded kiln counts as a new binary; run `kiln login` again from this terminal, "+
+				"or set GITHUB_TOKEN for an unattended box", ErrKeychainRefused, code)
 		}
 		return "", err
 	}

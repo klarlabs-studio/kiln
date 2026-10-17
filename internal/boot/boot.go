@@ -134,10 +134,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	// added afterwards would reach the API client while ChecksEnabled() — and
 	// therefore doctor, and the fork default — still read empty.
 	if env.Token == "" {
-		if token, kind, err := credstore.New(runner).Get(ctx); err == nil {
-			env.Token = token
-			log.Debug("using the stored github token", "from", string(kind))
-		}
+		env.Token = storedToken(ctx, credstore.New(runner), log)
 	}
 
 	deps := &Deps{
@@ -372,4 +369,30 @@ func (d *Deps) ResolvePullFork(ctx context.Context, number int) bool {
 		return ForkUnknown
 	}
 	return pull.Fork
+}
+
+// tokenSource is the credential store as storedToken uses it.
+type tokenSource interface {
+	Get(ctx context.Context) (string, credstore.Kind, error)
+}
+
+// storedToken returns the stored GitHub token, or "" when there is none.
+//
+// Nothing stored is quiet: plenty of runs need no token. Anything else is
+// a token that exists and cannot be read — a keychain refusing an upgraded
+// binary, or one waiting on a dialog — and the store's message names the
+// remedy. Dropping it, as this once did, left a box reporting "no github
+// token" and treating every pull request as a fork, with the reason lost.
+func storedToken(ctx context.Context, src tokenSource, log ports.Logger) string {
+	token, kind, err := src.Get(ctx)
+	switch {
+	case err == nil:
+		log.Debug("using the stored github token", "from", string(kind))
+		return token
+	case errors.Is(err, credstore.ErrNotFound):
+		return ""
+	default:
+		log.Warn("the stored github token could not be read", "err", err)
+		return ""
+	}
 }

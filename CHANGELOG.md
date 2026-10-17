@@ -8,6 +8,14 @@ All notable changes to kiln are documented here. The format follows
 
 ### Fixed
 
+- **A keychain that refuses an upgraded kiln is reported, not hidden.**
+  macOS ties keychain access to a binary's signature, and an ad-hoc signed
+  kiln is a new binary after every `brew upgrade`. The stored token was then
+  refused, boot discarded the error, and a box logged only "no github token"
+  while treating every pull request as a fork. kiln now tells "nothing
+  stored" apart from "stored but refused" and logs the remedy: run
+  `kiln login` again, or set `GITHUB_TOKEN`.
+
 - **kilnd logs why a run failed.** The daemon has no terminal to stream to,
   so a run's output was discarded and a failed build logged only the gate's
   exit status. It now keeps the last 16 KiB of each run's output and logs it
