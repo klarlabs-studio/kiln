@@ -473,3 +473,48 @@ func TestShutdownWaitsForInFlightBuilds(t *testing.T) {
 		t.Errorf("Shutdown after the build finished: %v", err)
 	}
 }
+
+// recordingLog keeps every Error call so a test can read what an operator
+// would find in kilnd's log.
+type recordingLog struct {
+	ports.Logger
+	errors []map[string]any
+}
+
+func (l *recordingLog) Error(msg string, kv ...any) {
+	entry := map[string]any{"msg": msg}
+	for i := 0; i+1 < len(kv); i += 2 {
+		if k, ok := kv[i].(string); ok {
+			entry[k] = kv[i+1]
+		}
+	}
+	l.errors = append(l.errors, entry)
+}
+
+// kilnd has no terminal to stream to, so the gate's output was discarded
+// and a failed build logged only the gate's exit status. The tail of what
+// it printed is what says which step failed; it belongs in the log.
+func TestAFailedRunLogsTheTailOfItsOutput(t *testing.T) {
+	srv, _ := newServer(t)
+	log := &recordingLog{Logger: obs.Discard()}
+	srv.Log = log
+	srv.Deps.Engine.Prover = ports.ProveFunc(func(_ context.Context, r ports.ProveRequest) error {
+		if r.Output != nil {
+			_, _ = r.Output.Write([]byte(strings.Repeat("noise\n", 20000) + "warden: step lint failed: unused variable x\n"))
+		}
+		return errors.New("warden run pre-push: exit 1")
+	})
+
+	do(t, srv, http.MethodPost, "/v1/run", []byte(`{"sha":"HEAD","event":"push"}`), bearer())
+
+	for _, e := range log.errors {
+		tail, _ := e["output_tail"].(string)
+		if strings.Contains(tail, "step lint failed: unused variable x") {
+			if len(tail) > maxLoggedOutput {
+				t.Errorf("logged %d bytes of output, want at most %d", len(tail), maxLoggedOutput)
+			}
+			return
+		}
+	}
+	t.Fatalf("no error log carried the run's output tail: %v", log.errors)
+}

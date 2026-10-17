@@ -328,6 +328,7 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 		fork = d.ResolvePullFork(ctx, pr)
 	}
 
+	output := &tailBuffer{max: maxLoggedOutput}
 	rec, execErr := d.Engine.Execute(ctx, engine.Request{
 		SHA:      sha,
 		Event:    job.Event,
@@ -336,8 +337,46 @@ func (s *Server) execute(ctx context.Context, job github.Job, pr int) (mcpsrv.Ru
 		Repo:     repoName(d),
 		Dir:      d.Dir,
 		Pipeline: d.Pipeline,
+		Output:   output,
 	})
-	return mcpsrv.FromRun(rec), execErr
+	run := mcpsrv.FromRun(rec)
+	if execErr != nil {
+		// The run record says which phase failed; only the output says
+		// which step inside it, and kilnd has no terminal to show it on.
+		s.Log.Error("run failed",
+			"run", run.ID, "sha", sha, "event", job.Event.String(),
+			"err", execErr, "output_tail", output.String())
+	}
+	return run, execErr
+}
+
+// maxLoggedOutput bounds how much of a failed run's output reaches the log.
+// The end is what names the failing step; a whole race-enabled test suite's
+// output in one log line would bury it.
+const maxLoggedOutput = 16 << 10
+
+// tailBuffer keeps the last max bytes written to it. The engine writes
+// stdout and stderr from separate goroutines, hence the lock.
+type tailBuffer struct {
+	mu  sync.Mutex
+	max int
+	buf []byte
+}
+
+func (b *tailBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.buf = append(b.buf, p...)
+	if over := len(b.buf) - b.max; over > 0 {
+		b.buf = append(b.buf[:0], b.buf[over:]...)
+	}
+	return len(p), nil
+}
+
+func (b *tailBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.buf)
 }
 
 // repoLock waits for the repository, rather than refusing like the CLI does.
