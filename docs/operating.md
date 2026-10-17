@@ -310,8 +310,29 @@ personal access token gets `403 You must authenticate via a GitHub App`, so
 kiln falls back to commit statuses: same names, same gating power in branch
 protection, a one-line description instead of a body.
 
-If you want the richer output, register a GitHub App for your org, install it
-on the repositories kiln watches, and give kiln an installation token.
+If you want the richer output, or a credential that is not a person's, use a
+GitHub App (below).
+
+### A GitHub App instead of a token
+
+The recommended credential for a box. Register an app for your org with the
+permissions above, install it on the repositories kiln watches, download its
+private key, and point kiln at all three:
+
+```bash
+KILN_GITHUB_APP_ID=123456
+KILN_GITHUB_APP_INSTALLATION_ID=7890123
+KILN_GITHUB_APP_KEY_FILE=/etc/kiln/github-app.pem   # chmod 600
+```
+
+Kiln mints an installation token from the key when it needs one and renews
+it before its hour is up, so a daemon or an `--every` loop never holds a dead
+one. What sits on the box is a key that can mint nothing but tokens scoped to
+that installation, owned by your organisation rather than by whoever ran
+`kiln login`. It also does not live in a keychain, so an upgraded kiln binary
+reads it exactly as the old one did. Set all three or none: two of them is
+refused at boot, by name. When an app is configured it wins over
+`GITHUB_TOKEN` and the stored token.
 
 ## Disk
 

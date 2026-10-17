@@ -133,7 +133,14 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	// Before deps is built, not after: Env is copied by value, and a token
 	// added afterwards would reach the API client while ChecksEnabled() — and
 	// therefore doctor, and the fork default — still read empty.
-	if env.Token == "" {
+	// A GitHub App, when configured, is the credential: it is the explicit
+	// choice for a box, and its tokens outlive no hour. Otherwise the
+	// environment, then the stored token.
+	app, err := githubApp(env)
+	if err != nil {
+		return nil, err
+	}
+	if app == nil && env.Token == "" {
 		env.Token = storedToken(ctx, credstore.New(runner), log)
 	}
 
@@ -148,7 +155,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	}
 
 	deps.Repo, deps.RepoErr = github.DiscoverRepo(ctx, runner, dir, pipeline.Watch.Remote, env.Repository)
-	deps.GitHub = buildClient(env, deps.Repo, log)
+	deps.GitHub = buildClient(env, deps.Repo, app, log)
 	deps.Checks = buildReporter(deps.GitHub, log)
 
 	// One warden binding serves both roles: deciding whether a re-prove can be
@@ -241,11 +248,37 @@ func loadPipeline(dir, explicit string) (config.Pipeline, bool, error) {
 	}
 }
 
-func buildClient(env envconfig.Env, repo github.Repo, log ports.Logger) *github.Client {
-	if env.Token == "" || !repo.Valid() {
+func buildClient(env envconfig.Env, repo github.Repo, app *github.AppTokens, log ports.Logger) *github.Client {
+	if !repo.Valid() || (app == nil && env.Token == "") {
 		return nil
 	}
-	return github.NewClient(env.Token, repo, log)
+	c := github.NewClient(env.Token, repo, log)
+	if app != nil {
+		c.Tokens = app
+	}
+	return c
+}
+
+// githubApp builds the GitHub App token source, or nil when none is
+// configured. A key that cannot be read stops the boot: falling back to no
+// credential would leave a box that looks configured and posts nothing.
+func githubApp(env envconfig.Env) (*github.AppTokens, error) {
+	if !env.GitHubApp() {
+		return nil, nil
+	}
+	data, err := os.ReadFile(filepath.Clean(env.GitHubAppKeyFile))
+	if err != nil {
+		return nil, fmt.Errorf("KILN_GITHUB_APP_KEY_FILE: %w", err)
+	}
+	key, err := github.ParseAppKey(data)
+	if err != nil {
+		return nil, fmt.Errorf("KILN_GITHUB_APP_KEY_FILE %s: %w", env.GitHubAppKeyFile, err)
+	}
+	return &github.AppTokens{
+		AppID:          env.GitHubAppID,
+		InstallationID: env.GitHubAppInstallationID,
+		Key:            key,
+	}, nil
 }
 
 func buildReporter(c *github.Client, log ports.Logger) ports.Reporter {
@@ -282,6 +315,9 @@ func buildReleasePublisher(
 ) ports.Publisher {
 	_ = ctx
 	g := publish.NewGoreleaser(runner, log, env.Token, env.Dry)
+	if gh != nil && gh.Tokens != nil {
+		g.Tokens = gh.Tokens.Token
+	}
 	g.SigningKey = env.CosignKey
 	if env.Goreleaser != "" {
 		g.Binary = env.Goreleaser
