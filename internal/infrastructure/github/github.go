@@ -87,7 +87,10 @@ func DiscoverRepo(ctx context.Context, r execx.Runner, dir, remote, envRepo stri
 // Not go-github: Kiln uses four endpoints, and a dependency that large would
 // pull in more surface than the whole rest of this package.
 type Client struct {
-	Token   string
+	Token string
+	// Tokens, when set, supplies the token for each request instead of
+	// Token: a GitHub App installation token expires within the hour.
+	Tokens  TokenSource
 	Repo    Repo
 	BaseURL string
 	HTTP    *http.Client
@@ -114,7 +117,17 @@ func NewClient(token string, repo Repo, log ports.Logger) *Client {
 
 // Enabled reports whether the client can talk to GitHub at all. Without a
 // token, Kiln posts no Checks and treats every pull request as a fork.
-func (c *Client) Enabled() bool { return c != nil && c.Token != "" && c.Repo.Valid() }
+func (c *Client) Enabled() bool {
+	return c != nil && (c.Token != "" || c.Tokens != nil) && c.Repo.Valid()
+}
+
+// bearer is the token for one request.
+func (c *Client) bearer(ctx context.Context) (string, error) {
+	if c.Tokens != nil {
+		return c.Tokens.Token(ctx)
+	}
+	return c.Token, nil
+}
 
 // APIError is a non-2xx response.
 type APIError struct {
@@ -440,7 +453,11 @@ func (c *Client) once(ctx context.Context, method, path string, body []byte) ([]
 	if err != nil {
 		return nil, fmt.Errorf("github: build request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	token, err := c.bearer(ctx)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "kiln")
@@ -539,7 +556,11 @@ func (c *Client) UploadReleaseAsset(ctx context.Context, rel Release, name strin
 	if err != nil {
 		return fmt.Errorf("github: build upload request: %w", err)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	token, err := c.bearer(ctx)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("User-Agent", "kiln")

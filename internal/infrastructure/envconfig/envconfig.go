@@ -78,6 +78,13 @@ type Env struct {
 	// Token authorizes GitHub Checks and the PR fork lookup. Without it, Kiln
 	// posts no Checks and treats every pull request as a fork.
 	Token string
+	// GitHubAppID, GitHubAppInstallationID and GitHubAppKeyFile configure a
+	// GitHub App, the recommended credential for a box: kiln mints
+	// short-lived installation tokens from the app's private key, and they
+	// take precedence over Token. All three or none.
+	GitHubAppID             string
+	GitHubAppInstallationID string
+	GitHubAppKeyFile        string
 	// Repository is owner/name, used when the git remote is absent.
 	Repository string
 	// MCPAllowRun opts the MCP surface into push/tag runs (KILN_MCP_ALLOW_RUN=1).
@@ -108,15 +115,20 @@ type Env struct {
 // bearer token) say so at boot with a message naming the variable.
 func Load() Env {
 	return Env{
-		DB:            firstNonEmpty(os.Getenv("KILN_DB"), DefaultDB),
-		Dry:           truthy(os.Getenv("KILN_DRY")),
-		Warden:        firstNonEmpty(os.Getenv("KILN_WARDEN"), DefaultWarden),
-		Nox:           firstNonEmpty(os.Getenv("KILN_NOX"), DefaultNox),
-		Goreleaser:    firstNonEmpty(os.Getenv("KILN_GORELEASER"), DefaultGoreleaser),
-		TrustedKeys:   splitList(os.Getenv("KILN_TRUSTED_KEYS")),
-		CosignKey:     strings.TrimSpace(os.Getenv("KILN_COSIGN_KEY")),
-		Token:         firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
-		Repository:    os.Getenv("GITHUB_REPOSITORY"),
+		DB:          firstNonEmpty(os.Getenv("KILN_DB"), DefaultDB),
+		Dry:         truthy(os.Getenv("KILN_DRY")),
+		Warden:      firstNonEmpty(os.Getenv("KILN_WARDEN"), DefaultWarden),
+		Nox:         firstNonEmpty(os.Getenv("KILN_NOX"), DefaultNox),
+		Goreleaser:  firstNonEmpty(os.Getenv("KILN_GORELEASER"), DefaultGoreleaser),
+		TrustedKeys: splitList(os.Getenv("KILN_TRUSTED_KEYS")),
+		CosignKey:   strings.TrimSpace(os.Getenv("KILN_COSIGN_KEY")),
+		Token:       firstNonEmpty(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")),
+		Repository:  os.Getenv("GITHUB_REPOSITORY"),
+
+		GitHubAppID:             strings.TrimSpace(os.Getenv("KILN_GITHUB_APP_ID")),
+		GitHubAppInstallationID: strings.TrimSpace(os.Getenv("KILN_GITHUB_APP_INSTALLATION_ID")),
+		GitHubAppKeyFile:        strings.TrimSpace(os.Getenv("KILN_GITHUB_APP_KEY_FILE")),
+
 		MCPAllowRun:   truthy(os.Getenv("KILN_MCP_ALLOW_RUN")),
 		Addr:          firstNonEmpty(os.Getenv("KILN_ADDR"), DefaultAddr),
 		DaemonToken:   os.Getenv("KILN_TOKEN"),

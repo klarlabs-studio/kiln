@@ -352,7 +352,11 @@ func ambientOIDC() (string, bool) {
 }
 
 func (r *doctorReport) checkCredentials(deps *boot.Deps) {
-	if deps.ChecksEnabled() {
+	switch {
+	case deps.ChecksEnabled() && deps.Env.GitHubApp():
+		r.ok("GitHub App %s (installation %s): short-lived installation tokens, minted as needed",
+			deps.Env.GitHubAppID, deps.Env.GitHubAppInstallationID)
+	case deps.ChecksEnabled():
 		// Deliberately not promising check runs. The Checks API only accepts a
 		// GitHub App token; a personal access token gets a 403 and kiln falls
 		// back to commit statuses. Both work as required contexts, and saying
@@ -360,7 +364,7 @@ func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 		r.ok("GITHUB_TOKEN present: results post as %q, %q and one per task",
 			"Kiln / Prove", "Kiln / Publish")
 		r.note("a personal access token posts commit statuses; check runs need a GitHub App")
-	} else {
+	default:
 		r.warn("no usable GITHUB_TOKEN: no checks, and every pull request is treated as a fork")
 	}
 
