@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-17
+
 ### Added
 
 - **GitHub App credentials.** `KILN_GITHUB_APP_ID`,
@@ -835,7 +837,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/klarlabs-studio/kiln/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/klarlabs-studio/kiln/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/klarlabs-studio/kiln/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/klarlabs-studio/kiln/compare/v0.5.0...v0.6.0
