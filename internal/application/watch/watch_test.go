@@ -253,6 +253,43 @@ func TestTheBackoffGrowsWithRepeatedFailures(t *testing.T) {
 	}
 }
 
+func TestACommitTheGateRejectsWaitsForAChange(t *testing.T) {
+	f := newFixture(t)
+	failing := *f.watcher.Engine
+	failing.ToolVersions = map[string]string{"warden": "1.0.0"}
+	failing.Prover = ports.ProveFunc(func(context.Context, ports.ProveRequest) error {
+		return ports.ErrGateFailed
+	})
+	f.watcher.Engine = &failing
+
+	start := time.Now()
+	f.watcher.Now = func() time.Time { return start }
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Past the hourly cap an environment failure would be retried at. This
+	// one is the commit's own: re-running it would only fail again.
+	f.watcher.Now = func() time.Time { return start.Add(3 * time.Hour) }
+	res, err := f.watcher.Once(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Executed) != 0 {
+		t.Errorf("a rejected commit was re-run with nothing changed: %+v", res.Executed)
+	}
+
+	// Upgrading warden can turn it green, so that is worth a run at once.
+	failing.ToolVersions = map[string]string{"warden": "1.1.0"}
+	res, err = f.watcher.Once(t.Context(), false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Executed) != 1 {
+		t.Errorf("a changed toolchain did not retry the commit: %+v", res)
+	}
+}
+
 func TestNewCommitAfterASuccessRebuilds(t *testing.T) {
 	f := newFixture(t)
 	if _, err := f.watcher.Once(t.Context(), false); err != nil {
