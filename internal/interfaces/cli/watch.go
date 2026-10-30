@@ -270,6 +270,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Locks:            lock.NewLocks(),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
+		Slots:            buildSlots(deps),
 		Health:           health.New(deps.Runner),
 		MinFree:          deps.Env.MinFree,
 		PlanImages:       deps.Dry(),
@@ -312,9 +313,6 @@ func printTick(io IO, res watch.Result, dryRun bool) {
 	for _, job := range res.Skipped {
 		io.printf("skip    %-24s %s (already built)\n", job.Label, run.ShortSHA(job.SHA))
 	}
-	for _, job := range res.Deferred {
-		io.printf("defer   %-24s %s (docker is not answering)\n", job.Label, run.ShortSHA(job.SHA))
-	}
 	for _, outcome := range res.Executed {
 		job := outcome.Job
 		switch {
@@ -325,6 +323,9 @@ func printTick(io IO, res watch.Result, dryRun bool) {
 		default:
 			io.printf("built   %-24s %s%s\n", job.Label, run.ShortSHA(job.SHA), digestSuffix(outcome))
 		}
+	}
+	for _, job := range res.Deferred {
+		io.printf("defer   %-24s %s (the box cannot run it now; next tick)\n", job.Label, run.ShortSHA(job.SHA))
 	}
 }
 

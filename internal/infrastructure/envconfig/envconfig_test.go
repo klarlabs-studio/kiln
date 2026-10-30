@@ -114,6 +114,51 @@ func TestAnUnparsablePhaseTimeoutKeepsTheSafetyNet(t *testing.T) {
 	}
 }
 
+func TestMaxParallelDefaultsToOneBuildAtATime(t *testing.T) {
+	t.Setenv("KILN_MAX_PARALLEL", "")
+
+	if got := Load().MaxParallel; got != 1 || DefaultMaxParallel != 1 {
+		t.Errorf("MaxParallel = %d, want 1", got)
+	}
+}
+
+func TestMaxParallelIsParsed(t *testing.T) {
+	t.Setenv("KILN_MAX_PARALLEL", " 3 ")
+
+	if got := Load().MaxParallel; got != 3 {
+		t.Errorf("MaxParallel = %d, want 3", got)
+	}
+}
+
+func TestZeroMaxParallelIsHonouredAsUnlimited(t *testing.T) {
+	t.Setenv("KILN_MAX_PARALLEL", "0")
+
+	// An operator who typed 0 meant "no limit", not "give me the default".
+	if got := Load().MaxParallel; got != 0 {
+		t.Errorf("MaxParallel = %d, want 0", got)
+	}
+}
+
+func TestSlotDirIsReadFromTheEnvironment(t *testing.T) {
+	t.Setenv("KILN_SLOT_DIR", " /srv/kiln/slots ")
+
+	if got := Load().SlotDir; got != "/srv/kiln/slots" {
+		t.Errorf("SlotDir = %q", got)
+	}
+}
+
+func TestAnUnparsableMaxParallelKeepsTheLimit(t *testing.T) {
+	for _, bad := range []string{"many", "-2", "1.5"} {
+		t.Setenv("KILN_MAX_PARALLEL", bad)
+
+		// A typo must not lift the limit: that is how eight boxes end up
+		// building at once again.
+		if got := Load().MaxParallel; got != DefaultMaxParallel {
+			t.Errorf("KILN_MAX_PARALLEL=%q gave %d, want the default", bad, got)
+		}
+	}
+}
+
 func TestMinFree(t *testing.T) {
 	for v, want := range map[string]uint64{
 		"":     DefaultMinFreeGB << 30,

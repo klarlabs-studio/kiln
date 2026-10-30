@@ -107,6 +107,9 @@ type Watcher struct {
 	Pruner ports.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
 	BuildCacheMaxAge time.Duration
+	// Slots bounds concurrent builds across every repository on the machine.
+	// Nil means no limit, which is what a test should get.
+	Slots ports.BuildSlots
 	// Health answers whether the box can build at all. Nil skips the checks,
 	// which is what a test that is not about them should get.
 	Health ports.BoxHealth
@@ -126,9 +129,10 @@ type Result struct {
 	Skipped []Job
 	// Executed are the jobs that ran, with their outcomes.
 	Executed []Outcome
-	// Deferred are the jobs held back because the box could not run them —
-	// they need docker and the daemon is not answering. Nothing is recorded
-	// against them, so the first tick after docker recovers builds them.
+	// Deferred are the jobs left for the next tick because the box could not
+	// run them now: every machine build slot was taken, or they need docker
+	// and the daemon is not answering. They are not failures and nothing is
+	// recorded against them, so a later tick builds them.
 	Deferred []Job
 }
 
@@ -156,8 +160,6 @@ func (r Result) Failures() int {
 // stop main from building — that would let anybody with push access to a fork
 // halt the pipeline by opening a PR that fails to check out.
 func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
-	log := w.logger()
-
 	if !dryRun {
 		w.reap(ctx)
 		w.prune(ctx)
@@ -187,33 +189,28 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		return Result{}, err
 	}
 
+	return w.runJobs(ctx, jobs, dryRun)
+}
+
+// runJobs filters the discovered jobs against the ledger and builds the rest,
+// each inside a machine build slot.
+func (w *Watcher) runJobs(ctx context.Context, jobs []Job, dryRun bool) (Result, error) {
 	result := Result{Discovered: jobs}
+	full := false
 	docker := w.dockerProbe(ctx)
 	for _, job := range jobs {
-		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now(), w.Engine.Inputs(w.Pipeline)); verdict {
-		case engine.Built:
+		switch {
+		case w.alreadyCovered(job):
 			result.Skipped = append(result.Skipped, job)
-			log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
 			continue
-		case engine.Backoff:
-			// A failing commit is not retried every tick. Without this a pull
-			// request whose gate fails is re-gated forever, which on a real
-			// box meant 205 failed runs in an afternoon.
-			result.Skipped = append(result.Skipped, job)
-			log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
-				"wait", engine.DescribeBackoff(wait))
-			continue
-		case engine.Settled:
-			// The commit failed on its own merits. Running it again with the
-			// same kiln, tools and pipeline would only repeat the verdict.
-			result.Skipped = append(result.Skipped, job)
-			log.Debug("failed on this commit, waiting for a change", "ref", job.Ref,
-				"sha", run.ShortSHA(job.SHA), "wait", engine.DescribeBackoff(wait))
-			continue
-		case engine.Build:
-		}
-		if dryRun {
+		case dryRun:
 			result.Executed = append(result.Executed, Outcome{Job: job})
+			continue
+		case full:
+			// The machine was full a moment ago. Waiting the whole bound again
+			// per job would hold this repository's lock for an hour behind a
+			// machine already known to be busy.
+			result.Deferred = append(result.Deferred, job)
 			continue
 		}
 		if w.Pipeline.NeedsDocker(job.Event.String(), !w.PlanImages) && docker() != nil {
@@ -221,23 +218,21 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 			continue
 		}
 
-		log.Info("building", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
-			"event", job.Event.String(), "fork", job.Fork)
-
-		r, runErr := w.Engine.Execute(ctx, engine.Request{
-			SHA:      job.SHA,
-			Event:    job.Event,
-			Fork:     job.Fork,
-			Ref:      job.Ref,
-			Repo:     w.Repo,
-			Dir:      w.Dir,
-			Pipeline: w.Pipeline,
-			Output:   w.Output,
-		})
-		if runErr != nil {
-			log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
+		slot, err := w.acquireSlot(ctx, job)
+		if errors.Is(err, ports.ErrNoBuildSlot) {
+			full = true
+			w.logger().Info("deferring to the next tick: no build slot free",
+				"ref", job.Ref, "sha", run.ShortSHA(job.SHA), "busy", err)
+			result.Deferred = append(result.Deferred, job)
+			continue
 		}
-		result.Executed = append(result.Executed, Outcome{Job: job, Run: r, Err: runErr})
+		if err != nil {
+			return result, err
+		}
+
+		outcome := w.execute(ctx, job)
+		_ = slot.Release()
+		result.Executed = append(result.Executed, outcome)
 
 		// A cancelled context means the operator pressed Ctrl-C or the
 		// deadline passed. Continuing would run the remaining jobs against a
@@ -248,6 +243,84 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	}
 	return result, nil
 }
+
+// alreadyCovered reports whether the ledger says this job needs no run now.
+func (w *Watcher) alreadyCovered(job Job) bool {
+	log := w.logger()
+	switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now(), w.Engine.Inputs(w.Pipeline)); verdict {
+	case engine.Built:
+		log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
+		return true
+	case engine.Backoff:
+		// A failing commit is not retried every tick. Without this a pull
+		// request whose gate fails is re-gated forever, which on a real
+		// box meant 205 failed runs in an afternoon.
+		log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
+			"wait", engine.DescribeBackoff(wait))
+		return true
+	case engine.Settled:
+		// The commit failed on its own merits. Running it again with the
+		// same kiln, tools and pipeline would only repeat the verdict.
+		log.Debug("failed on this commit, waiting for a change", "ref", job.Ref,
+			"sha", run.ShortSHA(job.SHA), "wait", engine.DescribeBackoff(wait))
+		return true
+	default:
+		return false
+	}
+}
+
+// acquireSlot claims one of the machine's build slots for job.
+//
+// Per job, and only around the build: discovery and a fetch cost the machine
+// nothing worth limiting, and a tick holding a slot across several jobs would
+// starve every other box for as long as it ran.
+//
+// No free slot is ErrNoBuildSlot, which the caller turns into a deferral — not
+// a failure. Nothing is recorded, so the commit is neither blamed nor backed
+// off, and the next tick finds it unbuilt. Any other error is the machine's
+// fault and fails the tick loudly: building anyway would quietly remove the
+// limit, and recording it would blame the commit.
+func (w *Watcher) acquireSlot(ctx context.Context, job Job) (ports.BuildSlot, error) {
+	if w.Slots == nil {
+		return noSlot{}, nil
+	}
+	holder := "kiln watch " + w.Dir + " " + job.Label
+	slot, err := w.Slots.TryAcquire(holder)
+	if !errors.Is(err, ports.ErrNoBuildSlot) {
+		return slot, err
+	}
+	// Said before the wait, so a tick that sits quiet for minutes explains
+	// itself while it does.
+	w.logger().Info("waiting for a build slot", "ref", job.Ref, "busy", err)
+	return w.Slots.Acquire(ctx, holder)
+}
+
+// execute builds one job.
+func (w *Watcher) execute(ctx context.Context, job Job) Outcome {
+	log := w.logger()
+	log.Info("building", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
+		"event", job.Event.String(), "fork", job.Fork)
+
+	r, runErr := w.Engine.Execute(ctx, engine.Request{
+		SHA:      job.SHA,
+		Event:    job.Event,
+		Fork:     job.Fork,
+		Ref:      job.Ref,
+		Repo:     w.Repo,
+		Dir:      w.Dir,
+		Pipeline: w.Pipeline,
+		Output:   w.Output,
+	})
+	if runErr != nil {
+		log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
+	}
+	return Outcome{Job: job, Run: r, Err: runErr}
+}
+
+// noSlot stands in when no limit is configured.
+type noSlot struct{}
+
+func (noSlot) Release() error { return nil }
 
 // Every loops Once until the context is cancelled. The first tick runs
 // immediately: an operator who starts a watcher wants to know now whether it
@@ -275,7 +348,8 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 		default:
 			log.Debug("tick complete",
 				"discovered", len(res.Discovered), "skipped", len(res.Skipped),
-				"executed", len(res.Executed), "failed", res.Failures())
+				"executed", len(res.Executed), "failed", res.Failures(),
+				"deferred", len(res.Deferred))
 		}
 
 		select {

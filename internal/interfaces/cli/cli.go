@@ -203,7 +203,8 @@ func report(io IO, err error) int {
 	return ExitError
 }
 
-// ExitBusy reports that another kiln process holds the repository.
+// ExitBusy reports that another kiln process holds the repository, or that
+// every machine build slot stayed taken for the whole wait.
 //
 // Distinct from ExitError because it is not a fault: on a cron schedule an
 // overlap is expected, and an operator alerting on failures should not be
