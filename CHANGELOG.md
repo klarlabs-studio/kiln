@@ -6,6 +6,19 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **A machine-wide limit on concurrent builds.** `KILN_MAX_PARALLEL`
+  (default `1`; `0` disables) bounds how many builds run at once across
+  every repository and kiln process on a machine. Eight box agents ticking
+  together on one Mac had driven it 11.8 GB into swap and failed builds with
+  "no space left on device", blamed on the commits. Each build now takes a
+  `flock`ed slot under the user cache directory (`KILN_SLOT_DIR` moves it),
+  released by the kernel if the process dies. A watch tick that finds every
+  slot taken waits up to 15 minutes, then defers the job to the next tick —
+  exit 0, nothing written to the ledger, no backoff. `kiln run` waits the
+  same time, then exits 75.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

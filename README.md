@@ -219,6 +219,8 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
+| `KILN_MAX_PARALLEL` | Builds that may run at once on this machine, across every repository and process (default `1`; `0` disables). See [operating](docs/operating.md#concurrency). |
+| `KILN_SLOT_DIR` | Where the machine's build slots live (default `<user cache dir>/kiln/slots`). Every kiln meant to share the limit must use the same one. |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ### Signing

@@ -123,7 +123,7 @@ Runs nothing, prints the job list. Safe even on a box with no gate installed.
 | 2 | the gate rejected the change, or a job failed |
 | 3 | configuration or toolchain — a broken machine |
 | 64 | usage |
-| 75 | another kiln holds this repository |
+| 75 | another kiln holds this repository, or every build slot stayed taken (`kiln run`) |
 
 2 and 3 are separated on purpose: 2 needs a developer to fix their code, 3
 needs an operator to fix a machine. Alert on 3.
@@ -145,6 +145,33 @@ held on an open descriptor, and released by the kernel when the process exits
 does not shut out an operator's `kiln run` between ticks.
 
 If you need to know who holds it: `cat .kiln/lock`.
+
+### Build slots: one machine, many repositories
+
+The repository lock says nothing about the machine. A Mac running eight box
+agents on the same half-hour schedule started eight `go test -race` runs and
+docker builds in the same minute, went 11.8 GB into swap, and failed builds
+with "no space left on device" — failures recorded against innocent commits.
+
+So builds also take a **machine build slot**. `KILN_MAX_PARALLEL` (default
+`1`) is how many exist; `0` removes the limit. A slot is a `flock` on one of
+`<user cache dir>/kiln/slots/0..N-1` (`~/Library/Caches/kiln/slots` on macOS,
+`~/.cache/kiln/slots` on Linux; `KILN_SLOT_DIR` moves it), so like the
+repository lock it is released by the kernel when a build dies however it
+dies. A slot is held around the build only — fetching and discovery are free.
+
+| Caller | Every slot taken |
+|---|---|
+| `kiln watch` / `poll` | waits up to 15 minutes for one, then **defers** the job: exit 0, `defer` in the output, nothing written to the ledger, so the commit is neither blamed nor backed off and the next tick builds it. Remaining jobs in the tick are deferred without waiting again. |
+| `kiln run` | waits up to 15 minutes, then refuses, exit 75, naming the holders |
+| `kilnd`, MCP | not limited |
+
+Every process sharing the limit must agree on `KILN_MAX_PARALLEL` and the slot
+directory: a kiln with `KILN_MAX_PARALLEL=2` uses slots 0 and 1, one with `1`
+only slot 0. Slots are per user — a box agent run by another account does not
+count against yours unless both point `KILN_SLOT_DIR` at a shared directory.
+
+To see who is building: `cat ~/Library/Caches/kiln/slots/*` (macOS).
 
 ## Timeouts
 

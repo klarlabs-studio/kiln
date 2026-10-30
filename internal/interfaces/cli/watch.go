@@ -267,6 +267,7 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Locks:            lock.NewLocks(),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
+		Slots:            buildSlots(deps),
 	}
 }
 
@@ -311,6 +312,9 @@ func printTick(io IO, res watch.Result, dryRun bool) {
 		default:
 			io.printf("built   %-24s %s%s\n", job.Label, run.ShortSHA(job.SHA), digestSuffix(outcome))
 		}
+	}
+	for _, job := range res.Deferred {
+		io.printf("defer   %-24s %s (no build slot free; next tick)\n", job.Label, run.ShortSHA(job.SHA))
 	}
 }
 

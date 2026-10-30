@@ -9,6 +9,7 @@ package envconfig
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,13 @@ const (
 	// legitimately slow; finite, because a hung docker pull would otherwise
 	// pin a watcher until somebody noticed.
 	DefaultPhaseTimeout = 45 * time.Minute
+
+	// DefaultMaxParallel is how many kiln builds one machine runs at once.
+	// One, because the box that prompted the limit — eight agents ticking
+	// together on a Mac — could not survive two `go test -race` runs beside
+	// docker builds without swapping. An operator with a bigger machine raises
+	// it; nobody should have to discover the limit by running out of disk.
+	DefaultMaxParallel = 1
 )
 
 // Env is the resolved operator environment for one process.
@@ -108,6 +116,18 @@ type Env struct {
 	// is shared by every repository on the box, so it cannot sensibly be
 	// configured per repository.
 	BuildCacheMaxAge time.Duration
+	// MaxParallel bounds concurrent builds across every kiln process of this
+	// user on the machine (KILN_MAX_PARALLEL). Zero means no limit.
+	//
+	// Machine-level for the same reason as BuildCacheMaxAge: the CPU, memory
+	// and disk being protected are shared by every repository on the box.
+	MaxParallel int
+	// SlotDir is where the build slots live (KILN_SLOT_DIR). Empty selects the
+	// user's cache directory. Every process meant to share a limit must see
+	// the same directory, so this is for the operator who needs to move it —
+	// two accounts sharing one machine, or a test that must not queue behind
+	// the real box it runs on.
+	SlotDir string
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -138,7 +158,25 @@ func Load() Env {
 		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
 		BuildCacheMaxAge: duration(
 			os.Getenv("KILN_BUILD_CACHE_MAX_AGE"), prune.DefaultBuildCacheMaxAge),
+		MaxParallel: count(os.Getenv("KILN_MAX_PARALLEL"), DefaultMaxParallel),
+		SlotDir:     strings.TrimSpace(os.Getenv("KILN_SLOT_DIR")),
 	}
+}
+
+// count parses a non-negative integer, falling back to the default.
+//
+// The same contract as duration: "0" is honoured, and anything unparsable or
+// negative falls back, because a typo must not silently lift a limit.
+func count(v string, fallback int) int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
 }
 
 // duration parses a timeout, falling back to the default.
