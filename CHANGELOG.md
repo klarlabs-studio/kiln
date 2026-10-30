@@ -6,6 +6,12 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **The Homebrew cask no longer warns on install.** It clears the quarantine
+  flag with an install step instead of the `postflight` Homebrew deprecated.
+  Releases are built with goreleaser 2.19.0.
+
 ## [0.9.0] - 2026-10-30
 
 ### Added
