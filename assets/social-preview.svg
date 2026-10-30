@@ -2,12 +2,11 @@
      role="img" aria-label="kiln — the signed-artifact factory">
   <rect width="1280" height="640" fill="#17202e"/>
 
-  <g transform="translate(266 228) scale(1.74)">
-    <g fill="none" stroke="#eef2f6" stroke-width="12" stroke-linecap="round" stroke-linejoin="miter">
-      <path d="M22 84 L22 50 A44 44 0 0 1 110 50 L110 84"/>
-      <path d="M14 90 L118 90"/>
+  <g transform="translate(300 228) scale(1.74)">
+    <g fill="none" stroke-width="12" stroke-linecap="round" stroke-linejoin="miter">
+      <path d="M40 8 L40 92" stroke="#eef2f6"/>
+      <path d="M96 36 L60 64 L96 92" stroke="#f59e0b"/>
     </g>
-    <path d="M66 42 L84 60 L66 78 L48 60 Z" fill="#f59e0b"/>
   </g>
 
   <text x="570" y="330" font-family="Futura,'Century Gothic','Avenir Next',ui-rounded,system-ui,sans-serif"
