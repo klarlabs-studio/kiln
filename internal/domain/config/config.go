@@ -925,6 +925,24 @@ func (p Pipeline) WantsPublish() bool {
 	return false
 }
 
+// NeedsDocker reports whether a run for event starts a container: a service
+// beside the gate, or an image to build. images is false when publishing is
+// only planned (KILN_DRY), which builds nothing.
+func (p Pipeline) NeedsDocker(event string, images bool) bool {
+	if len(p.Services) > 0 {
+		return true
+	}
+	if !images {
+		return false
+	}
+	for _, a := range p.ArtifactsFor(event) {
+		if a.Kind == KindImage {
+			return true
+		}
+	}
+	return false
+}
+
 // WatchPullRequests and WatchTags read the tri-state watch toggles.
 func (p Pipeline) WatchPullRequests() bool {
 	return p.Watch.PullRequests == nil || *p.Watch.PullRequests

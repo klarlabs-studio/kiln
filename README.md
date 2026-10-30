@@ -220,6 +220,9 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
+| `KILN_MAX_PARALLEL` | Builds that may run at once on this machine, across every repository and process (default `1`; `0` disables). See [operating](docs/operating.md#concurrency). |
+| `KILN_SLOT_DIR` | Where the machine's build slots live (default `<user cache dir>/kiln/slots`). Every kiln meant to share the limit must use the same one. |
+| `KILN_MIN_FREE_GB` | A watch tick builds nothing below this much free disk (default `5`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ### Signing
@@ -455,7 +458,7 @@ Same engine, four ways in.
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 
-Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
+Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `69` the box is too full to build, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
 
 Ctrl-C cancels through `signal.NotifyContext`, so worktrees are cleaned up rather than leaked. Logs are bolt JSON on **stderr**.
 
@@ -518,11 +521,15 @@ larger reclaim of the two. It never touches a moving tag, never a repository
 kiln does not publish, and **never a registry**: a local image is a re-pull
 away, a deleted registry digest is a rollback RollOps can no longer perform.
 
+**A sick box says so once.** Below `KILN_MIN_FREE_GB` free (default 5) a tick
+builds nothing and exits 69; while docker is not answering, jobs that need it
+are deferred rather than failed. Neither is recorded against a commit.
+
 ```cron
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1
 ```
 
-Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is always retried. One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
+Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is retried: hourly when the box was at fault, and when the commit was, once its inputs (kiln, tool versions, pipeline) change or a day passes — see [operating](docs/operating.md). One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
 
 ---
 

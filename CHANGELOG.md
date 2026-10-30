@@ -6,6 +6,47 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `kiln watch` checks the box before building. Below `KILN_MIN_FREE_GB` free
+  disk (default 5, `0` disables) a tick builds nothing and exits 69; while the
+  docker daemon does not answer, jobs that build an image or start a service
+  are deferred instead of failed. Neither is recorded against a commit, so a
+  full disk no longer turns into hundreds of failed runs.
+
+- **A machine-wide limit on concurrent builds.** `KILN_MAX_PARALLEL`
+  (default `1`; `0` disables) bounds how many builds run at once across
+  every repository and kiln process on a machine. Eight box agents ticking
+  together on one Mac had driven it 11.8 GB into swap and failed builds with
+  "no space left on device", blamed on the commits. Each build now takes a
+  `flock`ed slot under the user cache directory (`KILN_SLOT_DIR` moves it),
+  released by the kernel if the process dies. A watch tick that finds every
+  slot taken waits up to 15 minutes, then defers the job to the next tick —
+  exit 0, nothing written to the ledger, no backoff. `kiln run` waits the
+  same time, then exits 75.
+
+### Changed
+
+- **A commit that fails on its own merits is no longer re-run every hour.**
+  Each failed run records whether the commit (gate rejected, task failed) or
+  the box (missing toolchain, lock, timeout, network) was at fault, and the
+  fingerprint of kiln, tool versions and pipeline it ran with. The watch loop
+  retries a commit failure as soon as that fingerprint changes and otherwise
+  daily; box failures keep the 15m → 1h backoff. On a real box a handful of
+  stale pull requests and old tags were re-gated ~24 times a day each.
+
+- **A tick fetches only the open pull requests.** GitHub keeps
+  `refs/pull/N/head` for every pull request ever opened, and the wildcard
+  fetch brought all of them down every tick for discovery to discard — one
+  box logged `skipped closed pull requests count=372` against a single build,
+  every thirty minutes. When GitHub answers which pull requests are open, kiln
+  now asks first, fetches just those heads in one batched `git fetch`, and
+  deletes the parked `refs/kiln/pr/*` of pull requests that have closed, so
+  the local namespace stops growing. Without an answer — no token, an API
+  error, a non-GitHub remote — the wildcard fetch, fork handling and baseline
+  fallback are unchanged. A new box's baseline still records every pull ref
+  on the remote, so a token that later lapses does not replay closed ones.
+
 ### Fixed
 
 - **Old tags are no longer rebuilt.** A failing tag was never silenced by a
