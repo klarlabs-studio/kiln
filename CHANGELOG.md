@@ -6,6 +6,16 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- `KILN_GITHUB_APP_INSTALLATION_ID` is optional. Without it, kiln asks GitHub
+  which installation of the app covers the repository, so one box can watch
+  repositories in several organisations.
+- A credential that cannot see the repository at all now produces one
+  `github disabled for this repository` error naming what to grant, and kiln
+  stops calling GitHub for the rest of that tick. Before, every pull request
+  listing and check run logged its own 404 warning: 913 on one box.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

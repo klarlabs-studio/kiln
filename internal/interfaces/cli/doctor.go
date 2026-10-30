@@ -353,6 +353,9 @@ func ambientOIDC() (string, bool) {
 
 func (r *doctorReport) checkCredentials(deps *boot.Deps) {
 	switch {
+	case deps.ChecksEnabled() && deps.Env.GitHubApp() && deps.Env.GitHubAppInstallationID == "":
+		r.ok("GitHub App %s: installation looked up for this repository, short-lived tokens minted as needed",
+			deps.Env.GitHubAppID)
 	case deps.ChecksEnabled() && deps.Env.GitHubApp():
 		r.ok("GitHub App %s (installation %s): short-lived installation tokens, minted as needed",
 			deps.Env.GitHubAppID, deps.Env.GitHubAppInstallationID)

@@ -330,9 +330,21 @@ it before its hour is up, so a daemon or an `--every` loop never holds a dead
 one. What sits on the box is a key that can mint nothing but tokens scoped to
 that installation, owned by your organisation rather than by whoever ran
 `kiln login`. It also does not live in a keychain, so an upgraded kiln binary
-reads it exactly as the old one did. Set all three or none: two of them is
-refused at boot, by name. When an app is configured it wins over
-`GITHUB_TOKEN` and the stored token.
+reads it exactly as the old one did. The app id and key file go together: one
+without the other is refused at boot, by name. When an app is configured it
+wins over `GITHUB_TOKEN` and the stored token.
+
+`KILN_GITHUB_APP_INSTALLATION_ID` is optional, and on a box that watches more
+than one organisation, leave it out. An app has one installation per
+organisation, so a fixed id is wrong for every repository outside it. Without
+one, kiln asks GitHub which installation covers each repository.
+
+When the credential cannot see the repository at all (the app is not
+installed on its organisation, the installation leaves it out, or a token
+lacks access), GitHub answers every call with 404. Kiln checks the repository
+once, logs one `github disabled for this repository` error saying what to
+grant, and posts nothing more for the rest of that tick. Pull requests are
+treated as forks, as they are without a token.
 
 ## Disk
 
