@@ -8,10 +8,13 @@
 package envconfig
 
 import (
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 )
 
@@ -29,6 +32,18 @@ const (
 	// legitimately slow; finite, because a hung docker pull would otherwise
 	// pin a watcher until somebody noticed.
 	DefaultPhaseTimeout = 45 * time.Minute
+
+	// DefaultMaxParallel is how many kiln builds one machine runs at once.
+	// One, because the box that prompted the limit — eight agents ticking
+	// together on a Mac — could not survive two `go test -race` runs beside
+	// docker builds without swapping. An operator with a bigger machine raises
+	// it; nobody should have to discover the limit by running out of disk.
+	DefaultMaxParallel = 1
+
+	// DefaultMinFreeGB is the free space a watch tick insists on. Enough to
+	// link a race-instrumented test binary and write its build cache, which
+	// is what failed first on a real box that ran out.
+	DefaultMinFreeGB = 5
 )
 
 // Env is the resolved operator environment for one process.
@@ -108,6 +123,32 @@ type Env struct {
 	// is shared by every repository on the box, so it cannot sensibly be
 	// configured per repository.
 	BuildCacheMaxAge time.Duration
+	// GoCache is the kiln-owned Go build cache every gate, task and release
+	// build uses (KILN_GOCACHE), or empty when kiln manages none: the
+	// operator set GOCACHE themselves, or KILN_GOCACHE=off. See package
+	// gocache for why box builds stopped sharing the operator's cache.
+	GoCache string
+	// GoCacheMaxSize caps GoCache after each tick's idle sweep
+	// (KILN_GOCACHE_MAX_SIZE, e.g. 10GiB). Zero leaves only the idle sweep.
+	GoCacheMaxSize int64
+	// MaxParallel bounds concurrent builds across every kiln process of this
+	// user on the machine (KILN_MAX_PARALLEL). Zero means no limit.
+	//
+	// Machine-level for the same reason as BuildCacheMaxAge: the CPU, memory
+	// and disk being protected are shared by every repository on the box.
+	MaxParallel int
+	// SlotDir is where the build slots live (KILN_SLOT_DIR). Empty selects the
+	// user's cache directory. Every process meant to share a limit must see
+	// the same directory, so this is for the operator who needs to move it —
+	// two accounts sharing one machine, or a test that must not queue behind
+	// the real box it runs on.
+	SlotDir string
+	// MinFree is the free disk space below which a watch tick builds nothing
+	// (KILN_MIN_FREE_GB, in GiB). Zero disables the check.
+	//
+	// Machine-level for the same reason as the cache bound: every repository
+	// on the box shares the disk.
+	MinFree uint64
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -138,7 +179,63 @@ func Load() Env {
 		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
 		BuildCacheMaxAge: duration(
 			os.Getenv("KILN_BUILD_CACHE_MAX_AGE"), prune.DefaultBuildCacheMaxAge),
+		GoCache:        goCache(),
+		GoCacheMaxSize: size(os.Getenv("KILN_GOCACHE_MAX_SIZE"), gocache.DefaultMaxSize),
+		MaxParallel:    count(os.Getenv("KILN_MAX_PARALLEL"), DefaultMaxParallel),
+		SlotDir:        strings.TrimSpace(os.Getenv("KILN_SLOT_DIR")),
+		MinFree:        gibibytes(os.Getenv("KILN_MIN_FREE_GB"), DefaultMinFreeGB),
 	}
+}
+
+func goCache() string {
+	operator, set := os.LookupEnv("GOCACHE")
+	return gocache.Resolve(os.Getenv("KILN_GOCACHE"), operator, set, os.UserCacheDir)
+}
+
+// size parses a byte count with an optional binary unit — 10GiB, 512MiB, 2G,
+// or bare bytes. Units are powers of 1024 whether or not the "i" is written:
+// a cache cap is compared against du, which counts that way.
+//
+// "0" is honoured as "no cap"; anything unparsable falls back, for the same
+// reason duration does.
+func size(v string, fallback int64) int64 {
+	v = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(v), " ", ""))
+	if v == "" {
+		return fallback
+	}
+	shift := 0
+	for _, u := range []struct {
+		suffix string
+		shift  int
+	}{{"TIB", 40}, {"GIB", 30}, {"MIB", 20}, {"KIB", 10},
+		{"TB", 40}, {"GB", 30}, {"MB", 20}, {"KB", 10},
+		{"T", 40}, {"G", 30}, {"M", 20}, {"K", 10}, {"B", 0}} {
+		if strings.HasSuffix(v, u.suffix) {
+			v, shift = strings.TrimSuffix(v, u.suffix), u.shift
+			break
+		}
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 || n > math.MaxInt64>>shift {
+		return fallback
+	}
+	return n << shift
+}
+
+// count parses a non-negative integer, falling back to the default.
+//
+// The same contract as duration: "0" is honoured, and anything unparsable or
+// negative falls back, because a typo must not silently lift a limit.
+func count(v string, fallback int) int {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 {
+		return fallback
+	}
+	return n
 }
 
 // duration parses a timeout, falling back to the default.
@@ -156,6 +253,16 @@ func duration(v string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// gibibytes parses a whole number of GiB into bytes, with the same rules as
+// duration: "0" disables, anything unparsable falls back.
+func gibibytes(v string, fallback uint64) uint64 {
+	n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		n = fallback
+	}
+	return n << 30
 }
 
 // truthy accepts the spellings an operator plausibly types. Anything else is

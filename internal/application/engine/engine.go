@@ -137,12 +137,11 @@ func New(e Engine) *Engine {
 // so callers should read the *Run even when err is non-nil.
 func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	r := run.New(req.SHA, req.Ref, req.Event.String(), req.Fork, req.Repo)
+	r.Inputs = e.Inputs(req.Pipeline)
 	log := e.Log.With("run", r.ID, "sha", run.ShortSHA(req.SHA), "event", req.Event.String())
 
 	if err := validate(req); err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	r.Phase = run.PhaseIsolating
@@ -158,9 +157,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	// serve nobody.
 	services, err := e.startServices(ctx, req, r, log)
 	if err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 	defer services.Stop()
 
@@ -168,15 +165,11 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 
 	gate, err := e.doProve(ctx, req, r, policy, log)
 	if err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	if err := e.doPublish(ctx, req, r, policy, gate, log); err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	// Tasks run last, after the artifact exists. Most of them are about a
@@ -185,9 +178,7 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	// publish would also mean an automation failure could stop an artifact
 	// that was otherwise ready to ship.
 	if err := e.doTasks(ctx, req, r, policy, log); err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	r.Succeed()
@@ -195,6 +186,15 @@ func (e *Engine) Execute(ctx context.Context, req Request) (*run.Run, error) {
 	log.Info("run succeeded",
 		"skipped_prove", r.Skipped, "digest", r.Digest, "duration", r.Duration().String())
 	return r, nil
+}
+
+// failed records a run's failure and whose fault it was, so the next watch
+// tick knows whether trying again can help.
+func (e *Engine) failed(r *run.Run, err error, log ports.Logger) (*run.Run, error) {
+	r.Fail(err)
+	r.Cause = causeOf(err)
+	e.persist(r, log)
+	return r, err
 }
 
 // ErrPhaseTimeout reports a phase that ran out of time.
@@ -483,9 +483,7 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	}
 	if strings.TrimSpace(req.SHA) == "" {
 		err := errors.New("engine: no commit to run scheduled tasks against")
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	r.Phase = run.PhaseTasks
@@ -504,9 +502,7 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 		return e.runTasks(ctx, req, r, policy, tasks, dir, log)
 	})
 	if err != nil {
-		r.Fail(err)
-		e.persist(r, log)
-		return r, err
+		return e.failed(r, err, log)
 	}
 
 	r.Succeed()

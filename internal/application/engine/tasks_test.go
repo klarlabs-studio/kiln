@@ -106,7 +106,7 @@ func TestATaskTheCommitPredatesDoesNotFailTheRun(t *testing.T) {
 	}
 
 	// Not retried: the same commit will predate the same script next tick.
-	if verdict, _ := Decide(h.store, r.SHA, r.Ref, time.Now()); verdict != Built {
+	if verdict, _ := Decide(h.store, r.SHA, r.Ref, time.Now(), h.engine.Inputs(r.Pipeline)); verdict != Built {
 		t.Errorf("Decide = %v, want Built", verdict)
 	}
 }

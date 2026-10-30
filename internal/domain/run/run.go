@@ -34,6 +34,22 @@ const (
 // Terminal reports whether the phase is an end state.
 func (p Phase) Terminal() bool { return p == PhaseSucceeded || p == PhaseFailed }
 
+// Cause is whose fault a failed run was.
+//
+// It matters because a watch loop, unlike CI, sees the same commit again every
+// tick. Re-running a commit that failed on its own merits changes nothing; a
+// commit that failed because the box was broken may pass once the box is not.
+type Cause string
+
+const (
+	// CauseCommit means the change itself did not pass: the gate rejected it
+	// or a task exited non-zero.
+	CauseCommit Cause = "commit"
+	// CauseEnvironment means the box could not judge the change: a missing
+	// toolchain, a held lock, a timeout, a registry or network failure.
+	CauseEnvironment Cause = "environment"
+)
+
 // Run is one execution of the engine.
 //
 // The JSON tags are a stored format: `.kiln/state.json` written by one version
@@ -73,6 +89,15 @@ type Run struct {
 	// Error is the failure message, empty on success. It is a string rather
 	// than an error so the record round-trips through JSON unchanged.
 	Error string `json:"error,omitempty"`
+
+	// Cause says whose failure this was, which decides when it is worth
+	// trying again. Empty on success, and on runs recorded by an older kiln.
+	Cause Cause `json:"cause,omitempty"`
+
+	// Inputs fingerprints everything outside the commit that shaped the
+	// result: the kiln build, the tool versions and the pipeline. A commit
+	// that failed on its own merits is retried when this changes.
+	Inputs string `json:"inputs,omitempty"`
 
 	StartedAt  time.Time `json:"started_at"`
 	FinishedAt time.Time `json:"finished_at,omitzero"`
