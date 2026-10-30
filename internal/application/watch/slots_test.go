@@ -128,8 +128,9 @@ func TestAJobWithNoFreeSlotIsDeferredAndNotRecorded(t *testing.T) {
 func TestAfterOneDeferralTheRestOfTheTickDoesNotWaitAgain(t *testing.T) {
 	f := newFixture(t)
 	f.alreadyWatching(t)
+	// Separate major lines, so neither tag supersedes the other.
 	f.upstream.Tag("v1.0.0")
-	f.upstream.Tag("v1.0.1")
+	f.upstream.Tag("v2.0.0")
 	slots := &fakeSlots{free: 0}
 	f.watcher.Slots = slots
 
