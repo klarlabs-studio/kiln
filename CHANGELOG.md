@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
 ### Changed
 
 - **The Homebrew cask no longer warns on install.** It clears the quarantine
@@ -955,7 +957,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/klarlabs-studio/kiln/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/klarlabs-studio/kiln/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/klarlabs-studio/kiln/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/klarlabs-studio/kiln/compare/v0.7.0...v0.7.1
