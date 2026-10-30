@@ -6,6 +6,20 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **A tick fetches only the open pull requests.** GitHub keeps
+  `refs/pull/N/head` for every pull request ever opened, and the wildcard
+  fetch brought all of them down every tick for discovery to discard — one
+  box logged `skipped closed pull requests count=372` against a single build,
+  every thirty minutes. When GitHub answers which pull requests are open, kiln
+  now asks first, fetches just those heads in one batched `git fetch`, and
+  deletes the parked `refs/kiln/pr/*` of pull requests that have closed, so
+  the local namespace stops growing. Without an answer — no token, an API
+  error, a non-GitHub remote — the wildcard fetch, fork handling and baseline
+  fallback are unchanged. A new box's baseline still records every pull ref
+  on the remote, so a token that later lapses does not replay closed ones.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
