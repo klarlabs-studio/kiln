@@ -107,6 +107,15 @@ type Watcher struct {
 	Pruner ports.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
 	BuildCacheMaxAge time.Duration
+	// Health answers whether the box can build at all. Nil skips the checks,
+	// which is what a test that is not about them should get.
+	Health ports.BoxHealth
+	// MinFree is the free space below which a tick builds nothing. Zero
+	// disables the disk check.
+	MinFree uint64
+	// PlanImages mirrors KILN_DRY: images are planned rather than built, so
+	// they need no docker daemon.
+	PlanImages bool
 }
 
 // Result summarises one tick.
@@ -117,6 +126,10 @@ type Result struct {
 	Skipped []Job
 	// Executed are the jobs that ran, with their outcomes.
 	Executed []Outcome
+	// Deferred are the jobs held back because the box could not run them —
+	// they need docker and the daemon is not answering. Nothing is recorded
+	// against them, so the first tick after docker recovers builds them.
+	Deferred []Job
 }
 
 // Outcome pairs a job with what happened to it.
@@ -148,6 +161,10 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	if !dryRun {
 		w.reap(ctx)
 		w.prune(ctx)
+		// After the housekeeping, which is what frees the space.
+		if err := w.checkDisk(); err != nil {
+			return Result{}, err
+		}
 	}
 
 	if err := w.fetch(ctx); err != nil {
@@ -171,6 +188,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	}
 
 	result := Result{Discovered: jobs}
+	docker := w.dockerProbe(ctx)
 	for _, job := range jobs {
 		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
 		case engine.Built:
@@ -189,6 +207,10 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		}
 		if dryRun {
 			result.Executed = append(result.Executed, Outcome{Job: job})
+			continue
+		}
+		if w.Pipeline.NeedsDocker(job.Event.String(), !w.PlanImages) && docker() != nil {
+			result.Deferred = append(result.Deferred, job)
 			continue
 		}
 
@@ -319,6 +341,54 @@ func (w *Watcher) prune(ctx context.Context) {
 		w.logger().Info("pruned",
 			"images", len(res.Removed), "kept", res.Kept, "cache", res.CacheFreed)
 	}
+}
+
+// checkDisk refuses a tick on a box too full to finish one.
+//
+// Before this, a full disk failed every job in the tick with the linker's
+// "no space left on device", and recorded each failure against a commit that
+// had done nothing wrong. One refused tick says what is actually wrong.
+func (w *Watcher) checkDisk() error {
+	if w.Health == nil || w.MinFree == 0 || w.Dir == "" {
+		return nil
+	}
+	free, err := w.Health.FreeBytes(w.Dir)
+	if err != nil {
+		// A check that cannot look is not a reason to stop building.
+		w.logger().Warn("could not read free disk space", "err", err)
+		return nil
+	}
+	if free < w.MinFree {
+		return fmt.Errorf("%w: %s free, below the %s minimum (KILN_MIN_FREE_GB)",
+			ports.ErrBoxNotReady, humanBytes(free), humanBytes(w.MinFree))
+	}
+	return nil
+}
+
+// dockerProbe returns a check that asks the daemon at most once per tick, and
+// only if some job needs it: a tick of prove-only jobs never pays for it.
+func (w *Watcher) dockerProbe(ctx context.Context) func() error {
+	var (
+		asked bool
+		err   error
+	)
+	return func() error {
+		if w.Health == nil {
+			return nil
+		}
+		if !asked {
+			asked = true
+			if err = w.Health.DockerReady(ctx); err != nil {
+				w.logger().Warn("deferring jobs that need docker", "err", err)
+			}
+		}
+		return err
+	}
+}
+
+func humanBytes(n uint64) string {
+	const gib = 1 << 30
+	return fmt.Sprintf("%.1f GiB", float64(n)/gib)
 }
 
 // tickLocked runs one tick under the repository lock.

@@ -6,6 +6,14 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `kiln watch` checks the box before building. Below `KILN_MIN_FREE_GB` free
+  disk (default 5, `0` disables) a tick builds nothing and exits 69; while the
+  docker daemon does not answer, jobs that build an image or start a service
+  are deferred instead of failed. Neither is recorded against a commit, so a
+  full disk no longer turns into hundreds of failed runs.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
