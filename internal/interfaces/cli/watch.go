@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
+	"go.klarlabs.de/kiln/internal/infrastructure/health"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
@@ -270,6 +272,10 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
 		GoCache:          goCacheTrimmer(deps),
+		Slots:            buildSlots(deps),
+		Health:           health.New(deps.Runner),
+		MinFree:          deps.Env.MinFree,
+		PlanImages:       deps.Dry(),
 	}
 }
 
@@ -287,6 +293,11 @@ func goCacheTrimmer(deps *boot.Deps) ports.CacheTrimmer {
 
 func finishTick(ctx context.Context, w *watch.Watcher, io IO, branchesOnly, dryRun bool) error {
 	result, err := tick(ctx, w, branchesOnly, dryRun)
+	if errors.Is(err, ports.ErrBoxNotReady) {
+		// Not a build failure and not a broken watcher: the machine needs
+		// attention, and no commit is blamed for it.
+		return wrapExit(ExitNotReady, err)
+	}
 	if err != nil {
 		return wrapExit(ExitError, err)
 	}
@@ -326,6 +337,9 @@ func printTick(io IO, res watch.Result, dryRun bool) {
 		default:
 			io.printf("built   %-24s %s%s\n", job.Label, run.ShortSHA(job.SHA), digestSuffix(outcome))
 		}
+	}
+	for _, job := range res.Deferred {
+		io.printf("defer   %-24s %s (the box cannot run it now; next tick)\n", job.Label, run.ShortSHA(job.SHA))
 	}
 }
 

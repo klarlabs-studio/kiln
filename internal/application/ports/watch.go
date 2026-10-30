@@ -79,3 +79,22 @@ type CacheTrimResult struct {
 type CacheTrimmer interface {
 	Trim(ctx context.Context) (CacheTrimResult, error)
 }
+
+// ErrBoxNotReady reports a box that cannot do the work a tick would start: a
+// disk too full to link a binary, a docker daemon that does not answer.
+//
+// Like ErrRepoBusy it is not a build failure. Before it existed, a full disk
+// surfaced as hundreds of failed runs — every commit's gate dying in the
+// linker — and each one was recorded against a commit that had done nothing
+// wrong. Nothing is recorded now; the next tick looks again.
+var ErrBoxNotReady = errors.New("box is not ready")
+
+// BoxHealth answers whether this machine can build at all right now.
+type BoxHealth interface {
+	// FreeBytes reports the space an unprivileged writer can still use on
+	// the filesystem holding path.
+	FreeBytes(path string) (uint64, error)
+	// DockerReady reports whether the docker daemon answers. A missing
+	// docker binary is an error too: a run that needs one cannot start.
+	DockerReady(ctx context.Context) error
+}

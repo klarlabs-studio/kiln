@@ -203,12 +203,19 @@ func report(io IO, err error) int {
 	return ExitError
 }
 
-// ExitBusy reports that another kiln process holds the repository.
+// ExitBusy reports that another kiln process holds the repository, or that
+// every machine build slot stayed taken for the whole wait.
 //
 // Distinct from ExitError because it is not a fault: on a cron schedule an
 // overlap is expected, and an operator alerting on failures should not be
 // paged because a build took longer than the interval.
 const ExitBusy = 75
+
+// ExitNotReady reports a box that cannot build right now — too little free
+// disk. EX_UNAVAILABLE rather than ExitFailed, because no commit failed and
+// an operator alerting on red builds should look at the machine, not at a
+// pull request.
+const ExitNotReady = 69
 
 // withRepoLock runs fn holding the repository lock.
 //

@@ -10,6 +10,8 @@ package gitcli
 import (
 	"context"
 	"fmt"
+	"slices"
+	"strconv"
 	"strings"
 
 	"go.klarlabs.de/kiln/internal/application/ports"
@@ -29,13 +31,21 @@ type Git struct {
 // New returns a Git backed by the given runner.
 func New(r execx.Runner) *Git { return &Git{Runner: r} }
 
-func (g *Git) Fetch(ctx context.Context, dir, remote, refspec string) error {
-	_, err := g.Runner.Run(ctx, execx.Cmd{
-		Name: "git",
-		Args: []string{"fetch", "--prune", "--quiet", remote, refspec},
-		Dir:  dir,
-	})
-	return err
+// fetchBatch bounds the refspecs on one git command line. Each is about forty
+// bytes, so this stays far inside the smallest ARG_MAX a box is likely to have
+// while still turning a few hundred open pull requests into one or two round
+// trips. Not `git fetch --stdin`: that needs git 2.29, and a box's git is
+// whatever its distribution shipped.
+const fetchBatch = 256
+
+func (g *Git) Fetch(ctx context.Context, dir, remote string, refspecs ...string) error {
+	for batch := range slices.Chunk(refspecs, fetchBatch) {
+		args := append([]string{"fetch", "--prune", "--quiet", remote}, batch...)
+		if _, err := g.Runner.Run(ctx, execx.Cmd{Name: "git", Args: args, Dir: dir}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (g *Git) HeadSHA(ctx context.Context, dir, remote, branch string) (string, error) {
@@ -109,6 +119,71 @@ func (g *Git) PullRefs(ctx context.Context, dir string) ([]ports.Ref, error) {
 		out = append(out, ports.Ref{Name: fmt.Sprintf("refs/pull/%d/head", number), SHA: sha})
 	}
 	return out, nil
+}
+
+func (g *Git) RemotePullRefs(ctx context.Context, dir, remote string) ([]ports.Ref, error) {
+	res, err := g.Runner.Run(ctx, execx.Cmd{
+		Name: "git",
+		Args: []string{"ls-remote", remote, "refs/pull/*/head"},
+		Dir:  dir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("gitcli: list remote pull request refs: %w", err)
+	}
+
+	var out []ports.Ref
+	for line := range strings.SplitSeq(res.Output(), "\n") {
+		sha, ref, ok := strings.Cut(strings.TrimSpace(line), "\t")
+		if !ok {
+			continue
+		}
+		// ls-remote matches a pattern against the tail of a ref, so be exact
+		// about the shape rather than trust the glob.
+		if _, err := pullNumber(ref); err != nil {
+			continue
+		}
+		out = append(out, ports.Ref{Name: ref, SHA: sha})
+	}
+	return out, nil
+}
+
+func (g *Git) DropPullRefs(ctx context.Context, dir string, refs []string) error {
+	if len(refs) == 0 {
+		return nil
+	}
+	// One update-ref over stdin rather than a process per ref: a box that ran
+	// the wildcard fetch for months holds hundreds of them.
+	var script strings.Builder
+	for _, ref := range refs {
+		n, err := pullNumber(ref)
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(&script, "delete %s%d\n", PullRefNamespace, n)
+	}
+	_, err := g.Runner.Run(ctx, execx.Cmd{
+		Name:  "git",
+		Args:  []string{"update-ref", "--stdin"},
+		Dir:   dir,
+		Stdin: strings.NewReader(script.String()),
+	})
+	if err != nil {
+		return fmt.Errorf("gitcli: drop pull request refs: %w", err)
+	}
+	return nil
+}
+
+// pullNumber reads N out of exactly refs/pull/N/head.
+func pullNumber(ref string) (int, error) {
+	digits, ok := strings.CutPrefix(ref, "refs/pull/")
+	if ok {
+		digits, ok = strings.CutSuffix(digits, "/head")
+	}
+	n, err := strconv.Atoi(digits)
+	if !ok || err != nil || n <= 0 {
+		return 0, fmt.Errorf("gitcli: not a pull request ref: %q", ref)
+	}
+	return n, nil
 }
 
 func (g *Git) Contains(ctx context.Context, dir, sha, tip string) (bool, error) {
