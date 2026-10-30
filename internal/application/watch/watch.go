@@ -172,7 +172,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 
 	result := Result{Discovered: jobs}
 	for _, job := range jobs {
-		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
+		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now(), w.Engine.Inputs(w.Pipeline)); verdict {
 		case engine.Built:
 			result.Skipped = append(result.Skipped, job)
 			log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
@@ -184,6 +184,13 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 			result.Skipped = append(result.Skipped, job)
 			log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
 				"wait", engine.DescribeBackoff(wait))
+			continue
+		case engine.Settled:
+			// The commit failed on its own merits. Running it again with the
+			// same kiln, tools and pipeline would only repeat the verdict.
+			result.Skipped = append(result.Skipped, job)
+			log.Debug("failed on this commit, waiting for a change", "ref", job.Ref,
+				"sha", run.ShortSHA(job.SHA), "wait", engine.DescribeBackoff(wait))
 			continue
 		case engine.Build:
 		}
