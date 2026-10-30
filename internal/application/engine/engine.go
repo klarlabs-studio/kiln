@@ -637,12 +637,18 @@ func (e *Engine) runTasks(
 
 		r.Tasks = append(r.Tasks, run.Task{
 			Name: nt.Name, OK: result.OK(), Tolerated: result.Tolerated,
-			Duration: result.Duration.String(),
+			NotApplicable: result.NotApplicable(),
+			Duration:      result.Duration.String(),
 		})
 
 		switch {
 		case result.Err == nil:
 			log.Info("task passed", "task", nt.Name, "duration", result.Duration.String())
+		case result.NotApplicable():
+			// Not added to failed. A failed run is retried, and this commit
+			// will predate the same file on every retry; letting the run
+			// succeed is what settles it in the ledger.
+			log.Info("task not applicable to this commit", "task", nt.Name, "reason", result.Err)
 		case result.Tolerated:
 			log.Warn("task failed, tolerated", "task", nt.Name, "err", result.Err)
 		default:

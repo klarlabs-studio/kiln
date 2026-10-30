@@ -99,6 +99,13 @@ depends on whose failure it was:
   otherwise once a day. Re-running it unchanged would only repeat the verdict.
   Push a fix, or change what it depends on, to retry it sooner.
 
+A task that does not apply to the commit — an old pull request that predates
+the script the task runs, see [`tasks`](configuration.md#tasks) — is not a run
+failure: the ledger records the task as `not_applicable` and the run succeeds,
+so the commit is not retried for a file it can never grow. Its check still
+concludes `failure`, titled "not applicable", because a skipped check would
+satisfy branch protection for a commit nothing checked.
+
 One failing job does not stop the others — otherwise anybody who can open a
 pull request could halt the pipeline.
 
@@ -197,6 +204,9 @@ Runs nothing, prints the job list. Safe even on a box with no gate installed.
 
 2 and 3 are separated on purpose: 2 needs a developer to fix their code, 3
 needs an operator to fix a machine. Alert on 3 and 69.
+
+A task that is not applicable to the commit does not count towards 2: nobody
+can fix an old commit by adding a script to it.
 
 ## Concurrency
 

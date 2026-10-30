@@ -83,6 +83,23 @@ All notable changes to kiln are documented here. The format follows
   installed by older releases are covered on upgrade without
   `kiln box install`. A failed rotation is logged and never fails the tick.
 
+- **A task whose script the commit predates is not applicable, not failed.**
+  A box builds every open pull request, including ones branched before the
+  pipeline started calling `scripts/ci/build.sh`; around 400 box runs failed
+  with `exit 127` that way, each a red check and an hourly retry for a commit
+  that can never grow the file. kiln now records such a task as not
+  applicable: the ledger marks the task `not_applicable`, the run does not
+  fail (exit 0) and the commit is not retried. The check stays red on
+  purpose, titled `not applicable: this commit predates <path>` and telling
+  the author to rebase or drop the task: a `skipped` or `neutral` conclusion
+  satisfies a required check, which would let a pull request based on an old
+  enough commit merge without the check ever running. Only
+  a path written in the task's `run`, relative and inside the worktree, not
+  gitignored, and absent from the commit's entire (non-shallow) history
+  qualifies — a pull request that deletes the script, a missing tool on
+  `PATH`, or missing dependencies still fail. The warden gate is unchanged:
+  warden already reports a missing command as a toolchain problem (exit 78).
+
 ## [0.8.0] - 2026-10-17
 
 ### Added
