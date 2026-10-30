@@ -267,8 +267,14 @@ func (a *agent) unload(ctx context.Context) error {
 
 func (a *agent) domain() string { return fmt.Sprintf("gui/%d", os.Getuid()) }
 
-func (a *agent) logPath() string {
-	return filepath.Join(a.repo, ".kiln", "box.log")
+func (a *agent) logPath() string { return boxLogPath(a.repo) }
+
+// boxLogPath is where a box's unit sends its output. One function rather
+// than two literals, because the watcher rotates this file: if the unit and
+// the rotation ever disagreed, the log would grow forever again while a file
+// nobody writes was dutifully trimmed.
+func boxLogPath(repo string) string {
+	return filepath.Join(repo, ".kiln", "box.log")
 }
 
 func (a *agent) servicePath() string {

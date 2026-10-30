@@ -73,6 +73,16 @@ All notable changes to kiln are documented here. The format follows
   pre-releases included; tags that are not versions are built as before.
   `watch.superseded_tags: true` restores building every tag.
 
+- **The box log no longer grows forever.** launchd and systemd append a
+  box's output to `.kiln/box.log` and never rotate it; one box reached 14 MB.
+  Each `watch` and `poll` tick now starts by rotating it once it passes
+  5 MiB, keeping `box.log.1` to `box.log.3`. The file is copied and then
+  truncated in place, because the init system holds it open in append mode
+  and a rename would send the rest of the tick into the rotated copy. The
+  path is derived from the repository rather than the unit, so boxes
+  installed by older releases are covered on upgrade without
+  `kiln box install`. A failed rotation is logged and never fails the tick.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

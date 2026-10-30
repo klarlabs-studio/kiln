@@ -523,6 +523,10 @@ larger reclaim of the two. It never touches a moving tag, never a repository
 kiln does not publish, and **never a registry**: a local image is a re-pull
 away, a deleted registry digest is a rollback RollOps can no longer perform.
 
+**The box log is bounded.** Once `.kiln/box.log` passes 5 MiB, the next tick
+moves it to `box.log.1` and keeps three generations, about 20 MiB per box.
+Boxes installed by an older kiln get this on upgrade, without reinstalling.
+
 **The Go build cache is kiln's own.** Builds run with `GOCACHE` set to
 `<user cache>/kiln/go-build` instead of sharing yours, and each tick drops
 entries unused for 24h, then the least recently used beyond
