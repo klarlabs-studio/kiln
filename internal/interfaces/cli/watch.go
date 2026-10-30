@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,10 +11,13 @@ import (
 	"time"
 
 	"go.klarlabs.de/kiln/internal/application/poll"
+	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/application/watch"
 	"go.klarlabs.de/kiln/internal/boot"
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
+	"go.klarlabs.de/kiln/internal/infrastructure/health"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 	"go.klarlabs.de/kiln/internal/infrastructure/logrotate"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
@@ -272,12 +276,34 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		// ever installed already runs in the repository and writes to this
 		// path, so rotation reaches them all on upgrade, with no reinstall.
 		// Outside a box the file does not exist and rotation does nothing.
-		Logs: logrotate.New(boxLogPath(deps.Dir)),
+		Logs:       logrotate.New(boxLogPath(deps.Dir)),
+		GoCache:    goCacheTrimmer(deps),
+		Slots:      buildSlots(deps),
+		Health:     health.New(deps.Runner),
+		MinFree:    deps.Env.MinFree,
+		PlanImages: deps.Dry(),
 	}
+}
+
+// goCacheTrimmer trims the cache boot claimed, and nothing else: an empty
+// deps.Env.GoCache means the operator set GOCACHE, turned kiln's cache off,
+// or boot could not claim one, and in every one of those cases the directory
+// is not kiln's to delete from. Returning the interface's nil explicitly
+// rather than a nil *Trimmer is what makes the watcher's nil check work.
+func goCacheTrimmer(deps *boot.Deps) ports.CacheTrimmer {
+	if deps.Env.GoCache == "" {
+		return nil
+	}
+	return gocache.NewTrimmer(deps.Env.GoCache, deps.Env.GoCacheMaxSize)
 }
 
 func finishTick(ctx context.Context, w *watch.Watcher, io IO, branchesOnly, dryRun bool) error {
 	result, err := tick(ctx, w, branchesOnly, dryRun)
+	if errors.Is(err, ports.ErrBoxNotReady) {
+		// Not a build failure and not a broken watcher: the machine needs
+		// attention, and no commit is blamed for it.
+		return wrapExit(ExitNotReady, err)
+	}
 	if err != nil {
 		return wrapExit(ExitError, err)
 	}
@@ -317,6 +343,9 @@ func printTick(io IO, res watch.Result, dryRun bool) {
 		default:
 			io.printf("built   %-24s %s%s\n", job.Label, run.ShortSHA(job.SHA), digestSuffix(outcome))
 		}
+	}
+	for _, job := range res.Deferred {
+		io.printf("defer   %-24s %s (the box cannot run it now; next tick)\n", job.Label, run.ShortSHA(job.SHA))
 	}
 }
 

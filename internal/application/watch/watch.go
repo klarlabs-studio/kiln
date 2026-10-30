@@ -16,6 +16,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"math"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -109,6 +112,22 @@ type Watcher struct {
 	BuildCacheMaxAge time.Duration
 	// Logs rotates the box log each tick. Nil disables it.
 	Logs ports.LogRotator
+	// GoCache trims the Go build cache kiln's builds use, each tick. Nil
+	// disables it — kiln manages no cache when the operator set GOCACHE or
+	// KILN_GOCACHE=off.
+	GoCache ports.CacheTrimmer
+	// Slots bounds concurrent builds across every repository on the machine.
+	// Nil means no limit, which is what a test should get.
+	Slots ports.BuildSlots
+	// Health answers whether the box can build at all. Nil skips the checks,
+	// which is what a test that is not about them should get.
+	Health ports.BoxHealth
+	// MinFree is the free space below which a tick builds nothing. Zero
+	// disables the disk check.
+	MinFree uint64
+	// PlanImages mirrors KILN_DRY: images are planned rather than built, so
+	// they need no docker daemon.
+	PlanImages bool
 }
 
 // Result summarises one tick.
@@ -119,6 +138,11 @@ type Result struct {
 	Skipped []Job
 	// Executed are the jobs that ran, with their outcomes.
 	Executed []Outcome
+	// Deferred are the jobs left for the next tick because the box could not
+	// run them now: every machine build slot was taken, or they need docker
+	// and the daemon is not answering. They are not failures and nothing is
+	// recorded against them, so a later tick builds them.
+	Deferred []Job
 }
 
 // Outcome pairs a job with what happened to it.
@@ -145,15 +169,22 @@ func (r Result) Failures() int {
 // stop main from building — that would let anybody with push access to a fork
 // halt the pipeline by opening a PR that fails to check out.
 func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
-	log := w.logger()
-
 	if !dryRun {
 		w.rotateLog(ctx)
 		w.reap(ctx)
 		w.prune(ctx)
+		w.trimGoCache(ctx)
+		// After the housekeeping, which is what frees the space.
+		if err := w.checkDisk(); err != nil {
+			return Result{}, err
+		}
 	}
 
-	if err := w.fetch(ctx); err != nil {
+	// Before the fetch, because the answer decides what to fetch; once, because
+	// the same answer then decides fork-ness and closed-ness in discovery.
+	pulls := w.askForge(ctx)
+
+	if err := w.fetch(ctx, pulls); err != nil {
 		return Result{}, err
 	}
 
@@ -163,55 +194,62 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		w.runScheduled(ctx)
 	}
 
-	jobs, authoritative, err := w.discover(ctx)
+	jobs, err := w.discover(ctx, pulls)
 	if err != nil {
 		return Result{}, err
 	}
 
-	jobs, err = w.applyBaseline(ctx, jobs, authoritative, dryRun)
+	all := jobs
+	jobs, base, err := w.applyBaseline(ctx, jobs, pulls.authoritative, dryRun)
 	if err != nil {
 		return Result{}, err
 	}
+	jobs = w.dropSuperseded(jobs, all, base)
 
+	return w.runJobs(ctx, jobs, dryRun)
+}
+
+// runJobs filters the discovered jobs against the ledger and builds the rest,
+// each inside a machine build slot.
+func (w *Watcher) runJobs(ctx context.Context, jobs []Job, dryRun bool) (Result, error) {
 	result := Result{Discovered: jobs}
+	full := false
+	docker := w.dockerProbe(ctx)
 	for _, job := range jobs {
-		switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
-		case engine.Built:
+		switch {
+		case w.alreadyCovered(job):
 			result.Skipped = append(result.Skipped, job)
-			log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
 			continue
-		case engine.Backoff:
-			// A failing commit is not retried every tick. Without this a pull
-			// request whose gate fails is re-gated forever, which on a real
-			// box meant 205 failed runs in an afternoon.
-			result.Skipped = append(result.Skipped, job)
-			log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
-				"wait", engine.DescribeBackoff(wait))
-			continue
-		case engine.Build:
-		}
-		if dryRun {
+		case dryRun:
 			result.Executed = append(result.Executed, Outcome{Job: job})
 			continue
+		case full:
+			// The machine was full a moment ago. Waiting the whole bound again
+			// per job would hold this repository's lock for an hour behind a
+			// machine already known to be busy.
+			result.Deferred = append(result.Deferred, job)
+			continue
+		}
+		if w.Pipeline.NeedsDocker(job.Event.String(), !w.PlanImages) && docker() != nil {
+			result.Deferred = append(result.Deferred, job)
+			continue
 		}
 
-		log.Info("building", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
-			"event", job.Event.String(), "fork", job.Fork)
-
-		r, runErr := w.Engine.Execute(ctx, engine.Request{
-			SHA:      job.SHA,
-			Event:    job.Event,
-			Fork:     job.Fork,
-			Ref:      job.Ref,
-			Repo:     w.Repo,
-			Dir:      w.Dir,
-			Pipeline: w.Pipeline,
-			Output:   w.Output,
-		})
-		if runErr != nil {
-			log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
+		slot, err := w.acquireSlot(ctx, job)
+		if errors.Is(err, ports.ErrNoBuildSlot) {
+			full = true
+			w.logger().Info("deferring to the next tick: no build slot free",
+				"ref", job.Ref, "sha", run.ShortSHA(job.SHA), "busy", err)
+			result.Deferred = append(result.Deferred, job)
+			continue
 		}
-		result.Executed = append(result.Executed, Outcome{Job: job, Run: r, Err: runErr})
+		if err != nil {
+			return result, err
+		}
+
+		outcome := w.execute(ctx, job)
+		_ = slot.Release()
+		result.Executed = append(result.Executed, outcome)
 
 		// A cancelled context means the operator pressed Ctrl-C or the
 		// deadline passed. Continuing would run the remaining jobs against a
@@ -222,6 +260,84 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	}
 	return result, nil
 }
+
+// alreadyCovered reports whether the ledger says this job needs no run now.
+func (w *Watcher) alreadyCovered(job Job) bool {
+	log := w.logger()
+	switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now(), w.Engine.Inputs(w.Pipeline)); verdict {
+	case engine.Built:
+		log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
+		return true
+	case engine.Backoff:
+		// A failing commit is not retried every tick. Without this a pull
+		// request whose gate fails is re-gated forever, which on a real
+		// box meant 205 failed runs in an afternoon.
+		log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
+			"wait", engine.DescribeBackoff(wait))
+		return true
+	case engine.Settled:
+		// The commit failed on its own merits. Running it again with the
+		// same kiln, tools and pipeline would only repeat the verdict.
+		log.Debug("failed on this commit, waiting for a change", "ref", job.Ref,
+			"sha", run.ShortSHA(job.SHA), "wait", engine.DescribeBackoff(wait))
+		return true
+	default:
+		return false
+	}
+}
+
+// acquireSlot claims one of the machine's build slots for job.
+//
+// Per job, and only around the build: discovery and a fetch cost the machine
+// nothing worth limiting, and a tick holding a slot across several jobs would
+// starve every other box for as long as it ran.
+//
+// No free slot is ErrNoBuildSlot, which the caller turns into a deferral — not
+// a failure. Nothing is recorded, so the commit is neither blamed nor backed
+// off, and the next tick finds it unbuilt. Any other error is the machine's
+// fault and fails the tick loudly: building anyway would quietly remove the
+// limit, and recording it would blame the commit.
+func (w *Watcher) acquireSlot(ctx context.Context, job Job) (ports.BuildSlot, error) {
+	if w.Slots == nil {
+		return noSlot{}, nil
+	}
+	holder := "kiln watch " + w.Dir + " " + job.Label
+	slot, err := w.Slots.TryAcquire(holder)
+	if !errors.Is(err, ports.ErrNoBuildSlot) {
+		return slot, err
+	}
+	// Said before the wait, so a tick that sits quiet for minutes explains
+	// itself while it does.
+	w.logger().Info("waiting for a build slot", "ref", job.Ref, "busy", err)
+	return w.Slots.Acquire(ctx, holder)
+}
+
+// execute builds one job.
+func (w *Watcher) execute(ctx context.Context, job Job) Outcome {
+	log := w.logger()
+	log.Info("building", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
+		"event", job.Event.String(), "fork", job.Fork)
+
+	r, runErr := w.Engine.Execute(ctx, engine.Request{
+		SHA:      job.SHA,
+		Event:    job.Event,
+		Fork:     job.Fork,
+		Ref:      job.Ref,
+		Repo:     w.Repo,
+		Dir:      w.Dir,
+		Pipeline: w.Pipeline,
+		Output:   w.Output,
+	})
+	if runErr != nil {
+		log.Error("job failed", "ref", job.Ref, "sha", run.ShortSHA(job.SHA), "err", runErr)
+	}
+	return Outcome{Job: job, Run: r, Err: runErr}
+}
+
+// noSlot stands in when no limit is configured.
+type noSlot struct{}
+
+func (noSlot) Release() error { return nil }
 
 // Every loops Once until the context is cancelled. The first tick runs
 // immediately: an operator who starts a watcher wants to know now whether it
@@ -249,7 +365,8 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 		default:
 			log.Debug("tick complete",
 				"discovered", len(res.Discovered), "skipped", len(res.Skipped),
-				"executed", len(res.Executed), "failed", res.Failures())
+				"executed", len(res.Executed), "failed", res.Failures(),
+				"deferred", len(res.Deferred))
 		}
 
 		select {
@@ -349,6 +466,85 @@ func (w *Watcher) prune(ctx context.Context) {
 	}
 }
 
+// trimGoCache bounds the Go build cache kiln's own builds write.
+//
+// The third housekeeping sweep, and on a Go box the largest: `go test -race`
+// on every commit grew a shared cache by ~35 GB in twelve hours, which an
+// external script had to trim. Before the jobs rather than after, like the
+// other two, so a tick that dies mid-build has still made room.
+//
+// Never fatal: a cache that cannot be trimmed costs disk, and a tick that
+// refused to build over it would cost the pipeline.
+func (w *Watcher) trimGoCache(ctx context.Context) {
+	if w.GoCache == nil {
+		return
+	}
+	res, err := w.GoCache.Trim(ctx)
+	if err != nil {
+		w.logger().Warn("could not trim the go build cache", "err", err)
+	}
+	if res.Files > 0 {
+		w.logger().Info("trimmed go build cache", "files", res.Files, "freed", humanBytes(res.Freed))
+	}
+}
+
+// humanBytes renders a size in binary units, the way du -h would.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// checkDisk refuses a tick on a box too full to finish one.
+//
+// Before this, a full disk failed every job in the tick with the linker's
+// "no space left on device", and recorded each failure against a commit that
+// had done nothing wrong. One refused tick says what is actually wrong.
+func (w *Watcher) checkDisk() error {
+	if w.Health == nil || w.MinFree == 0 || w.Dir == "" {
+		return nil
+	}
+	free, err := w.Health.FreeBytes(w.Dir)
+	if err != nil {
+		// A check that cannot look is not a reason to stop building.
+		w.logger().Warn("could not read free disk space", "err", err)
+		return nil
+	}
+	if free < w.MinFree {
+		return fmt.Errorf("%w: %s free, below the %s minimum (KILN_MIN_FREE_GB)",
+			ports.ErrBoxNotReady, humanBytes(int64(min(free, math.MaxInt64))), humanBytes(int64(min(w.MinFree, math.MaxInt64))))
+	}
+	return nil
+}
+
+// dockerProbe returns a check that asks the daemon at most once per tick, and
+// only if some job needs it: a tick of prove-only jobs never pays for it.
+func (w *Watcher) dockerProbe(ctx context.Context) func() error {
+	var (
+		asked bool
+		err   error
+	)
+	return func() error {
+		if w.Health == nil {
+			return nil
+		}
+		if !asked {
+			asked = true
+			if err = w.Health.DockerReady(ctx); err != nil {
+				w.logger().Warn("deferring jobs that need docker", "err", err)
+			}
+		}
+		return err
+	}
+}
+
 // tickLocked runs one tick under the repository lock.
 //
 // Per tick rather than for the loop's lifetime: a watcher that held the lock
@@ -380,11 +576,8 @@ func (w *Watcher) tickLocked(ctx context.Context, dryRun bool) (Result, error) {
 // Three fetches rather than one, because they fail independently: a repository
 // with no pull requests, or a non-GitHub remote that has no refs/pull/*, must
 // still get its branch built. Only the branch fetch is fatal.
-func (w *Watcher) fetch(ctx context.Context) error {
-	remote := w.Pipeline.Watch.Remote
-	if remote == "" {
-		remote = "origin"
-	}
+func (w *Watcher) fetch(ctx context.Context, pulls openPulls) error {
+	remote := w.remote()
 	branch := w.Pipeline.Watch.Ref
 	if branch == "" {
 		branch = "main"
@@ -401,11 +594,7 @@ func (w *Watcher) fetch(ctx context.Context) error {
 	}
 
 	if w.Pipeline.WatchPullRequests() {
-		// GitHub exposes pull request heads as refs/pull/N/head. A non-GitHub
-		// remote simply has none, and the failure is not interesting.
-		if err := w.fetchWithRetry(ctx, remote, "+refs/pull/*/head:"+PRRefNamespace+"*"); err != nil {
-			log.Debug("no pull request refs on this remote", "remote", remote, "err", err)
-		}
+		w.fetchPulls(ctx, remote, pulls)
 	}
 	if w.Pipeline.WatchTags() {
 		if err := w.fetchWithRetry(ctx, remote, "+refs/tags/*:refs/tags/*"); err != nil {
@@ -415,9 +604,93 @@ func (w *Watcher) fetch(ctx context.Context) error {
 	return nil
 }
 
+// fetchPulls parks the pull request heads discovery will consider.
+//
+// GitHub keeps refs/pull/N/head for every pull request ever opened, so the
+// wildcard fetches the repository's whole history of them every tick for
+// discovery to throw nearly all of it away — 372 skipped against one build,
+// every thirty minutes, on one box here. When the API has said which are open,
+// only those are fetched, and the parked heads of the rest are dropped so the
+// local namespace stops growing.
+//
+// Without that answer nothing is known to be closed, and the wildcard is kept
+// exactly: it is how a tokenless box still sees the pull request opened since
+// its baseline, and why pullDecision and the baseline exist at all.
+func (w *Watcher) fetchPulls(ctx context.Context, remote string, pulls openPulls) {
+	log := w.logger()
+	if pulls.authoritative {
+		err := w.fetchOpenPulls(ctx, remote, pulls)
+		if err == nil {
+			w.dropClosedPulls(ctx, pulls)
+			return
+		}
+		// A fetch by number fails whole when any one ref is missing — a remote
+		// that is not the repository the token answers for, say. That must
+		// cost the narrowing, not the pull requests.
+		log.Warn("could not fetch the open pull requests by number; fetching every pull ref",
+			"remote", remote, "err", err)
+	}
+	// GitHub exposes pull request heads as refs/pull/N/head. A non-GitHub
+	// remote simply has none, and the failure is not interesting.
+	if err := w.fetchWithRetry(ctx, remote, "+refs/pull/*/head:"+PRRefNamespace+"*"); err != nil {
+		log.Debug("no pull request refs on this remote", "remote", remote, "err", err)
+	}
+	if pulls.authoritative {
+		w.dropClosedPulls(ctx, pulls)
+	}
+}
+
+// fetchOpenPulls fetches exactly the heads of the open pull requests, in one
+// fetch: a round trip per pull request would trade one waste for another.
+func (w *Watcher) fetchOpenPulls(ctx context.Context, remote string, pulls openPulls) error {
+	if len(pulls.fork) == 0 {
+		return nil
+	}
+	numbers := slices.Sorted(maps.Keys(pulls.fork))
+	refspecs := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		refspecs = append(refspecs, fmt.Sprintf("+refs/pull/%d/head:%s%d", n, PRRefNamespace, n))
+	}
+	return w.fetchWithRetry(ctx, remote, refspecs...)
+}
+
+// dropClosedPulls removes the parked heads of pull requests the API did not
+// list as open. Only ever called with an authoritative answer: without one, a
+// missing number means "unknown", and deleting an unknown pull request's head
+// would stop it being gated.
+//
+// Never fatal. A leftover ref is filtered by pullDecision regardless; it only
+// costs disk and a line in the log.
+func (w *Watcher) dropClosedPulls(ctx context.Context, pulls openPulls) {
+	refs, err := w.Git.PullRefs(ctx, w.Dir)
+	if err != nil {
+		w.logger().Warn("could not list parked pull request refs", "err", err)
+		return
+	}
+	var closed []string
+	for _, r := range refs {
+		if n, err := pullNumber(r.Name); err == nil && !isOpen(pulls, n) {
+			closed = append(closed, r.Name)
+		}
+	}
+	if len(closed) == 0 {
+		return
+	}
+	if err := w.Git.DropPullRefs(ctx, w.Dir, closed); err != nil {
+		w.logger().Warn("could not drop the parked refs of closed pull requests", "err", err)
+		return
+	}
+	w.logger().Debug("dropped the parked refs of closed pull requests", "count", len(closed))
+}
+
+func isOpen(pulls openPulls, number int) bool {
+	_, ok := pulls.fork[number]
+	return ok
+}
+
 // fetchWithRetry retries a fetch. Network flakiness on a box running a tick a
 // minute is routine, and a single dropped connection should not skip a build.
-func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) error {
+func (w *Watcher) fetchWithRetry(ctx context.Context, remote string, refspecs ...string) error {
 	attempts := w.FetchAttempts
 	if attempts <= 0 {
 		attempts = 3
@@ -431,7 +704,7 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 		Jitter:        true,
 	})
 	_, err := r.Execute(ctx, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, w.Git.Fetch(ctx, w.Dir, remote, refspec)
+		return struct{}{}, w.Git.Fetch(ctx, w.Dir, remote, refspecs...)
 	})
 	return err
 }
@@ -448,25 +721,28 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 // current work, and building them on the first tick is the point of installing
 // a box — it is also the only sign the operator gets that the pipeline runs at
 // all.
-func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, dryRun bool) ([]Job, error) {
+//
+// The baseline is returned, nil when the box has none, because it is also a
+// watermark: dropSuperseded counts an inherited release as shipped.
+func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, dryRun bool) ([]Job, *Baseline, error) {
 	base, err := LoadBaseline(w.Dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if base == nil {
 		if !ledgerIsEmpty(w.Store) {
 			// An existing box has already built its tags. Writing a baseline
 			// underneath it would silence one that is mid-backoff.
-			return jobs, nil
+			return jobs, nil, nil
 		}
-		pulls, err := w.pullRefs(ctx)
+		pulls, err := w.baselinePulls(ctx, authoritative)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		base = baselineFrom(jobs, pulls, w.now())
 		if !dryRun && w.Dir != "" {
 			if err := SaveBaseline(w.Dir, base); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if len(base.Tags) > 0 {
@@ -488,40 +764,45 @@ func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, 
 	if skipped > 0 && base.Tags != nil {
 		w.logger().Debug("skipped baselined tags", "count", skipped)
 	}
-	return kept, nil
+	return kept, base, nil
 }
 
 // discover builds the job list from local refs.
-func (w *Watcher) discover(ctx context.Context) ([]Job, bool, error) {
+func (w *Watcher) discover(ctx context.Context, pulls openPulls) ([]Job, error) {
 	jobs := make([]Job, 0, 8)
 
 	branchJob, err := w.branchJob(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	jobs = append(jobs, branchJob)
 
-	// No pull requests were consulted, so nothing claims to know their state.
 	if w.BranchesOnly {
-		return jobs, false, nil
+		return jobs, nil
 	}
 	if w.Pipeline.WatchTags() {
 		tagJobs, err := w.tagJobs(ctx)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		jobs = append(jobs, tagJobs...)
 	}
-	authoritative := false
 	if w.Pipeline.WatchPullRequests() {
-		prJobs, ok, err := w.pullJobs(ctx, branchJob.SHA)
+		prJobs, err := w.pullJobs(ctx, branchJob.SHA, pulls)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		authoritative = ok
 		jobs = append(jobs, prJobs...)
 	}
-	return jobs, authoritative, nil
+	return jobs, nil
+}
+
+// remote is the watched remote, defaulting as config documents.
+func (w *Watcher) remote() string {
+	if w.Pipeline.Watch.Remote == "" {
+		return "origin"
+	}
+	return w.Pipeline.Watch.Remote
 }
 
 // now is the clock, injectable so a test can state what "twenty minutes later"
@@ -590,10 +871,7 @@ func (w *Watcher) runScheduled(ctx context.Context) {
 }
 
 func (w *Watcher) branchJob(ctx context.Context) (Job, error) {
-	remote := w.Pipeline.Watch.Remote
-	if remote == "" {
-		remote = "origin"
-	}
+	remote := w.remote()
 	branch := w.Pipeline.Watch.Ref
 	if branch == "" {
 		branch = "main"
@@ -632,17 +910,23 @@ func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
 	return jobs, nil
 }
 
-// pullJobs turns the fetched pull request heads into jobs.
+// baselinePulls lists every pull request head the repository has, whatever its
+// state. This is deliberately unfiltered: the baseline has to record what a
+// repository already had, not the subset a token happened to say was open.
 //
-// Fork status is the security-critical field here. With a token, it comes from
-// the API. Without one, every pull request is treated as a fork — the only
-// safe reading of "I cannot tell", since the alternative hands an unknown
-// author the operator's credentials.
-// pullRefs lists every parked pull request head, whatever its state. This is
-// deliberately unfiltered: the baseline has to record what a repository
-// already had, not the subset a token happened to say was open.
-func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
-	refs, err := w.Git.PullRefs(ctx, w.Dir)
+// With an authoritative answer only the open heads were fetched, so the
+// parked refs no longer hold the closed ones — and the closed ones are exactly
+// what the baseline exists to remember for the day the token stops answering.
+// The remote still has them, and listing them costs no objects. Without one,
+// the wildcard just parked everything, as it always has.
+func (w *Watcher) baselinePulls(ctx context.Context, authoritative bool) (map[string]string, error) {
+	var refs []ports.Ref
+	var err error
+	if authoritative {
+		refs, err = w.Git.RemotePullRefs(ctx, w.Dir, w.remote())
+	} else {
+		refs, err = w.Git.PullRefs(ctx, w.Dir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
@@ -653,13 +937,19 @@ func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, error) {
+// pullJobs turns the fetched pull request heads into jobs.
+//
+// Fork status is the security-critical field here. With a token, it comes from
+// the API. Without one, every pull request is treated as a fork — the only
+// safe reading of "I cannot tell", since the alternative hands an unknown
+// author the operator's credentials.
+func (w *Watcher) pullJobs(ctx context.Context, branchTip string, pulls openPulls) ([]Job, error) {
 	refs, err := w.Git.PullRefs(ctx, w.Dir)
 	if err != nil {
-		return nil, false, fmt.Errorf("watch: list pull request refs: %w", err)
+		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
 
-	open, authoritative := w.forkStatus(ctx)
+	open, authoritative := pulls.fork, pulls.authoritative
 	log := w.logger()
 
 	var jobs []Job
@@ -695,11 +985,9 @@ func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, 
 			"count", closed, "built", len(jobs),
 			"why", "refs/pull/N/head outlives the pull request it belonged to")
 	}
-	return jobs, authoritative, nil
+	return jobs, nil
 }
 
-// forkStatus asks GitHub which open pull requests are same-repo. An empty map
-// means "unknown", which pullJobs reads as "assume fork".
 // pullDecision says whether a discovered pull ref should be built, and whether
 // it must be treated as a fork.
 //
@@ -730,25 +1018,40 @@ func pullDecision(number int, open map[int]bool, authoritative bool, merged func
 	}
 }
 
-// forkStatus reports fork-ness per OPEN pull request, and whether that list is
-// authoritative. Authoritative means the API answered: a number missing from
-// the map is then known to be closed, rather than merely unknown.
-func (w *Watcher) forkStatus(ctx context.Context) (map[int]bool, bool) {
+// openPulls is GitHub's answer to "which pull requests are open", asked once
+// per tick and used three times: to choose what to fetch, to drop what is
+// closed, and to say which of what is left comes from a fork.
+type openPulls struct {
+	// fork maps each OPEN pull request's number to its fork-ness.
+	fork map[int]bool
+	// authoritative means the API answered: a number missing from fork is
+	// then known to be closed, rather than merely unknown.
+	authoritative bool
+}
+
+// askForge asks the forge, or reports that it cannot be asked. The zero value
+// — unknown — is what a tick that does not look at pull requests gets: `kiln
+// poll` is the subset of watch that needs no token, and must not warn about
+// lacking one.
+func (w *Watcher) askForge(ctx context.Context) openPulls {
+	if w.BranchesOnly || !w.Pipeline.WatchPullRequests() {
+		return openPulls{}
+	}
 	if w.Forge == nil || !w.Forge.Enabled() {
 		w.logger().Warn("no github token: treating every pull request as a fork",
 			"effect", "no secrets, no publish, no provenance skip on any PR")
-		return nil, false
+		return openPulls{}
 	}
 	pulls, err := w.Forge.ListOpenPulls(ctx)
 	if err != nil {
 		w.logger().Warn("could not list pull requests: treating every one as a fork", "err", err)
-		return nil, false
+		return openPulls{}
 	}
 	out := make(map[int]bool, len(pulls))
 	for _, p := range pulls {
 		out[p.Number] = p.Fork
 	}
-	return out, true
+	return openPulls{fork: out, authoritative: true}
 }
 
 // mergedIntoBranch reports that a pull request head is already contained in the

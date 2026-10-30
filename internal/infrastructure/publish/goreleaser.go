@@ -19,6 +19,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/attest"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
@@ -55,6 +56,11 @@ type Goreleaser struct {
 	Uploader AssetUploader
 	// Dry stops short of uploading.
 	Dry bool
+	// GoCache is the kiln-owned Go build cache goreleaser's builds use, or
+	// empty to leave GOCACHE as the environment has it. A release
+	// cross-compiles every target, so it is the biggest single writer a box
+	// has. See package gocache.
+	GoCache string
 	// SigningKey selects keyed signing for the provenance attestation
 	// (KILN_COSIGN_KEY), matching the image path. goreleaser signs the
 	// artifacts themselves from `.goreleaser.yaml`, so this covers only the
@@ -163,7 +169,7 @@ func (g *Goreleaser) release(ctx context.Context, req ports.PublishRequest, dir 
 		args = append(args, "--skip=publish,announce,sign")
 	}
 
-	env := os.Environ()
+	env := gocache.Env(os.Environ(), g.GoCache)
 	token := g.Token
 	if g.Tokens != nil && !g.Dry {
 		minted, err := g.Tokens(ctx)

@@ -100,6 +100,22 @@ watch:
 	}
 }
 
+// Skipping a superseded tag is the default, because the case it exists for —
+// a box retrying a repository's first-week tags forever — is the common one.
+// A repository that needs an overtaken tag built anyway opts out.
+func TestSupersededTagsAreSkippedUnlessAsked(t *testing.T) {
+	if parse(t, minimal).BuildSupersededTags() {
+		t.Error("superseded tags must be skipped by default")
+	}
+	p := parse(t, minimal+`
+watch:
+  superseded_tags: true
+`)
+	if !p.BuildSupersededTags() {
+		t.Error("superseded_tags: true must build them")
+	}
+}
+
 func TestUnknownFieldRejected(t *testing.T) {
 	err := parseErr(t, minimal+"\nbogus: 1\n")
 	if !strings.Contains(err.Error(), "bogus") {
@@ -494,5 +510,43 @@ func TestPrunableImagesListsOnlyImages(t *testing.T) {
 	}
 	if _, ok := got["ghcr.io/klarlabs-studio/kiln"]; !ok {
 		t.Errorf("PrunableImages = %v", got)
+	}
+}
+
+func TestNeedsDocker(t *testing.T) {
+	image := parse(t, `
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+  push: [prove, publish]
+publish:
+  - image: ghcr.io/x/y
+`)
+	services := parse(t, `
+apiVersion: kiln.klarlabs.de/v1
+kind: Pipeline
+on:
+  pull_request: [prove]
+services:
+  db:
+    image: postgres:17
+`)
+	for _, c := range []struct {
+		name   string
+		p      Pipeline
+		event  string
+		images bool
+		want   bool
+	}{
+		{"an image push", image, "push", true, true},
+		{"a pull request that publishes nothing", image, "pull_request", true, false},
+		{"a planned image", image, "push", false, false},
+		{"a service beside the gate", services, "pull_request", true, true},
+		{"a service on a dry box", services, "pull_request", false, true},
+	} {
+		if got := c.p.NeedsDocker(c.event, c.images); got != c.want {
+			t.Errorf("%s: NeedsDocker = %v, want %v", c.name, got, c.want)
+		}
 	}
 }

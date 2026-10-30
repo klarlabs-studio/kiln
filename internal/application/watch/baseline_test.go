@@ -268,3 +268,34 @@ func TestTheBaselineRecordsClosedPullRefsToo(t *testing.T) {
 		t.Errorf("baseline did not record the pull ref: %+v", got)
 	}
 }
+
+// A box with a token fetches only the open pull requests, so its own clone no
+// longer holds the closed ones. The baseline must still record them, from the
+// remote: they are what comes back the first tick the token does not answer.
+func TestTheBaselineRecordsClosedPullRefsEvenWhenOnlyOpenOnesAreFetched(t *testing.T) {
+	f := newFixture(t)
+	f.pullRef(3, "old.txt")
+	f.watcher.Forge = &fakeForge{open: nil}
+
+	if _, err := f.watcher.Once(t.Context(), false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadBaseline(f.watcher.Dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got == nil || got.Pulls["refs/pull/3/head"] == "" {
+		t.Fatalf("baseline did not record the closed pull ref: %+v", got)
+	}
+
+	// The token goes away; the wildcard brings #3 back, and the baseline is
+	// all that stands between it and a rebuild.
+	f.watcher.Forge = nil
+	res, err := f.watcher.Once(t.Context(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasRef(res.Discovered, "refs/pull/3/head") {
+		t.Errorf("a tokenless tick replayed a pull request closed before the box started: %+v", res.Discovered)
+	}
+}

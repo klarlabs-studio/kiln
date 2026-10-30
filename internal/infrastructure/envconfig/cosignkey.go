@@ -3,7 +3,10 @@ package envconfig
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
+
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 )
 
 // ErrKeyMaterial reports that KILN_COSIGN_KEY holds a key rather than a
@@ -57,6 +60,9 @@ func ValidateCosignKey(v string) error {
 // Validate reports configuration that cannot work, before anything runs.
 func (e Env) Validate() error {
 	if err := ValidateCosignKey(e.CosignKey); err != nil {
+		return err
+	}
+	if err := gocache.Validate(e.GoCache, os.UserCacheDir); err != nil {
 		return err
 	}
 	return e.validateGitHubApp()

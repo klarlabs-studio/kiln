@@ -44,6 +44,10 @@ func repoWith(t *testing.T, pipeline string) *gittest.Repo {
 		t.Setenv(k, "")
 	}
 	t.Setenv("KILN_LOG_LEVEL", "fatal")
+	// Boot claims the Go build cache; without this every test would create
+	// and mark the developer's real <user cache>/kiln/go-build.
+	t.Setenv("GOCACHE", "")
+	t.Setenv("KILN_GOCACHE", filepath.Join(t.TempDir(), "go-build"))
 	// Pin a stub gate. Otherwise every doctor and run test quietly depends on
 	// whether the developer happens to have warden installed, and passes on a
 	// laptop while failing on a runner. Tests that need a *missing* gate

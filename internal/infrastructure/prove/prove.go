@@ -22,6 +22,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/application/ports"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
 )
 
@@ -32,6 +33,9 @@ type Warden struct {
 	// WardenBin and NoxBin are the executables (KILN_WARDEN, KILN_NOX).
 	WardenBin string
 	NoxBin    string
+	// GoCache is the kiln-owned Go build cache the gate's children use, or
+	// empty to leave GOCACHE as the environment has it. See package gocache.
+	GoCache string
 }
 
 // NewWarden builds a prover.
@@ -139,16 +143,20 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 // concrete meaning of the fork row in the isolation matrix: the code about to
 // execute was authored by whoever opened the pull request, so the environment
 // it executes in must not contain a registry password to steal.
+//
+// Both paths get kiln's GOCACHE when there is one. It is a path, not a
+// credential, and a fork build left on the operator's cache would grow it
+// exactly as every build did before kiln had a cache of its own.
 func (w *Warden) env(req ports.ProveRequest) []string {
 	if req.Policy.Secrets {
-		if len(req.ServiceEnv) == 0 {
+		if len(req.ServiceEnv) == 0 && w.GoCache == "" {
 			return nil
 		}
 		// Non-nil replaces the whole environment, so an inherited one has to
 		// be rebuilt explicitly once there is anything to add to it.
-		return append(os.Environ(), req.ServiceEnv...)
+		return append(gocache.Env(os.Environ(), w.GoCache), req.ServiceEnv...)
 	}
-	scrubbed := append(execx.Scrub(os.Environ()),
+	scrubbed := append(gocache.Env(execx.Scrub(os.Environ()), w.GoCache),
 		// Mark the isolation so a repo's own checks can behave accordingly —
 		// skipping an integration test that needs a credential, say — instead
 		// of failing confusingly on a variable that is not there.
