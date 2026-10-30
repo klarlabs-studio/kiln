@@ -70,6 +70,14 @@ All notable changes to kiln are documented here. The format follows
 
 ### Fixed
 
+- **A stopped task cleans up after itself.** A cancelled or timed-out
+  command used to get SIGKILL, so a task script never ran its EXIT trap, and
+  whatever it had started kept running. On a real box that left seven
+  `docker compose` stacks of an e2e task up for days. Every command now runs
+  in its own process group; stopping it sends SIGTERM to the whole group,
+  allows a minute to clean up, then kills whatever is left. Background
+  processes a finished command leaves behind are killed too.
+
 - **Old tags are no longer rebuilt.** A failing tag was never silenced by a
   success, so the backoff only spaced its retries out: one box retried
   `v0.0.0`, `v0.1.0` and `v0.2.0` about seventy times each, long after newer

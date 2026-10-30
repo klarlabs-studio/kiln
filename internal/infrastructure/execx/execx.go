@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"time"
 )
 
 // Cmd is one subprocess invocation.
@@ -158,6 +159,12 @@ func (e *NotFoundError) Error() string {
 	return msg
 }
 
+// StopGrace is how long a cancelled command's processes have, after SIGTERM,
+// to clean up before they are killed. Long enough for a task to tear down the
+// docker compose stack it started; short enough that a phase timeout still
+// bounds the run.
+const StopGrace = time.Minute
+
 // System is the real Runner.
 type System struct{}
 
@@ -189,10 +196,17 @@ func (s System) Run(ctx context.Context, c Cmd) (Result, error) {
 	cmd.Stdout = tee(&stdout, c.Stdout)
 	cmd.Stderr = tee(&stderr, c.Stderr)
 
+	ownGroup(cmd)
 	err := cmd.Run()
+	reapGroup(cmd)
 	res := Result{Stdout: stdout.String(), Stderr: stderr.String()}
 	if err == nil {
 		return res, nil
+	}
+	// A cancelled command that cleaned up on SIGTERM exits non-zero by its own
+	// hand. That is still the cancellation, not a verdict about its subject.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return res, fmt.Errorf("%s: %w", c.String(), ctxErr)
 	}
 
 	var ee *exec.ExitError
