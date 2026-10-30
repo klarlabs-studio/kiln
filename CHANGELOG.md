@@ -14,6 +14,16 @@ All notable changes to kiln are documented here. The format follows
   are deferred instead of failed. Neither is recorded against a commit, so a
   full disk no longer turns into hundreds of failed runs.
 
+### Changed
+
+- **A commit that fails on its own merits is no longer re-run every hour.**
+  Each failed run records whether the commit (gate rejected, task failed) or
+  the box (missing toolchain, lock, timeout, network) was at fault, and the
+  fingerprint of kiln, tool versions and pipeline it ran with. The watch loop
+  retries a commit failure as soon as that fingerprint changes and otherwise
+  daily; box failures keep the 15m → 1h backoff. On a real box a handful of
+  stale pull requests and old tags were re-gated ~24 times a day each.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

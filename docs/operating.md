@@ -76,10 +76,19 @@ wants to know now whether it works, not in five minutes.
    beside the gate — while the docker daemon is not answering
 9. Execute the rest
 
-Only a success suppresses a rebuild, so a transient failure is retried on the
-next tick rather than wedging the ref forever. One failing job does not stop
-the others — otherwise anybody who can open a pull request could halt the
-pipeline.
+Only a success marks a commit as built. A failure is retried, but how soon
+depends on whose failure it was:
+
+- **The box's** — a missing toolchain, a held lock, a timeout, a registry or
+  network error, or anything kiln cannot place — backs off 15m, 30m, then
+  hourly, so a fixed box recovers without anybody pushing.
+- **The commit's** — the gate rejected it or a task exited non-zero — is
+  retried as soon as kiln, a tool version or the pipeline changes, and
+  otherwise once a day. Re-running it unchanged would only repeat the verdict.
+  Push a fix, or change what it depends on, to retry it sooner.
+
+One failing job does not stop the others — otherwise anybody who can open a
+pull request could halt the pipeline.
 
 ### What a new box does not do
 
