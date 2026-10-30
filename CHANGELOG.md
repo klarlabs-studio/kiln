@@ -8,6 +8,12 @@ All notable changes to kiln are documented here. The format follows
 
 ### Added
 
+- `kiln watch` checks the box before building. Below `KILN_MIN_FREE_GB` free
+  disk (default 5, `0` disables) a tick builds nothing and exits 69; while the
+  docker daemon does not answer, jobs that build an image or start a service
+  are deferred instead of failed. Neither is recorded against a commit, so a
+  full disk no longer turns into hundreds of failed runs.
+
 - **A machine-wide limit on concurrent builds.** `KILN_MAX_PARALLEL`
   (default `1`; `0` disables) bounds how many builds run at once across
   every repository and kiln process on a machine. Eight box agents ticking
@@ -18,6 +24,16 @@ All notable changes to kiln are documented here. The format follows
   slot taken waits up to 15 minutes, then defers the job to the next tick —
   exit 0, nothing written to the ledger, no backoff. `kiln run` waits the
   same time, then exits 75.
+
+### Changed
+
+- **A commit that fails on its own merits is no longer re-run every hour.**
+  Each failed run records whether the commit (gate rejected, task failed) or
+  the box (missing toolchain, lock, timeout, network) was at fault, and the
+  fingerprint of kiln, tool versions and pipeline it ran with. The watch loop
+  retries a commit failure as soon as that fingerprint changes and otherwise
+  daily; box failures keep the 15m → 1h backoff. On a real box a handful of
+  stale pull requests and old tags were re-gated ~24 times a day each.
 
 ## [0.8.0] - 2026-10-17
 

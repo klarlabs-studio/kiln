@@ -110,6 +110,15 @@ type Watcher struct {
 	// Slots bounds concurrent builds across every repository on the machine.
 	// Nil means no limit, which is what a test should get.
 	Slots ports.BuildSlots
+	// Health answers whether the box can build at all. Nil skips the checks,
+	// which is what a test that is not about them should get.
+	Health ports.BoxHealth
+	// MinFree is the free space below which a tick builds nothing. Zero
+	// disables the disk check.
+	MinFree uint64
+	// PlanImages mirrors KILN_DRY: images are planned rather than built, so
+	// they need no docker daemon.
+	PlanImages bool
 }
 
 // Result summarises one tick.
@@ -120,8 +129,10 @@ type Result struct {
 	Skipped []Job
 	// Executed are the jobs that ran, with their outcomes.
 	Executed []Outcome
-	// Deferred are the jobs left for the next tick because every machine
-	// build slot was taken. They are not failures and are not recorded.
+	// Deferred are the jobs left for the next tick because the box could not
+	// run them now: every machine build slot was taken, or they need docker
+	// and the daemon is not answering. They are not failures and nothing is
+	// recorded against them, so a later tick builds them.
 	Deferred []Job
 }
 
@@ -152,6 +163,10 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	if !dryRun {
 		w.reap(ctx)
 		w.prune(ctx)
+		// After the housekeeping, which is what frees the space.
+		if err := w.checkDisk(); err != nil {
+			return Result{}, err
+		}
 	}
 
 	if err := w.fetch(ctx); err != nil {
@@ -182,6 +197,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 func (w *Watcher) runJobs(ctx context.Context, jobs []Job, dryRun bool) (Result, error) {
 	result := Result{Discovered: jobs}
 	full := false
+	docker := w.dockerProbe(ctx)
 	for _, job := range jobs {
 		switch {
 		case w.alreadyCovered(job):
@@ -194,6 +210,10 @@ func (w *Watcher) runJobs(ctx context.Context, jobs []Job, dryRun bool) (Result,
 			// The machine was full a moment ago. Waiting the whole bound again
 			// per job would hold this repository's lock for an hour behind a
 			// machine already known to be busy.
+			result.Deferred = append(result.Deferred, job)
+			continue
+		}
+		if w.Pipeline.NeedsDocker(job.Event.String(), !w.PlanImages) && docker() != nil {
 			result.Deferred = append(result.Deferred, job)
 			continue
 		}
@@ -227,7 +247,7 @@ func (w *Watcher) runJobs(ctx context.Context, jobs []Job, dryRun bool) (Result,
 // alreadyCovered reports whether the ledger says this job needs no run now.
 func (w *Watcher) alreadyCovered(job Job) bool {
 	log := w.logger()
-	switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now()); verdict {
+	switch verdict, wait := engine.Decide(w.Store, job.SHA, job.Ref, w.now(), w.Engine.Inputs(w.Pipeline)); verdict {
 	case engine.Built:
 		log.Debug("already built", "ref", job.Ref, "sha", run.ShortSHA(job.SHA))
 		return true
@@ -237,6 +257,12 @@ func (w *Watcher) alreadyCovered(job Job) bool {
 		// box meant 205 failed runs in an afternoon.
 		log.Debug("failed recently", "ref", job.Ref, "sha", run.ShortSHA(job.SHA),
 			"wait", engine.DescribeBackoff(wait))
+		return true
+	case engine.Settled:
+		// The commit failed on its own merits. Running it again with the
+		// same kiln, tools and pipeline would only repeat the verdict.
+		log.Debug("failed on this commit, waiting for a change", "ref", job.Ref,
+			"sha", run.ShortSHA(job.SHA), "wait", engine.DescribeBackoff(wait))
 		return true
 	default:
 		return false
@@ -396,6 +422,54 @@ func (w *Watcher) prune(ctx context.Context) {
 		w.logger().Info("pruned",
 			"images", len(res.Removed), "kept", res.Kept, "cache", res.CacheFreed)
 	}
+}
+
+// checkDisk refuses a tick on a box too full to finish one.
+//
+// Before this, a full disk failed every job in the tick with the linker's
+// "no space left on device", and recorded each failure against a commit that
+// had done nothing wrong. One refused tick says what is actually wrong.
+func (w *Watcher) checkDisk() error {
+	if w.Health == nil || w.MinFree == 0 || w.Dir == "" {
+		return nil
+	}
+	free, err := w.Health.FreeBytes(w.Dir)
+	if err != nil {
+		// A check that cannot look is not a reason to stop building.
+		w.logger().Warn("could not read free disk space", "err", err)
+		return nil
+	}
+	if free < w.MinFree {
+		return fmt.Errorf("%w: %s free, below the %s minimum (KILN_MIN_FREE_GB)",
+			ports.ErrBoxNotReady, humanBytes(free), humanBytes(w.MinFree))
+	}
+	return nil
+}
+
+// dockerProbe returns a check that asks the daemon at most once per tick, and
+// only if some job needs it: a tick of prove-only jobs never pays for it.
+func (w *Watcher) dockerProbe(ctx context.Context) func() error {
+	var (
+		asked bool
+		err   error
+	)
+	return func() error {
+		if w.Health == nil {
+			return nil
+		}
+		if !asked {
+			asked = true
+			if err = w.Health.DockerReady(ctx); err != nil {
+				w.logger().Warn("deferring jobs that need docker", "err", err)
+			}
+		}
+		return err
+	}
+}
+
+func humanBytes(n uint64) string {
+	const gib = 1 << 30
+	return fmt.Sprintf("%.1f GiB", float64(n)/gib)
 }
 
 // tickLocked runs one tick under the repository lock.
