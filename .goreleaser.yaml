@@ -84,9 +84,11 @@ sboms:
 # deprecated `brews`, and casks are macOS-only — Linux gets `go install` or the
 # tarball, both documented in the README.
 #
-# The quarantine hook is not optional: without it macOS refuses a downloaded
+# The quarantine step is not optional: without it macOS refuses a downloaded
 # unsigned binary with "damaged and cannot be opened", which reads as a
-# corrupted release rather than Gatekeeper doing its job.
+# corrupted release rather than Gatekeeper doing its job. It is an install
+# step, not a raw-Ruby postflight: Homebrew deprecated the latter, and
+# install_steps (goreleaser 2.19) is its replacement.
 homebrew_casks:
   - name: kiln
     binaries: [kiln, kilnd]
@@ -100,10 +102,10 @@ homebrew_casks:
     description: "Signed-artifact factory: prove a commit, build it, sign it, attest it"
     hooks:
       post:
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kiln"]
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/kilnd"]
+        install_steps: |
+          on_macos do
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/kiln"]
+            run "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "{{ .StagedPath }}/kilnd"]
           end
 
 changelog:

@@ -98,7 +98,7 @@ jobs:
           # reproducible from what this file says; a range means the tool that
           # built v0.1.0 and the tool that builds v0.2.0 may differ without a
           # commit recording it.
-          version: "2.16.0"
+          version: "2.19.0"
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
