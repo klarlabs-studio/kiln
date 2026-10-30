@@ -165,10 +165,12 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		return Result{}, err
 	}
 
-	jobs, err = w.applyBaseline(ctx, jobs, authoritative, dryRun)
+	all := jobs
+	jobs, base, err := w.applyBaseline(ctx, jobs, authoritative, dryRun)
 	if err != nil {
 		return Result{}, err
 	}
+	jobs = w.dropSuperseded(jobs, all, base)
 
 	result := Result{Discovered: jobs}
 	for _, job := range jobs {
@@ -420,25 +422,28 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 // current work, and building them on the first tick is the point of installing
 // a box — it is also the only sign the operator gets that the pipeline runs at
 // all.
-func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, dryRun bool) ([]Job, error) {
+//
+// The baseline is returned, nil when the box has none, because it is also a
+// watermark: dropSuperseded counts an inherited release as shipped.
+func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, dryRun bool) ([]Job, *Baseline, error) {
 	base, err := LoadBaseline(w.Dir)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if base == nil {
 		if !ledgerIsEmpty(w.Store) {
 			// An existing box has already built its tags. Writing a baseline
 			// underneath it would silence one that is mid-backoff.
-			return jobs, nil
+			return jobs, nil, nil
 		}
 		pulls, err := w.pullRefs(ctx)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		base = baselineFrom(jobs, pulls, w.now())
 		if !dryRun && w.Dir != "" {
 			if err := SaveBaseline(w.Dir, base); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		}
 		if len(base.Tags) > 0 {
@@ -460,7 +465,7 @@ func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, 
 	if skipped > 0 && base.Tags != nil {
 		w.logger().Debug("skipped baselined tags", "count", skipped)
 	}
-	return kept, nil
+	return kept, base, nil
 }
 
 // discover builds the job list from local refs.

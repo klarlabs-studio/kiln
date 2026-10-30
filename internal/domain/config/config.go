@@ -311,6 +311,14 @@ type Watch struct {
 	Ref          string `yaml:"ref"`
 	PullRequests *bool  `yaml:"pull_requests"`
 	Tags         *bool  `yaml:"tags"`
+
+	// SupersededTags builds a version tag even once a newer release on its
+	// major line has overtaken it. Off by default: one box retried v0.0.0,
+	// v0.1.0 and v0.2.0 about seventy times each, long after newer releases
+	// had shipped. Lines are judged separately, so a backport like v1.9.5
+	// after v2.0.0 is built without it; this is for the rarer case of an
+	// overtaken tag on the same line that still has to be built.
+	SupersededTags bool `yaml:"superseded_tags"`
 }
 
 // Duration is a YAML-friendly time.Duration.
@@ -922,6 +930,10 @@ func (p Pipeline) WatchPullRequests() bool {
 	return p.Watch.PullRequests == nil || *p.Watch.PullRequests
 }
 func (p Pipeline) WatchTags() bool { return p.Watch.Tags == nil || *p.Watch.Tags }
+
+// BuildSupersededTags reports that a tag older than the release line's head is
+// still to be built. See Watch.SupersededTags.
+func (p Pipeline) BuildSupersededTags() bool { return p.Watch.SupersededTags }
 
 // TagKinds returns the configured tag kinds in a stable order, so `kiln doctor`
 // prints the same plan twice in a row.

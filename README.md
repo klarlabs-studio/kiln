@@ -192,6 +192,7 @@ watch:
   ref: main
   pull_requests: true
   tags: true
+  superseded_tags: false   # true also builds tags a newer release on their major line overtook
 ```
 
 `publish:` is a **list**, because "signed artifact" is not a synonym for "container image": one proven commit routinely yields an image *and* a set of release binaries. A third kind later is one more list entry rather than one more top-level key.
@@ -446,7 +447,7 @@ Same engine, four ways in.
 | `kiln version` | Version, commit, build date |
 | `kiln doctor` | Validate YAML, print the tag plan, check the toolchain. Runs nothing. |
 | `kiln run --sha S --event E` | One-shot build. `--sha HEAD` resolves via git. |
-| `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded |
+| `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded and tags a newer release on their major line overtook |
 | `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |

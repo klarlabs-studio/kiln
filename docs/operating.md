@@ -69,8 +69,10 @@ wants to know now whether it works, not in five minutes.
    without a token, every one is a fork
 5. Drop any pull ref whose pull request is no longer open
 6. Drop any tag the box inherited (see *What a new box does not do*)
-7. Drop any job whose SHA **and** ref already have a *succeeded* run
-8. Execute the rest
+7. Drop any version tag a newer release on the same major line has overtaken
+   (see *Old tags are not rebuilt*)
+8. Drop any job whose SHA **and** ref already have a *succeeded* run
+9. Execute the rest
 
 Only a success suppresses a rebuild, so a transient failure is retried on the
 next tick rather than wedging the ref forever. One failing job does not stop
@@ -98,7 +100,8 @@ publishing event, so without it a new box would push images and write fresh
 provenance for versions signed long ago.
 
 A tag later moved to a different commit is built again, because the artefact
-it would publish is not the one that was recorded. A box that already has run
+it would publish is not the one that was recorded — unless a newer release has
+overtaken it (see below). A box that already has run
 history is not given a baseline — it has built its tags already, and one
 written underneath it could silence a tag that is mid-backoff after a real
 failure.
@@ -106,6 +109,46 @@ failure.
 The branch tip and any open pull requests are *not* baselined. They are
 current work, and building them is both the point of installing a box and the
 only sign you get that the pipeline runs at all.
+
+### Old tags are not rebuilt
+
+The baseline only helps a box that starts with an empty ledger. A box that is
+already running has no such watermark, and a failing tag is never silenced by
+a success — the backoff only spaces its retries out. One box here retried
+`v0.0.0`, `v0.1.0` and `v0.2.0` about seventy times each, long after newer
+releases had shipped.
+
+So a version tag is built only while it is current **within its own major
+line** (`v0.*`, `v1.*`, `v2.*`, …):
+
+- it is **newer than the newest release of that line that shipped** — a tag
+  with a succeeded run in the ledger, or one the baseline recorded; or
+- it is **the newest version tag of that line**.
+
+Everything else has been overtaken and is skipped, with a `skipped superseded
+tags` log line giving the count. Some consequences:
+
+- Each major line is judged on its own. `v1.9.5` cut after `v2.0.0` shipped is
+  usually a security backport, so it is built; `v1.9.4` behind a shipped
+  `v1.9.5` is not. The incident tags all share major 0, so a newer `v0.x`
+  overtakes them.
+- A box that has shipped nothing yet builds the head of each release line, not
+  its whole history.
+- A release cut since the last success is built even while its build keeps
+  failing, and that failure does not bring the older tags back.
+- Versions are ordered by semver precedence, so `v1.0.0-rc.1` is overtaken by
+  `v1.0.0`, and `v1.1.0-rc.1` is ahead of it.
+- A tag that is not a version (`v`-prefix optional, `MAJOR.MINOR.PATCH`,
+  optional pre-release and build metadata) — `nightly`, `release-2026-10` — has
+  no place in the order and is built exactly as before.
+
+A repository that does need an overtaken tag built — an older patch re-cut on
+the same line, say — opts out, and every tag is built as before:
+
+```yaml
+watch:
+  superseded_tags: true
+```
 
 ### Seeing what it would do
 
