@@ -26,6 +26,7 @@ import (
 
 	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 )
 
 // OK reports whether the task passed, or failed in a way the pipeline accepts.
@@ -35,6 +36,10 @@ type Runner struct {
 	// Shell is the interpreter. `sh` rather than `bash`, because a task that
 	// runs on the build box should not depend on which box.
 	Shell string
+	// GoCache is the kiln-owned Go build cache a task's children use, or
+	// empty to leave GOCACHE as the environment has it. A task that runs
+	// `go build` writes as much cache as the gate does. See package gocache.
+	GoCache string
 }
 
 // New builds a runner.
@@ -67,6 +72,8 @@ func (t *Runner) Run(ctx context.Context, req ports.TaskRequest) ports.TaskResul
 	if !req.Policy.Secrets {
 		environ = execx.ScrubbedEnviron()
 	}
+	// A path, not a credential: a fork task gets it too.
+	environ = gocache.Env(environ, t.GoCache)
 
 	cmd := execx.Cmd{
 		Name:   shell,

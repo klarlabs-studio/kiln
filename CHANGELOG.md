@@ -25,6 +25,19 @@ All notable changes to kiln are documented here. The format follows
   exit 0, nothing written to the ledger, no backoff. `kiln run` waits the
   same time, then exits 75.
 
+- **Box builds get their own, bounded Go build cache**. The gate, tasks
+  and goreleaser releases used to share the operator's cache, and
+  `go test -race` on every commit grew it by ~35 GB in twelve hours until an
+  external script trimmed it. Kiln now runs them with `GOCACHE` set to
+  `<user cache>/kiln/go-build` — fork pull requests included, alongside the
+  scrubbed environment — and each watch tick removes entries unused for 24h,
+  then evicts least-recently-used entries older than an hour until the cache
+  is under `KILN_GOCACHE_MAX_SIZE` (default `10GiB`), logging what it freed.
+  `KILN_GOCACHE` picks another absolute path or `off`; a `GOCACHE` already
+  set in kiln's environment is respected and nothing is trimmed. The trimmer
+  only touches a directory kiln claimed with a `.kiln-go-cache` marker, so it
+  can never be pointed at the operator's own cache.
+
 ### Changed
 
 - **A commit that fails on its own merits is no longer re-run every hour.**

@@ -65,6 +65,21 @@ type Pruner interface {
 	Prune(ctx context.Context, opts PruneOptions) (PruneResult, error)
 }
 
+// CacheTrimResult is what one trim of kiln's Go build cache freed.
+type CacheTrimResult struct {
+	Files int
+	Freed int64
+}
+
+// CacheTrimmer bounds the Go build cache kiln's own builds use.
+//
+// A port beside Pruner rather than part of it: docker disk and Go's cache are
+// different stores with different owners, and a box without docker still
+// runs `go test -race` on every commit.
+type CacheTrimmer interface {
+	Trim(ctx context.Context) (CacheTrimResult, error)
+}
+
 // ErrBoxNotReady reports a box that cannot do the work a tick would start: a
 // disk too full to link a binary, a docker daemon that does not answer.
 //

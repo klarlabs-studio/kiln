@@ -39,6 +39,8 @@ func newServer(t *testing.T) (*Server, *gittest.Repo) {
 	env.Token = ""
 	env.TrustedKeys = nil
 	env.LogLevel = "fatal"
+	// Boot would otherwise claim the developer's real <user cache>/kiln/go-build.
+	env.GoCache = ""
 	// readyz reports 503 when the gate is missing, which is correct behaviour
 	// and a poor thing to leave depending on the developer's PATH: with a real
 	// warden installed the probe test passes locally and fails on a runner.

@@ -220,6 +220,8 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
+| `KILN_GOCACHE` | Go build cache for the gate, tasks and releases, trimmed each tick (default `<user cache>/kiln/go-build`; an absolute path; `off` inherits `GOCACHE` and trims nothing). An explicit `GOCACHE` in kiln's environment always wins. See [operating](docs/operating.md#the-go-build-cache). |
+| `KILN_GOCACHE_MAX_SIZE` | Cap on that cache after dropping entries unused for 24h (default `10GiB`; `0` keeps only the 24h sweep) |
 | `KILN_MAX_PARALLEL` | Builds that may run at once on this machine, across every repository and process (default `1`; `0` disables). See [operating](docs/operating.md#concurrency). |
 | `KILN_SLOT_DIR` | Where the machine's build slots live (default `<user cache dir>/kiln/slots`). Every kiln meant to share the limit must use the same one. |
 | `KILN_MIN_FREE_GB` | A watch tick builds nothing below this much free disk (default `5`; `0` disables) |
@@ -520,6 +522,12 @@ cache older than `KILN_BUILD_CACHE_MAX_AGE` (default 168h) — usually the
 larger reclaim of the two. It never touches a moving tag, never a repository
 kiln does not publish, and **never a registry**: a local image is a re-pull
 away, a deleted registry digest is a rollback RollOps can no longer perform.
+
+**The Go build cache is kiln's own.** Builds run with `GOCACHE` set to
+`<user cache>/kiln/go-build` instead of sharing yours, and each tick drops
+entries unused for 24h, then the least recently used beyond
+`KILN_GOCACHE_MAX_SIZE` (default 10GiB). `go test -race` on every commit used
+to grow the operator's cache by tens of gigabytes a day.
 
 **A sick box says so once.** Below `KILN_MIN_FREE_GB` free (default 5) a tick
 builds nothing and exits 69; while docker is not answering, jobs that need it

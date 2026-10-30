@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -9,20 +8,6 @@ import (
 	"go.klarlabs.de/kiln/internal/gittest"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
 )
-
-// TestMain points every command at a private slot directory. Without it the
-// suite would share the machine's real build slots and, on a box that is
-// building, queue behind it for the full wait before failing.
-func TestMain(m *testing.M) {
-	dir, err := os.MkdirTemp("", "kiln-cli-slots-")
-	if err != nil {
-		panic(err)
-	}
-	_ = os.Setenv("KILN_SLOT_DIR", dir)
-	code := m.Run()
-	_ = os.RemoveAll(dir)
-	os.Exit(code)
-}
 
 // fullMachine takes the machine's only build slot for the rest of the test and
 // shortens the wait, so a command that respects the limit gives up quickly.
