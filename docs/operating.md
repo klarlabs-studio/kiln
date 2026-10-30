@@ -63,18 +63,28 @@ wants to know now whether it works, not in five minutes.
 
 0. Reap abandoned worktrees, prune docker, then refuse the whole tick if the
    disk has less than `KILN_MIN_FREE_GB` free (exit 69; see *Disk*)
-1. `git fetch` the tracked branch (fatal if it fails)
-2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a non-GitHub
-   remote simply has none)
-3. `git fetch +refs/tags/*` (not fatal)
-4. Ask GitHub which pull requests are open, and which of those are same-repo;
-   without a token, every one is a fork
+1. Ask GitHub which pull requests are open, and which of those are same-repo
+   (once per tick; the answer is reused below). Without a token, or if the API
+   fails, nothing is known to be closed and every pull request is a fork
+2. `git fetch` the tracked branch (fatal if it fails)
+3. Fetch pull request heads (not fatal):
+   - with GitHub's answer, only the open ones —
+     `+refs/pull/<n>/head:refs/kiln/pr/<n>` for each, batched into as few
+     `git fetch` calls as fit on a command line — then delete any
+     `refs/kiln/pr/*` whose pull request is no longer open, so the local
+     namespace does not grow with the repository's history. If that fetch
+     fails, the wildcard below is used instead
+   - without it, `+refs/pull/*/head:refs/kiln/pr/*` — every pull request ever
+     opened, as before (a non-GitHub remote simply has none)
+4. `git fetch +refs/tags/*` (not fatal)
 5. Drop any pull ref whose pull request is no longer open
 6. Drop any tag the box inherited (see *What a new box does not do*)
 7. Drop any job whose SHA **and** ref already have a *succeeded* run
 8. Hold back any job that starts a container — an image to build, a service
    beside the gate — while the docker daemon is not answering
 9. Execute the rest
+
+A pull request opened between step 1 and step 3 is picked up on the next tick.
 
 Only a success marks a commit as built. A failure is retried, but how soon
 depends on whose failure it was:
@@ -102,6 +112,9 @@ A pull ref is therefore built only while the API says its pull request is
 open. Where there is no token to ask with, a head already contained in the
 watched branch has certainly been merged and is skipped on that evidence
 alone; anything still unaccounted for is built, and still treated as a fork.
+A box with a token fetches only the open heads, but its first tick still
+records every pull ref on the remote (via `git ls-remote`) in the baseline, so
+losing the token later does not bring the closed ones back.
 
 **Tags do not go stale.** `v2.1.0` is as valid a tag today as the day it was
 pushed, so there is no state to filter on — only the fact that it predates the

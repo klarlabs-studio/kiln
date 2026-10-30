@@ -16,6 +16,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -169,7 +171,11 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		}
 	}
 
-	if err := w.fetch(ctx); err != nil {
+	// Before the fetch, because the answer decides what to fetch; once, because
+	// the same answer then decides fork-ness and closed-ness in discovery.
+	pulls := w.askForge(ctx)
+
+	if err := w.fetch(ctx, pulls); err != nil {
 		return Result{}, err
 	}
 
@@ -179,12 +185,12 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 		w.runScheduled(ctx)
 	}
 
-	jobs, authoritative, err := w.discover(ctx)
+	jobs, err := w.discover(ctx, pulls)
 	if err != nil {
 		return Result{}, err
 	}
 
-	jobs, err = w.applyBaseline(ctx, jobs, authoritative, dryRun)
+	jobs, err = w.applyBaseline(ctx, jobs, pulls.authoritative, dryRun)
 	if err != nil {
 		return Result{}, err
 	}
@@ -503,11 +509,8 @@ func (w *Watcher) tickLocked(ctx context.Context, dryRun bool) (Result, error) {
 // Three fetches rather than one, because they fail independently: a repository
 // with no pull requests, or a non-GitHub remote that has no refs/pull/*, must
 // still get its branch built. Only the branch fetch is fatal.
-func (w *Watcher) fetch(ctx context.Context) error {
-	remote := w.Pipeline.Watch.Remote
-	if remote == "" {
-		remote = "origin"
-	}
+func (w *Watcher) fetch(ctx context.Context, pulls openPulls) error {
+	remote := w.remote()
 	branch := w.Pipeline.Watch.Ref
 	if branch == "" {
 		branch = "main"
@@ -524,11 +527,7 @@ func (w *Watcher) fetch(ctx context.Context) error {
 	}
 
 	if w.Pipeline.WatchPullRequests() {
-		// GitHub exposes pull request heads as refs/pull/N/head. A non-GitHub
-		// remote simply has none, and the failure is not interesting.
-		if err := w.fetchWithRetry(ctx, remote, "+refs/pull/*/head:"+PRRefNamespace+"*"); err != nil {
-			log.Debug("no pull request refs on this remote", "remote", remote, "err", err)
-		}
+		w.fetchPulls(ctx, remote, pulls)
 	}
 	if w.Pipeline.WatchTags() {
 		if err := w.fetchWithRetry(ctx, remote, "+refs/tags/*:refs/tags/*"); err != nil {
@@ -538,9 +537,93 @@ func (w *Watcher) fetch(ctx context.Context) error {
 	return nil
 }
 
+// fetchPulls parks the pull request heads discovery will consider.
+//
+// GitHub keeps refs/pull/N/head for every pull request ever opened, so the
+// wildcard fetches the repository's whole history of them every tick for
+// discovery to throw nearly all of it away — 372 skipped against one build,
+// every thirty minutes, on one box here. When the API has said which are open,
+// only those are fetched, and the parked heads of the rest are dropped so the
+// local namespace stops growing.
+//
+// Without that answer nothing is known to be closed, and the wildcard is kept
+// exactly: it is how a tokenless box still sees the pull request opened since
+// its baseline, and why pullDecision and the baseline exist at all.
+func (w *Watcher) fetchPulls(ctx context.Context, remote string, pulls openPulls) {
+	log := w.logger()
+	if pulls.authoritative {
+		err := w.fetchOpenPulls(ctx, remote, pulls)
+		if err == nil {
+			w.dropClosedPulls(ctx, pulls)
+			return
+		}
+		// A fetch by number fails whole when any one ref is missing — a remote
+		// that is not the repository the token answers for, say. That must
+		// cost the narrowing, not the pull requests.
+		log.Warn("could not fetch the open pull requests by number; fetching every pull ref",
+			"remote", remote, "err", err)
+	}
+	// GitHub exposes pull request heads as refs/pull/N/head. A non-GitHub
+	// remote simply has none, and the failure is not interesting.
+	if err := w.fetchWithRetry(ctx, remote, "+refs/pull/*/head:"+PRRefNamespace+"*"); err != nil {
+		log.Debug("no pull request refs on this remote", "remote", remote, "err", err)
+	}
+	if pulls.authoritative {
+		w.dropClosedPulls(ctx, pulls)
+	}
+}
+
+// fetchOpenPulls fetches exactly the heads of the open pull requests, in one
+// fetch: a round trip per pull request would trade one waste for another.
+func (w *Watcher) fetchOpenPulls(ctx context.Context, remote string, pulls openPulls) error {
+	if len(pulls.fork) == 0 {
+		return nil
+	}
+	numbers := slices.Sorted(maps.Keys(pulls.fork))
+	refspecs := make([]string, 0, len(numbers))
+	for _, n := range numbers {
+		refspecs = append(refspecs, fmt.Sprintf("+refs/pull/%d/head:%s%d", n, PRRefNamespace, n))
+	}
+	return w.fetchWithRetry(ctx, remote, refspecs...)
+}
+
+// dropClosedPulls removes the parked heads of pull requests the API did not
+// list as open. Only ever called with an authoritative answer: without one, a
+// missing number means "unknown", and deleting an unknown pull request's head
+// would stop it being gated.
+//
+// Never fatal. A leftover ref is filtered by pullDecision regardless; it only
+// costs disk and a line in the log.
+func (w *Watcher) dropClosedPulls(ctx context.Context, pulls openPulls) {
+	refs, err := w.Git.PullRefs(ctx, w.Dir)
+	if err != nil {
+		w.logger().Warn("could not list parked pull request refs", "err", err)
+		return
+	}
+	var closed []string
+	for _, r := range refs {
+		if n, err := pullNumber(r.Name); err == nil && !isOpen(pulls, n) {
+			closed = append(closed, r.Name)
+		}
+	}
+	if len(closed) == 0 {
+		return
+	}
+	if err := w.Git.DropPullRefs(ctx, w.Dir, closed); err != nil {
+		w.logger().Warn("could not drop the parked refs of closed pull requests", "err", err)
+		return
+	}
+	w.logger().Debug("dropped the parked refs of closed pull requests", "count", len(closed))
+}
+
+func isOpen(pulls openPulls, number int) bool {
+	_, ok := pulls.fork[number]
+	return ok
+}
+
 // fetchWithRetry retries a fetch. Network flakiness on a box running a tick a
 // minute is routine, and a single dropped connection should not skip a build.
-func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) error {
+func (w *Watcher) fetchWithRetry(ctx context.Context, remote string, refspecs ...string) error {
 	attempts := w.FetchAttempts
 	if attempts <= 0 {
 		attempts = 3
@@ -554,7 +637,7 @@ func (w *Watcher) fetchWithRetry(ctx context.Context, remote, refspec string) er
 		Jitter:        true,
 	})
 	_, err := r.Execute(ctx, func(ctx context.Context) (struct{}, error) {
-		return struct{}{}, w.Git.Fetch(ctx, w.Dir, remote, refspec)
+		return struct{}{}, w.Git.Fetch(ctx, w.Dir, remote, refspecs...)
 	})
 	return err
 }
@@ -582,7 +665,7 @@ func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, 
 			// underneath it would silence one that is mid-backoff.
 			return jobs, nil
 		}
-		pulls, err := w.pullRefs(ctx)
+		pulls, err := w.baselinePulls(ctx, authoritative)
 		if err != nil {
 			return nil, err
 		}
@@ -615,36 +698,41 @@ func (w *Watcher) applyBaseline(ctx context.Context, jobs []Job, authoritative, 
 }
 
 // discover builds the job list from local refs.
-func (w *Watcher) discover(ctx context.Context) ([]Job, bool, error) {
+func (w *Watcher) discover(ctx context.Context, pulls openPulls) ([]Job, error) {
 	jobs := make([]Job, 0, 8)
 
 	branchJob, err := w.branchJob(ctx)
 	if err != nil {
-		return nil, false, err
+		return nil, err
 	}
 	jobs = append(jobs, branchJob)
 
-	// No pull requests were consulted, so nothing claims to know their state.
 	if w.BranchesOnly {
-		return jobs, false, nil
+		return jobs, nil
 	}
 	if w.Pipeline.WatchTags() {
 		tagJobs, err := w.tagJobs(ctx)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
 		jobs = append(jobs, tagJobs...)
 	}
-	authoritative := false
 	if w.Pipeline.WatchPullRequests() {
-		prJobs, ok, err := w.pullJobs(ctx, branchJob.SHA)
+		prJobs, err := w.pullJobs(ctx, branchJob.SHA, pulls)
 		if err != nil {
-			return nil, false, err
+			return nil, err
 		}
-		authoritative = ok
 		jobs = append(jobs, prJobs...)
 	}
-	return jobs, authoritative, nil
+	return jobs, nil
+}
+
+// remote is the watched remote, defaulting as config documents.
+func (w *Watcher) remote() string {
+	if w.Pipeline.Watch.Remote == "" {
+		return "origin"
+	}
+	return w.Pipeline.Watch.Remote
 }
 
 // now is the clock, injectable so a test can state what "twenty minutes later"
@@ -713,10 +801,7 @@ func (w *Watcher) runScheduled(ctx context.Context) {
 }
 
 func (w *Watcher) branchJob(ctx context.Context) (Job, error) {
-	remote := w.Pipeline.Watch.Remote
-	if remote == "" {
-		remote = "origin"
-	}
+	remote := w.remote()
 	branch := w.Pipeline.Watch.Ref
 	if branch == "" {
 		branch = "main"
@@ -755,17 +840,23 @@ func (w *Watcher) tagJobs(ctx context.Context) ([]Job, error) {
 	return jobs, nil
 }
 
-// pullJobs turns the fetched pull request heads into jobs.
+// baselinePulls lists every pull request head the repository has, whatever its
+// state. This is deliberately unfiltered: the baseline has to record what a
+// repository already had, not the subset a token happened to say was open.
 //
-// Fork status is the security-critical field here. With a token, it comes from
-// the API. Without one, every pull request is treated as a fork — the only
-// safe reading of "I cannot tell", since the alternative hands an unknown
-// author the operator's credentials.
-// pullRefs lists every parked pull request head, whatever its state. This is
-// deliberately unfiltered: the baseline has to record what a repository
-// already had, not the subset a token happened to say was open.
-func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
-	refs, err := w.Git.PullRefs(ctx, w.Dir)
+// With an authoritative answer only the open heads were fetched, so the
+// parked refs no longer hold the closed ones — and the closed ones are exactly
+// what the baseline exists to remember for the day the token stops answering.
+// The remote still has them, and listing them costs no objects. Without one,
+// the wildcard just parked everything, as it always has.
+func (w *Watcher) baselinePulls(ctx context.Context, authoritative bool) (map[string]string, error) {
+	var refs []ports.Ref
+	var err error
+	if authoritative {
+		refs, err = w.Git.RemotePullRefs(ctx, w.Dir, w.remote())
+	} else {
+		refs, err = w.Git.PullRefs(ctx, w.Dir)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
@@ -776,13 +867,19 @@ func (w *Watcher) pullRefs(ctx context.Context) (map[string]string, error) {
 	return out, nil
 }
 
-func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, error) {
+// pullJobs turns the fetched pull request heads into jobs.
+//
+// Fork status is the security-critical field here. With a token, it comes from
+// the API. Without one, every pull request is treated as a fork — the only
+// safe reading of "I cannot tell", since the alternative hands an unknown
+// author the operator's credentials.
+func (w *Watcher) pullJobs(ctx context.Context, branchTip string, pulls openPulls) ([]Job, error) {
 	refs, err := w.Git.PullRefs(ctx, w.Dir)
 	if err != nil {
-		return nil, false, fmt.Errorf("watch: list pull request refs: %w", err)
+		return nil, fmt.Errorf("watch: list pull request refs: %w", err)
 	}
 
-	open, authoritative := w.forkStatus(ctx)
+	open, authoritative := pulls.fork, pulls.authoritative
 	log := w.logger()
 
 	var jobs []Job
@@ -818,11 +915,9 @@ func (w *Watcher) pullJobs(ctx context.Context, branchTip string) ([]Job, bool, 
 			"count", closed, "built", len(jobs),
 			"why", "refs/pull/N/head outlives the pull request it belonged to")
 	}
-	return jobs, authoritative, nil
+	return jobs, nil
 }
 
-// forkStatus asks GitHub which open pull requests are same-repo. An empty map
-// means "unknown", which pullJobs reads as "assume fork".
 // pullDecision says whether a discovered pull ref should be built, and whether
 // it must be treated as a fork.
 //
@@ -853,25 +948,40 @@ func pullDecision(number int, open map[int]bool, authoritative bool, merged func
 	}
 }
 
-// forkStatus reports fork-ness per OPEN pull request, and whether that list is
-// authoritative. Authoritative means the API answered: a number missing from
-// the map is then known to be closed, rather than merely unknown.
-func (w *Watcher) forkStatus(ctx context.Context) (map[int]bool, bool) {
+// openPulls is GitHub's answer to "which pull requests are open", asked once
+// per tick and used three times: to choose what to fetch, to drop what is
+// closed, and to say which of what is left comes from a fork.
+type openPulls struct {
+	// fork maps each OPEN pull request's number to its fork-ness.
+	fork map[int]bool
+	// authoritative means the API answered: a number missing from fork is
+	// then known to be closed, rather than merely unknown.
+	authoritative bool
+}
+
+// askForge asks the forge, or reports that it cannot be asked. The zero value
+// — unknown — is what a tick that does not look at pull requests gets: `kiln
+// poll` is the subset of watch that needs no token, and must not warn about
+// lacking one.
+func (w *Watcher) askForge(ctx context.Context) openPulls {
+	if w.BranchesOnly || !w.Pipeline.WatchPullRequests() {
+		return openPulls{}
+	}
 	if w.Forge == nil || !w.Forge.Enabled() {
 		w.logger().Warn("no github token: treating every pull request as a fork",
 			"effect", "no secrets, no publish, no provenance skip on any PR")
-		return nil, false
+		return openPulls{}
 	}
 	pulls, err := w.Forge.ListOpenPulls(ctx)
 	if err != nil {
 		w.logger().Warn("could not list pull requests: treating every one as a fork", "err", err)
-		return nil, false
+		return openPulls{}
 	}
 	out := make(map[int]bool, len(pulls))
 	for _, p := range pulls {
 		out[p.Number] = p.Fork
 	}
-	return out, true
+	return openPulls{fork: out, authoritative: true}
 }
 
 // mergedIntoBranch reports that a pull request head is already contained in the
