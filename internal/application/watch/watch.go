@@ -107,6 +107,10 @@ type Watcher struct {
 	Pruner ports.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
 	BuildCacheMaxAge time.Duration
+	// GoCache trims the Go build cache kiln's builds use, each tick. Nil
+	// disables it — kiln manages no cache when the operator set GOCACHE or
+	// KILN_GOCACHE=off.
+	GoCache ports.CacheTrimmer
 }
 
 // Result summarises one tick.
@@ -148,6 +152,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	if !dryRun {
 		w.reap(ctx)
 		w.prune(ctx)
+		w.trimGoCache(ctx)
 	}
 
 	if err := w.fetch(ctx); err != nil {
@@ -319,6 +324,42 @@ func (w *Watcher) prune(ctx context.Context) {
 		w.logger().Info("pruned",
 			"images", len(res.Removed), "kept", res.Kept, "cache", res.CacheFreed)
 	}
+}
+
+// trimGoCache bounds the Go build cache kiln's own builds write.
+//
+// The third housekeeping sweep, and on a Go box the largest: `go test -race`
+// on every commit grew a shared cache by ~35 GB in twelve hours, which an
+// external script had to trim. Before the jobs rather than after, like the
+// other two, so a tick that dies mid-build has still made room.
+//
+// Never fatal: a cache that cannot be trimmed costs disk, and a tick that
+// refused to build over it would cost the pipeline.
+func (w *Watcher) trimGoCache(ctx context.Context) {
+	if w.GoCache == nil {
+		return
+	}
+	res, err := w.GoCache.Trim(ctx)
+	if err != nil {
+		w.logger().Warn("could not trim the go build cache", "err", err)
+	}
+	if res.Files > 0 {
+		w.logger().Info("trimmed go build cache", "files", res.Files, "freed", humanBytes(res.Freed))
+	}
+}
+
+// humanBytes renders a size in binary units, the way du -h would.
+func humanBytes(n int64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%d B", n)
+	}
+	div, exp := int64(unit), 0
+	for m := n / unit; m >= unit; m /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 // tickLocked runs one tick under the repository lock.

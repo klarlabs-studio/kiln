@@ -8,10 +8,13 @@
 package envconfig
 
 import (
+	"math"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 )
 
@@ -108,6 +111,14 @@ type Env struct {
 	// is shared by every repository on the box, so it cannot sensibly be
 	// configured per repository.
 	BuildCacheMaxAge time.Duration
+	// GoCache is the kiln-owned Go build cache every gate, task and release
+	// build uses (KILN_GOCACHE), or empty when kiln manages none: the
+	// operator set GOCACHE themselves, or KILN_GOCACHE=off. See package
+	// gocache for why box builds stopped sharing the operator's cache.
+	GoCache string
+	// GoCacheMaxSize caps GoCache after each tick's idle sweep
+	// (KILN_GOCACHE_MAX_SIZE, e.g. 10GiB). Zero leaves only the idle sweep.
+	GoCacheMaxSize int64
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -138,7 +149,44 @@ func Load() Env {
 		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
 		BuildCacheMaxAge: duration(
 			os.Getenv("KILN_BUILD_CACHE_MAX_AGE"), prune.DefaultBuildCacheMaxAge),
+		GoCache:        goCache(),
+		GoCacheMaxSize: size(os.Getenv("KILN_GOCACHE_MAX_SIZE"), gocache.DefaultMaxSize),
 	}
+}
+
+func goCache() string {
+	operator, set := os.LookupEnv("GOCACHE")
+	return gocache.Resolve(os.Getenv("KILN_GOCACHE"), operator, set, os.UserCacheDir)
+}
+
+// size parses a byte count with an optional binary unit — 10GiB, 512MiB, 2G,
+// or bare bytes. Units are powers of 1024 whether or not the "i" is written:
+// a cache cap is compared against du, which counts that way.
+//
+// "0" is honoured as "no cap"; anything unparsable falls back, for the same
+// reason duration does.
+func size(v string, fallback int64) int64 {
+	v = strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(v), " ", ""))
+	if v == "" {
+		return fallback
+	}
+	shift := 0
+	for _, u := range []struct {
+		suffix string
+		shift  int
+	}{{"TIB", 40}, {"GIB", 30}, {"MIB", 20}, {"KIB", 10},
+		{"TB", 40}, {"GB", 30}, {"MB", 20}, {"KB", 10},
+		{"T", 40}, {"G", 30}, {"M", 20}, {"K", 10}, {"B", 0}} {
+		if strings.HasSuffix(v, u.suffix) {
+			v, shift = strings.TrimSuffix(v, u.suffix), u.shift
+			break
+		}
+	}
+	n, err := strconv.ParseInt(v, 10, 64)
+	if err != nil || n < 0 || n > math.MaxInt64>>shift {
+		return fallback
+	}
+	return n << shift
 }
 
 // duration parses a timeout, falling back to the default.

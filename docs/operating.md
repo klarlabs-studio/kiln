@@ -397,6 +397,47 @@ built with `SOURCE_DATE_EPOCH` — reports 1970 as its creation time, so a whole
 repository can tie, and without a total order `--dry-run` would name one image
 while the real run removed another.
 
+### The Go build cache
+
+Every gate is `warden run pre-push`, which for a Go repository means
+`go test -race` in a fresh worktree. Box builds used to share the operator's
+own cache (`~/Library/Caches/go-build` on a Mac) and grew it by ~35 GB in
+twelve hours; Go only trims entries unused for five days, so nothing kept up.
+
+Kiln now gives its builds a cache of their own. The gate, every task and a
+goreleaser release run with `GOCACHE` pointed at `<user cache>/kiln/go-build`
+(`~/Library/Caches/kiln/go-build` on a Mac, `~/.cache/kiln/go-build` on
+Linux) — for a fork pull request too, since a path is not a secret and a fork
+build left on the operator's cache would grow it just the same. Each tick then
+trims it:
+
+1. remove entries unused for more than 24 hours
+2. if still over `KILN_GOCACHE_MAX_SIZE` (default `10GiB`), remove the least
+   recently used until under it — but never an entry touched in the last
+   hour, because Go only refreshes an entry's mtime once it is an hour old, so
+   a newer one may be in use by a build running right now
+
+The tick log says what it freed (`trimmed go build cache files=… freed=…`).
+Like the rest of this section, a failure is a warning, never a failed tick.
+
+| Setting | Effect |
+|---|---|
+| `KILN_GOCACHE` unset or empty | use `<user cache>/kiln/go-build` |
+| `KILN_GOCACHE=/abs/path` | use that directory instead (must be absolute) |
+| `KILN_GOCACHE=off` | manage nothing: builds inherit `GOCACHE` as before, nothing is trimmed |
+| `GOCACHE` set in kiln's environment | the operator decided; kiln injects nothing and trims nothing, whatever `KILN_GOCACHE` says |
+| `KILN_GOCACHE_MAX_SIZE` | cap after the idle sweep, e.g. `20GiB`, `512MiB`; `0` keeps only the idle sweep |
+
+The trimmer only ever deletes from a directory kiln claimed. Boot writes a
+`.kiln-go-cache` marker into the directory when it creates it (or finds it
+empty); a directory that already holds anything else is refused, the box logs
+a warning and runs without a kiln cache, and the trimmer is never pointed at
+it. `KILN_GOCACHE` naming Go's own default cache is refused at startup. Inside
+its directory the trimmer touches only Go's two-hex-digit shard directories,
+never the README, `trim.txt` or the marker. The operator's own cache is never
+written by a box build and never read by the trimmer — the external script that
+used to trim it can go.
+
 ## The ledger
 
 `.kiln/state.json`, or `KILN_DB`. It holds the last 500 runs.
