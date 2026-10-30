@@ -210,6 +210,12 @@ func report(io IO, err error) int {
 // paged because a build took longer than the interval.
 const ExitBusy = 75
 
+// ExitNotReady reports a box that cannot build right now — too little free
+// disk. EX_UNAVAILABLE rather than ExitFailed, because no commit failed and
+// an operator alerting on red builds should look at the machine, not at a
+// pull request.
+const ExitNotReady = 69
+
 // withRepoLock runs fn holding the repository lock.
 //
 // Every command that fetches, builds or writes the ledger goes through here.

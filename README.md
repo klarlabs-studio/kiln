@@ -219,6 +219,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
+| `KILN_MIN_FREE_GB` | A watch tick builds nothing below this much free disk (default `5`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ### Signing
@@ -454,7 +455,7 @@ Same engine, four ways in.
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 
-Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
+Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `69` the box is too full to build, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
 
 Ctrl-C cancels through `signal.NotifyContext`, so worktrees are cleaned up rather than leaked. Logs are bolt JSON on **stderr**.
 
@@ -516,6 +517,10 @@ cache older than `KILN_BUILD_CACHE_MAX_AGE` (default 168h) — usually the
 larger reclaim of the two. It never touches a moving tag, never a repository
 kiln does not publish, and **never a registry**: a local image is a re-pull
 away, a deleted registry digest is a rollback RollOps can no longer perform.
+
+**A sick box says so once.** Below `KILN_MIN_FREE_GB` free (default 5) a tick
+builds nothing and exits 69; while docker is not answering, jobs that need it
+are deferred rather than failed. Neither is recorded against a commit.
 
 ```cron
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1

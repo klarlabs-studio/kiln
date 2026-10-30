@@ -61,6 +61,8 @@ wants to know now whether it works, not in five minutes.
 
 ### What a tick does
 
+0. Reap abandoned worktrees, prune docker, then refuse the whole tick if the
+   disk has less than `KILN_MIN_FREE_GB` free (exit 69; see *Disk*)
 1. `git fetch` the tracked branch (fatal if it fails)
 2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a non-GitHub
    remote simply has none)
@@ -70,7 +72,9 @@ wants to know now whether it works, not in five minutes.
 5. Drop any pull ref whose pull request is no longer open
 6. Drop any tag the box inherited (see *What a new box does not do*)
 7. Drop any job whose SHA **and** ref already have a *succeeded* run
-8. Execute the rest
+8. Hold back any job that starts a container — an image to build, a service
+   beside the gate — while the docker daemon is not answering
+9. Execute the rest
 
 Only a success marks a commit as built. A failure is retried, but how soon
 depends on whose failure it was:
@@ -132,10 +136,11 @@ Runs nothing, prints the job list. Safe even on a box with no gate installed.
 | 2 | the gate rejected the change, or a job failed |
 | 3 | configuration or toolchain — a broken machine |
 | 64 | usage |
+| 69 | the box cannot build right now — too little free disk |
 | 75 | another kiln holds this repository |
 
 2 and 3 are separated on purpose: 2 needs a developer to fix their code, 3
-needs an operator to fix a machine. Alert on 3.
+needs an operator to fix a machine. Alert on 3 and 69.
 
 ## Concurrency
 
@@ -344,6 +349,19 @@ refused at boot, by name. When an app is configured it wins over
 `GITHUB_TOKEN` and the stored token.
 
 ## Disk
+
+A tick refuses to build on a box with less than `KILN_MIN_FREE_GB` free
+(default `5`, `0` disables), after the housekeeping below has had its chance to
+free some. It exits 69 with one line naming how much is left, and records
+nothing. Before this, a full disk failed every job of every tick in the linker,
+and each failure landed in the ledger against a commit that had done nothing
+wrong.
+
+Docker gets the same treatment per job. When the daemon does not answer —
+Docker Desktop failing to start, or hanging (the probe gives up after 15s) —
+jobs that build an image or start a service are deferred: printed as `defer`,
+not recorded, and built on the first tick after docker comes back. Jobs that
+need no container carry on.
 
 Each watch tick reaps worktrees left by killed runs — directories under the
 temp dir carrying kiln's prefix, older than 24 hours, that nobody is building

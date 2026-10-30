@@ -9,6 +9,7 @@ package envconfig
 
 import (
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -29,6 +30,11 @@ const (
 	// legitimately slow; finite, because a hung docker pull would otherwise
 	// pin a watcher until somebody noticed.
 	DefaultPhaseTimeout = 45 * time.Minute
+
+	// DefaultMinFreeGB is the free space a watch tick insists on. Enough to
+	// link a race-instrumented test binary and write its build cache, which
+	// is what failed first on a real box that ran out.
+	DefaultMinFreeGB = 5
 )
 
 // Env is the resolved operator environment for one process.
@@ -108,6 +114,12 @@ type Env struct {
 	// is shared by every repository on the box, so it cannot sensibly be
 	// configured per repository.
 	BuildCacheMaxAge time.Duration
+	// MinFree is the free disk space below which a watch tick builds nothing
+	// (KILN_MIN_FREE_GB, in GiB). Zero disables the check.
+	//
+	// Machine-level for the same reason as the cache bound: every repository
+	// on the box shares the disk.
+	MinFree uint64
 }
 
 // Load reads the environment. It never fails: a missing variable is a default
@@ -138,6 +150,7 @@ func Load() Env {
 		PhaseTimeout:  duration(os.Getenv("KILN_PHASE_TIMEOUT"), DefaultPhaseTimeout),
 		BuildCacheMaxAge: duration(
 			os.Getenv("KILN_BUILD_CACHE_MAX_AGE"), prune.DefaultBuildCacheMaxAge),
+		MinFree: gibibytes(os.Getenv("KILN_MIN_FREE_GB"), DefaultMinFreeGB),
 	}
 }
 
@@ -156,6 +169,16 @@ func duration(v string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+// gibibytes parses a whole number of GiB into bytes, with the same rules as
+// duration: "0" disables, anything unparsable falls back.
+func gibibytes(v string, fallback uint64) uint64 {
+	n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		n = fallback
+	}
+	return n << 30
 }
 
 // truthy accepts the spellings an operator plausibly types. Anything else is

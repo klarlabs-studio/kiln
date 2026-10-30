@@ -113,3 +113,19 @@ func TestAnUnparsablePhaseTimeoutKeepsTheSafetyNet(t *testing.T) {
 		}
 	}
 }
+
+func TestMinFree(t *testing.T) {
+	for v, want := range map[string]uint64{
+		"":     DefaultMinFreeGB << 30,
+		"20":   20 << 30,
+		"0":    0, // an operator who typed 0 meant "do not check"
+		"lots": DefaultMinFreeGB << 30,
+		"-1":   DefaultMinFreeGB << 30,
+		"2.5":  DefaultMinFreeGB << 30,
+	} {
+		t.Setenv("KILN_MIN_FREE_GB", v)
+		if got := Load().MinFree; got != want {
+			t.Errorf("KILN_MIN_FREE_GB=%q gave %d, want %d", v, got, want)
+		}
+	}
+}
