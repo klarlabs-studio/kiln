@@ -521,7 +521,7 @@ away, a deleted registry digest is a rollback RollOps can no longer perform.
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1
 ```
 
-Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is always retried. One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
+Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is always retried; a task whose script the commit predates is recorded as not applicable rather than failed, so an old pull request is not retried forever (its check stays red, so branch protection still holds). One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
 
 ---
 

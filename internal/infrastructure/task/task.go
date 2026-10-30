@@ -80,6 +80,10 @@ func (t *Runner) Run(ctx context.Context, req ports.TaskRequest) ports.TaskResul
 	_, err := t.Exec.Run(ctx, cmd)
 
 	result := ports.TaskResult{Name: req.Name, Duration: time.Since(started)}
+	if missing, ok := t.predates(ctx, req.Dir, dir, req.Task.Run, err); ok {
+		result.Err = &ports.NotApplicableError{Task: req.Name, Path: missing}
+		return result
+	}
 	if err != nil {
 		result.Err = fmt.Errorf("%w: %s: %w", ports.ErrTaskFailed, req.Name, err)
 		result.Tolerated = req.Task.AllowFailure

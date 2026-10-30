@@ -88,8 +88,13 @@ type Task struct {
 	Name string `json:"name"`
 	OK   bool   `json:"ok"`
 	// Tolerated records that the task failed and the pipeline accepted it.
-	Tolerated bool   `json:"tolerated,omitempty"`
-	Duration  string `json:"duration,omitempty"`
+	Tolerated bool `json:"tolerated,omitempty"`
+	// NotApplicable records that the commit predates a file the task runs, so
+	// the task did not run and the run did not count it as a failure. OK is
+	// false alongside it: a reader of the ledger must not see "passed" for
+	// something that never executed.
+	NotApplicable bool   `json:"not_applicable,omitempty"`
+	Duration      string `json:"duration,omitempty"`
 }
 
 // Artifact is one thing a run published.

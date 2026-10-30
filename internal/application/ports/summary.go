@@ -27,6 +27,8 @@ func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, 
 	switch {
 	case err == nil:
 		return ConclusionSuccess, "task passed", body
+	case errors.Is(err, ErrNotApplicable):
+		return notApplicableSummary(err, body)
 	case tolerated:
 		// ConclusionNeutral, not failure: the pipeline was told this one may fail. A red
 		// check for something the author declared advisory is how a wall of
@@ -35,6 +37,30 @@ func TaskSummary(err error, tolerated bool, output string) (Conclusion, string, 
 	default:
 		return ConclusionFailure, "task failed", body
 	}
+}
+
+// notApplicableSummary renders a task the commit predates.
+//
+// Still a failure conclusion, and deliberately. Skipped and neutral both
+// satisfy a required check — skipped as a check run, success as the commit
+// status fallback — so a pull request based on a commit from before the
+// script existed would merge without the check ever having run. Kiln fails
+// closed everywhere else. What changes is the box's side: the run does not
+// fail and the commit is not retried, because nothing on the box can help.
+// The red stays for the reviewer, with a title that says why.
+func notApplicableSummary(err error, output string) (Conclusion, string, string) {
+	title := "not applicable: this commit predates what the task runs"
+	var na *NotApplicableError
+	if errors.As(err, &na) && na.Path != "" {
+		title = "not applicable: this commit predates " + na.Path
+	}
+	body := "```\n" + strings.TrimSpace(err.Error()) + "\n```\n\n" +
+		"The task did not run: the file it calls is not in this commit or its history. " +
+		"Rebase onto a commit that has it, or remove the task from the pipeline."
+	if output != "" {
+		body += "\n\n" + output
+	}
+	return ConclusionFailure, title, body
 }
 
 // ProveSummary renders the body of the prove check.

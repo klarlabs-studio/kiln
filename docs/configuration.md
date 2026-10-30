@@ -511,6 +511,37 @@ rather than replaying the backlog.
 Each task posts its own GitHub Check, named `Kiln / <task>`, so branch
 protection can require one and a red check names the thing that broke.
 
+**A commit that predates the task's script is not applicable, not failed.** A
+box builds every open pull request, including ones branched before the pipeline
+started calling `scripts/ci/build.sh`. Such a task exits 127 on a file the
+commit cannot grow, so kiln records it as not applicable: the ledger marks the
+task `not_applicable`, the task does not fail the run (exit code 0), and the
+commit is not retried.
+
+**The check stays red on purpose**, titled `not applicable: this commit
+predates scripts/ci/build.sh`, with a summary saying to rebase onto a commit
+that has the script or remove the task from the pipeline. A `skipped` or
+`neutral` conclusion — and the `success` commit status either becomes —
+satisfies a required check, so a pull request based on an old enough commit
+would merge without the check ever having run. The box has nothing left to
+do; the reviewer still does.
+
+Kiln calls a task not applicable only when all of these hold — anything less
+stays an ordinary failure:
+
+- the shell could not start a path written in `run` itself (exit 127; or exit
+  1 when that path is the whole command's first word, which is how bash under
+  `-e` reports it) and said that path does not exist;
+- the path is relative and inside the worktree (`workdir` applies);
+- git does not ignore it — a missing `node_modules/.bin/eslint` means nothing
+  installed dependencies, not that the commit is old;
+- no commit in the commit's history ever contained it, so a pull request that
+  *deletes* the script a required check runs still fails; and the clone is not
+  shallow, since a shallow clone cannot show that history.
+
+A tool missing from `PATH` stays a failure: that is the box's problem, and a
+grey check would hide it.
+
 **A task cannot mint provenance.** That is the line this feature does not
 cross: the signed artifacts of a run are exactly what `publish:` produced, and
 no amount of task surface can add to them or make an unsigned thing look
