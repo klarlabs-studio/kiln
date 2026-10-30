@@ -1,12 +1,17 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"time"
 
 	"go.klarlabs.de/kiln/internal/application/ports"
 
+	"go.klarlabs.de/kiln/internal/domain/config"
 	"go.klarlabs.de/kiln/internal/domain/run"
 )
 
@@ -20,7 +25,16 @@ const (
 	Built
 	// Backoff means it failed recently and is not due for another attempt.
 	Backoff
+	// Settled means the commit itself failed and nothing that could change
+	// the outcome has changed since.
+	Settled
 )
+
+// SettledRetry is how long a commit that failed on its own merits waits when
+// its inputs stay the same. Not forever: the verdict "this is the commit's
+// fault" is only as good as the error it was read from, and a full disk can
+// surface as an ordinary gate failure.
+const SettledRetry = 24 * time.Hour
 
 // RetryBase is the delay before a failed commit is tried again, doubling with
 // each further failure.
@@ -45,7 +59,12 @@ const RetryCap = time.Hour
 // delay doubles from fifteen minutes to an hour and stays there, so a genuine
 // breakage settles into a heartbeat instead of a spin, and a transient one
 // recovers on its own.
-func Decide(s ports.Ledger, sha, ref string, now time.Time) (Verdict, time.Duration) {
+//
+// That heartbeat is still a full re-run every hour for a commit whose own
+// tests fail, which on a box with a few stale pull requests is most of its
+// work. So a failure the commit caused waits for its inputs — the fingerprint
+// from Engine.Inputs — to change, and rechecks daily in case it was misread.
+func Decide(s ports.Ledger, sha, ref string, now time.Time, inputs string) (Verdict, time.Duration) {
 	if s == nil {
 		return Build, 0
 	}
@@ -53,8 +72,18 @@ func Decide(s ports.Ledger, sha, ref string, now time.Time) (Verdict, time.Durat
 		return Built, 0
 	}
 
-	failures, last := failureHistory(s, sha, ref)
+	failures, last, latest := failureHistory(s, sha, ref)
 	if failures == 0 {
+		return Build, 0
+	}
+
+	if latest.Cause == run.CauseCommit && latest.Inputs != "" {
+		if latest.Inputs != inputs {
+			return Build, 0
+		}
+		if due := last.Add(SettledRetry); now.Before(due) {
+			return Settled, due.Sub(now)
+		}
 		return Build, 0
 	}
 
@@ -81,15 +110,16 @@ func backoff(failures int) time.Duration {
 }
 
 // failureHistory counts consecutive failed runs for a commit and returns when
-// the most recent one finished.
-func failureHistory(s ports.Ledger, sha, ref string) (int, time.Time) {
+// the most recent one finished, and that run.
+func failureHistory(s ports.Ledger, sha, ref string) (int, time.Time, *run.Run) {
 	runs, err := s.List()
 	if err != nil {
-		return 0, time.Time{}
+		return 0, time.Time{}, nil
 	}
 
 	var count int
-	var latest time.Time
+	var last time.Time
+	var latest *run.Run
 	for _, r := range runs {
 		if r == nil || r.SHA != sha || r.Ref != ref || r.Phase != run.PhaseFailed {
 			continue
@@ -99,11 +129,46 @@ func failureHistory(s ports.Ledger, sha, ref string) (int, time.Time) {
 		if when.IsZero() {
 			when = r.StartedAt
 		}
-		if when.After(latest) {
-			latest = when
+		if when.After(last) {
+			last, latest = when, r
 		}
 	}
-	return count, latest
+	return count, last, latest
+}
+
+// causeOf attributes a failure. Only errors that positively say the change was
+// judged and rejected count against the commit; anything else, including what
+// kiln cannot place, is the box's problem and keeps the hourly retry.
+func causeOf(err error) run.Cause {
+	switch {
+	case errors.Is(err, ErrPhaseTimeout),
+		errors.Is(err, ports.ErrToolMissing),
+		errors.Is(err, ports.ErrGateUnavailable):
+		return run.CauseEnvironment
+	case errors.Is(err, ports.ErrGateFailed),
+		errors.Is(err, ports.ErrTaskFailed):
+		return run.CauseCommit
+	default:
+		return run.CauseEnvironment
+	}
+}
+
+// Inputs fingerprints what, besides the commit, decides a run's outcome: the
+// kiln build, the tool versions and the pipeline. When it changes, a commit
+// that failed on its own merits deserves another look.
+func (e *Engine) Inputs(p config.Pipeline) string {
+	// encoding/json sorts map keys, so the tool versions hash the same however
+	// the map was built.
+	b, err := json.Marshal(struct {
+		Kiln     string
+		Tools    map[string]string
+		Pipeline config.Pipeline
+	}{e.KilnVersion, e.ToolVersions, p})
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:8])
 }
 
 // DescribeBackoff renders the wait for a log line, so an operator reading a

@@ -192,6 +192,7 @@ watch:
   ref: main
   pull_requests: true
   tags: true
+  superseded_tags: false   # true also builds tags a newer release on their major line overtook
 ```
 
 `publish:` is a **list**, because "signed artifact" is not a synonym for "container image": one proven commit routinely yields an image *and* a set of release binaries. A third kind later is one more list entry rather than one more top-level key.
@@ -219,6 +220,11 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `GITHUB_REPOSITORY` | `owner/name`, when the git remote is absent |
 | `KILN_PHASE_TIMEOUT` | Bound on each phase (default `45m`; `0` disables) |
 | `KILN_BUILD_CACHE_MAX_AGE` | Prune docker build cache older than this (default `168h`; `0` disables) |
+| `KILN_GOCACHE` | Go build cache for the gate, tasks and releases, trimmed each tick (default `<user cache>/kiln/go-build`; an absolute path; `off` inherits `GOCACHE` and trims nothing). An explicit `GOCACHE` in kiln's environment always wins. See [operating](docs/operating.md#the-go-build-cache). |
+| `KILN_GOCACHE_MAX_SIZE` | Cap on that cache after dropping entries unused for 24h (default `10GiB`; `0` keeps only the 24h sweep) |
+| `KILN_MAX_PARALLEL` | Builds that may run at once on this machine, across every repository and process (default `1`; `0` disables). See [operating](docs/operating.md#concurrency). |
+| `KILN_SLOT_DIR` | Where the machine's build slots live (default `<user cache dir>/kiln/slots`). Every kiln meant to share the limit must use the same one. |
+| `KILN_MIN_FREE_GB` | A watch tick builds nothing below this much free disk (default `5`; `0` disables) |
 | `KILN_LOG_LEVEL` | `debug`, `info`, `warn`, `error` |
 
 ### Signing
@@ -446,7 +452,7 @@ Same engine, four ways in.
 | `kiln version` | Version, commit, build date |
 | `kiln doctor` | Validate YAML, print the tag plan, check the toolchain. Runs nothing. |
 | `kiln run --sha S --event E` | One-shot build. `--sha HEAD` resolves via git. |
-| `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded |
+| `kiln watch --once \| --every D` | Fetch branch, PR heads and tags; skip what already succeeded and tags a newer release on their major line overtook |
 | `kiln watch --repos /srv/*` | The same across a fleet, from one process |
 | `kiln poll` | Branch-only subset of watch; needs no token at all |
 | `kiln status [run-id]` | Read the ledger |
@@ -454,7 +460,7 @@ Same engine, four ways in.
 | `kiln prune [--dry-run]` | Reclaim local docker disk for this pipeline |
 | `kiln mcp serve` | Stdio MCP |
 
-Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
+Exit codes: `0` ok, `2` the gate rejected the change, `3` configuration or toolchain, `64` usage, `69` the box is too full to build, `75` another kiln holds the repository. Cron can tell "your code is wrong" from "this machine is broken".
 
 Ctrl-C cancels through `signal.NotifyContext`, so worktrees are cleaned up rather than leaked. Logs are bolt JSON on **stderr**.
 
@@ -517,11 +523,25 @@ larger reclaim of the two. It never touches a moving tag, never a repository
 kiln does not publish, and **never a registry**: a local image is a re-pull
 away, a deleted registry digest is a rollback RollOps can no longer perform.
 
+**The box log is bounded.** Once `.kiln/box.log` passes 5 MiB, the next tick
+moves it to `box.log.1` and keeps three generations, about 20 MiB per box.
+Boxes installed by an older kiln get this on upgrade, without reinstalling.
+
+**The Go build cache is kiln's own.** Builds run with `GOCACHE` set to
+`<user cache>/kiln/go-build` instead of sharing yours, and each tick drops
+entries unused for 24h, then the least recently used beyond
+`KILN_GOCACHE_MAX_SIZE` (default 10GiB). `go test -race` on every commit used
+to grow the operator's cache by tens of gigabytes a day.
+
+**A sick box says so once.** Below `KILN_MIN_FREE_GB` free (default 5) a tick
+builds nothing and exits 69; while docker is not answering, jobs that need it
+are deferred rather than failed. Neither is recorded against a commit.
+
 ```cron
 */5 * * * *  cd /srv/glossa && /usr/local/bin/kiln watch --once >> /var/log/kiln.log 2>&1
 ```
 
-Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is always retried. One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
+Each tick recomputes the full set of interesting refs and drops the ones a **successful** run already covers, so a missed tick self-heals and a doubled tick is a no-op. A failed run is retried: hourly when the box was at fault, and when the commit was, once its inputs (kiln, tool versions, pipeline) change or a day passes — see [operating](docs/operating.md). A task whose script the commit predates is recorded as not applicable rather than failed, so an old pull request is not retried forever (its check stays red, so branch protection still holds). One failing job does not stop the others — otherwise anybody who can open a pull request could halt the pipeline.
 
 ---
 

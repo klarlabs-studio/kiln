@@ -6,7 +6,59 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `kiln watch` checks the box before building. Below `KILN_MIN_FREE_GB` free
+  disk (default 5, `0` disables) a tick builds nothing and exits 69; while the
+  docker daemon does not answer, jobs that build an image or start a service
+  are deferred instead of failed. Neither is recorded against a commit, so a
+  full disk no longer turns into hundreds of failed runs.
+
+- **A machine-wide limit on concurrent builds.** `KILN_MAX_PARALLEL`
+  (default `1`; `0` disables) bounds how many builds run at once across
+  every repository and kiln process on a machine. Eight box agents ticking
+  together on one Mac had driven it 11.8 GB into swap and failed builds with
+  "no space left on device", blamed on the commits. Each build now takes a
+  `flock`ed slot under the user cache directory (`KILN_SLOT_DIR` moves it),
+  released by the kernel if the process dies. A watch tick that finds every
+  slot taken waits up to 15 minutes, then defers the job to the next tick —
+  exit 0, nothing written to the ledger, no backoff. `kiln run` waits the
+  same time, then exits 75.
+
+- **Box builds get their own, bounded Go build cache**. The gate, tasks
+  and goreleaser releases used to share the operator's cache, and
+  `go test -race` on every commit grew it by ~35 GB in twelve hours until an
+  external script trimmed it. Kiln now runs them with `GOCACHE` set to
+  `<user cache>/kiln/go-build` — fork pull requests included, alongside the
+  scrubbed environment — and each watch tick removes entries unused for 24h,
+  then evicts least-recently-used entries older than an hour until the cache
+  is under `KILN_GOCACHE_MAX_SIZE` (default `10GiB`), logging what it freed.
+  `KILN_GOCACHE` picks another absolute path or `off`; a `GOCACHE` already
+  set in kiln's environment is respected and nothing is trimmed. The trimmer
+  only touches a directory kiln claimed with a `.kiln-go-cache` marker, so it
+  can never be pointed at the operator's own cache.
+
 ### Changed
+
+- **A commit that fails on its own merits is no longer re-run every hour.**
+  Each failed run records whether the commit (gate rejected, task failed) or
+  the box (missing toolchain, lock, timeout, network) was at fault, and the
+  fingerprint of kiln, tool versions and pipeline it ran with. The watch loop
+  retries a commit failure as soon as that fingerprint changes and otherwise
+  daily; box failures keep the 15m → 1h backoff. On a real box a handful of
+  stale pull requests and old tags were re-gated ~24 times a day each.
+
+- **A tick fetches only the open pull requests.** GitHub keeps
+  `refs/pull/N/head` for every pull request ever opened, and the wildcard
+  fetch brought all of them down every tick for discovery to discard — one
+  box logged `skipped closed pull requests count=372` against a single build,
+  every thirty minutes. When GitHub answers which pull requests are open, kiln
+  now asks first, fetches just those heads in one batched `git fetch`, and
+  deletes the parked `refs/kiln/pr/*` of pull requests that have closed, so
+  the local namespace stops growing. Without an answer — no token, an API
+  error, a non-GitHub remote — the wildcard fetch, fork handling and baseline
+  fallback are unchanged. A new box's baseline still records every pull ref
+  on the remote, so a token that later lapses does not replay closed ones.
 
 - `KILN_GITHUB_APP_INSTALLATION_ID` is optional. Without it, kiln asks GitHub
   which installation of the app covers the repository, so one box can watch
@@ -15,6 +67,46 @@ All notable changes to kiln are documented here. The format follows
   `github disabled for this repository` error naming what to grant, and kiln
   stops calling GitHub for the rest of that tick. Before, every pull request
   listing and check run logged its own 404 warning: 913 on one box.
+
+### Fixed
+
+- **Old tags are no longer rebuilt.** A failing tag was never silenced by a
+  success, so the backoff only spaced its retries out: one box retried
+  `v0.0.0`, `v0.1.0` and `v0.2.0` about seventy times each, long after newer
+  releases had shipped. `kiln watch` now judges each major line on its own,
+  and builds a version tag only while it is newer than the newest release of
+  its line that shipped (a succeeded run in the ledger, or the box's baseline)
+  or is the newest version tag of its line. A backport such as `v1.9.5` cut
+  after `v2.0.0` is still built. Versions are ordered by semver precedence,
+  pre-releases included; tags that are not versions are built as before.
+  `watch.superseded_tags: true` restores building every tag.
+
+- **The box log no longer grows forever.** launchd and systemd append a
+  box's output to `.kiln/box.log` and never rotate it; one box reached 14 MB.
+  Each `watch` and `poll` tick now starts by rotating it once it passes
+  5 MiB, keeping `box.log.1` to `box.log.3`. The file is copied and then
+  truncated in place, because the init system holds it open in append mode
+  and a rename would send the rest of the tick into the rotated copy. The
+  path is derived from the repository rather than the unit, so boxes
+  installed by older releases are covered on upgrade without
+  `kiln box install`. A failed rotation is logged and never fails the tick.
+
+- **A task whose script the commit predates is not applicable, not failed.**
+  A box builds every open pull request, including ones branched before the
+  pipeline started calling `scripts/ci/build.sh`; around 400 box runs failed
+  with `exit 127` that way, each a red check and an hourly retry for a commit
+  that can never grow the file. kiln now records such a task as not
+  applicable: the ledger marks the task `not_applicable`, the run does not
+  fail (exit 0) and the commit is not retried. The check stays red on
+  purpose, titled `not applicable: this commit predates <path>` and telling
+  the author to rebase or drop the task: a `skipped` or `neutral` conclusion
+  satisfies a required check, which would let a pull request based on an old
+  enough commit merge without the check ever running. Only
+  a path written in the task's `run`, relative and inside the worktree, not
+  gitignored, and absent from the commit's entire (non-shallow) history
+  qualifies — a pull request that deletes the script, a missing tool on
+  `PATH`, or missing dependencies still fail. The warden gate is unchanged:
+  warden already reports a missing command as a toolchain problem (exit 78).
 
 ## [0.8.0] - 2026-10-17
 

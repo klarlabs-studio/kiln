@@ -58,11 +58,18 @@ func runRun(ctx context.Context, args []string, io IO) error {
 	// A one-shot run was asked for explicitly, so a busy repository is a
 	// refusal rather than a shrug: the operator wants to know their command
 	// did not happen.
+	//
+	// The repository first, then the machine: waiting for a build slot while
+	// holding the checkout keeps a box's tick from building the same commit
+	// in the meantime.
+	holder := "kiln run " + deps.Dir + " --sha " + run.ShortSHA(resolved)
 	return withRepoLock(deps.Dir, "kiln run --sha "+run.ShortSHA(resolved), busyRefusal,
 		func() error {
-			return executeRun(ctx, deps, io, parsedEvent, resolved,
-				resolveFork(ctx, deps, parsedEvent, *fork, *pr),
-				defaultRef(*ref, parsedEvent, *pr))
+			return withBuildSlot(ctx, deps, holder, func() error {
+				return executeRun(ctx, deps, io, parsedEvent, resolved,
+					resolveFork(ctx, deps, parsedEvent, *fork, *pr),
+					defaultRef(*ref, parsedEvent, *pr))
+			})
 		})
 }
 

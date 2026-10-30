@@ -64,3 +64,48 @@ type PruneResult struct {
 type Pruner interface {
 	Prune(ctx context.Context, opts PruneOptions) (PruneResult, error)
 }
+
+// LogRotator keeps the box's own log bounded.
+//
+// The application never names the file: where launchd or systemd sends a
+// box's output is a decision the installer made, and only the adapter wired
+// beside it knows the answer.
+type LogRotator interface {
+	// Rotate moves an oversized log aside and reports how many bytes it
+	// moved, zero when there was nothing to do.
+	Rotate(ctx context.Context) (int64, error)
+}
+
+// CacheTrimResult is what one trim of kiln's Go build cache freed.
+type CacheTrimResult struct {
+	Files int
+	Freed int64
+}
+
+// CacheTrimmer bounds the Go build cache kiln's own builds use.
+//
+// A port beside Pruner rather than part of it: docker disk and Go's cache are
+// different stores with different owners, and a box without docker still
+// runs `go test -race` on every commit.
+type CacheTrimmer interface {
+	Trim(ctx context.Context) (CacheTrimResult, error)
+}
+
+// ErrBoxNotReady reports a box that cannot do the work a tick would start: a
+// disk too full to link a binary, a docker daemon that does not answer.
+//
+// Like ErrRepoBusy it is not a build failure. Before it existed, a full disk
+// surfaced as hundreds of failed runs — every commit's gate dying in the
+// linker — and each one was recorded against a commit that had done nothing
+// wrong. Nothing is recorded now; the next tick looks again.
+var ErrBoxNotReady = errors.New("box is not ready")
+
+// BoxHealth answers whether this machine can build at all right now.
+type BoxHealth interface {
+	// FreeBytes reports the space an unprivileged writer can still use on
+	// the filesystem holding path.
+	FreeBytes(path string) (uint64, error)
+	// DockerReady reports whether the docker daemon answers. A missing
+	// docker binary is an error too: a run that needs one cannot start.
+	DockerReady(ctx context.Context) error
+}

@@ -68,6 +68,32 @@ type PullProposer interface {
 // ErrTaskFailed reports a task whose command exited non-zero.
 var ErrTaskFailed = errors.New("task failed")
 
+// ErrNotApplicable reports a task whose command names a repository file the
+// commit does not contain and never has: the commit predates what the
+// pipeline runs.
+//
+// Not a failure, and deliberately not wrapped in ErrTaskFailed. A box watches
+// every open pull request, including ones branched long before the pipeline
+// started calling scripts/ci/build.sh; those ran `exit 127` around 400 times on
+// real boxes, each one a red check and an hourly retry for a commit that can
+// never grow the file. Nothing about the change was judged, so the run does
+// not fail and the box does not retry — but nothing passed either, so the
+// check stays red (see TaskSummary).
+var ErrNotApplicable = errors.New("not applicable to this commit")
+
+// NotApplicableError names the file a task's commit predates, so the check
+// title can say which one without parsing an error string.
+type NotApplicableError struct {
+	Task string
+	Path string
+}
+
+func (e *NotApplicableError) Error() string {
+	return fmt.Sprintf("%s: %s: %s is not in this commit or its history", ErrNotApplicable, e.Task, e.Path)
+}
+
+func (e *NotApplicableError) Unwrap() error { return ErrNotApplicable }
+
 // KeptFile is one retained output.
 type KeptFile struct {
 	// Name is the path relative to the worktree, as the operator wrote it.
@@ -77,6 +103,10 @@ type KeptFile struct {
 }
 
 func (r TaskResult) OK() bool { return r.Err == nil || r.Tolerated }
+
+// NotApplicable reports that the task did not apply to this commit. Such a
+// result is neither OK — it did not run — nor a failure the run counts.
+func (r TaskResult) NotApplicable() bool { return errors.Is(r.Err, ErrNotApplicable) }
 
 func (p Proposal) Summary() string {
 	switch {

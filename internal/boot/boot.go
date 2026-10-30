@@ -26,6 +26,7 @@ import (
 	"go.klarlabs.de/kiln/internal/infrastructure/envconfig"
 	"go.klarlabs.de/kiln/internal/infrastructure/execx"
 	"go.klarlabs.de/kiln/internal/infrastructure/github"
+	"go.klarlabs.de/kiln/internal/infrastructure/gocache"
 	"go.klarlabs.de/kiln/internal/infrastructure/obs"
 	"go.klarlabs.de/kiln/internal/infrastructure/pipelinefile"
 	"go.klarlabs.de/kiln/internal/infrastructure/prove"
@@ -143,6 +144,9 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	if app == nil && env.Token == "" {
 		env.Token = storedToken(ctx, credstore.New(runner), log)
 	}
+	// Before deps is built, for the same reason as the token: Env is copied,
+	// and the watcher wires its trimmer from deps.Env.GoCache.
+	env.GoCache = claimGoCache(env.GoCache, log)
 
 	deps := &Deps{
 		Env:           env,
@@ -163,7 +167,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 	wardenProvenance := provenance.NewWarden(runner, env.Warden, env.TrustedKeys)
 
 	deps.Engine = engine.New(engine.Engine{
-		Prover:           prove.NewWarden(runner, env.Warden, env.Nox),
+		Prover:           buildProver(env, runner),
 		Publisher:        buildPublisher(env, runner, log),
 		ReleasePublisher: buildReleasePublisher(ctx, env, runner, deps.GitHub, log),
 		KilnVersion:      version.Version,
@@ -171,7 +175,7 @@ func Build(ctx context.Context, opts Options) (*Deps, error) {
 		PhaseTimeout:     env.PhaseTimeout,
 		Provenance:       wardenProvenance,
 		SourceAttester:   wardenProvenance,
-		Tasks:            task.New(runner),
+		Tasks:            buildTasks(env, runner),
 		Worktrees:        worktree.NewTrees(runner),
 		Proposer:         github.NewProposer(deps.GitHub),
 		KeepRoot:         filepath.Dir(deps.Store.Path()),
@@ -306,6 +310,36 @@ func buildPublisher(env envconfig.Env, runner execx.Runner, log ports.Logger) po
 	return d
 }
 
+func buildProver(env envconfig.Env, runner execx.Runner) *prove.Warden {
+	p := prove.NewWarden(runner, env.Warden, env.Nox)
+	p.GoCache = env.GoCache
+	return p
+}
+
+func buildTasks(env envconfig.Env, runner execx.Runner) *task.Runner {
+	t := task.New(runner)
+	t.GoCache = env.GoCache
+	return t
+}
+
+// claimGoCache makes dir kiln's, or returns "" when kiln should manage no Go
+// cache at all.
+//
+// Never fatal. A directory that cannot be created, or one that already holds
+// somebody else's files, costs the box its bounded cache — children inherit
+// GOCACHE as they did before this existed — and a warning says why. Refusing
+// to boot would stop the gate over a disk-hygiene setting.
+func claimGoCache(dir string, log ports.Logger) string {
+	if dir == "" {
+		return ""
+	}
+	if err := gocache.Claim(dir); err != nil {
+		log.Warn("not using a kiln go build cache; builds inherit GOCACHE", "dir", dir, "err", err)
+		return ""
+	}
+	return dir
+}
+
 // buildReleasePublisher wires the binary-release path.
 //
 // KILN_DRY still runs goreleaser — a rehearsal that skipped the cross-compile
@@ -320,6 +354,7 @@ func buildReleasePublisher(
 		g.Tokens = gh.Tokens.Token
 	}
 	g.SigningKey = env.CosignKey
+	g.GoCache = env.GoCache
 	if env.Goreleaser != "" {
 		g.Binary = env.Goreleaser
 	}

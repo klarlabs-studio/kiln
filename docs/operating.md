@@ -61,21 +61,53 @@ wants to know now whether it works, not in five minutes.
 
 ### What a tick does
 
-1. `git fetch` the tracked branch (fatal if it fails)
-2. `git fetch +refs/pull/*/head:refs/kiln/pr/*` (not fatal — a non-GitHub
-   remote simply has none)
-3. `git fetch +refs/tags/*` (not fatal)
-4. Ask GitHub which pull requests are open, and which of those are same-repo;
-   without a token, every one is a fork
+0. Reap abandoned worktrees, prune docker, then refuse the whole tick if the
+   disk has less than `KILN_MIN_FREE_GB` free (exit 69; see *Disk*)
+1. Ask GitHub which pull requests are open, and which of those are same-repo
+   (once per tick; the answer is reused below). Without a token, or if the API
+   fails, nothing is known to be closed and every pull request is a fork
+2. `git fetch` the tracked branch (fatal if it fails)
+3. Fetch pull request heads (not fatal):
+   - with GitHub's answer, only the open ones —
+     `+refs/pull/<n>/head:refs/kiln/pr/<n>` for each, batched into as few
+     `git fetch` calls as fit on a command line — then delete any
+     `refs/kiln/pr/*` whose pull request is no longer open, so the local
+     namespace does not grow with the repository's history. If that fetch
+     fails, the wildcard below is used instead
+   - without it, `+refs/pull/*/head:refs/kiln/pr/*` — every pull request ever
+     opened, as before (a non-GitHub remote simply has none)
+4. `git fetch +refs/tags/*` (not fatal)
 5. Drop any pull ref whose pull request is no longer open
 6. Drop any tag the box inherited (see *What a new box does not do*)
-7. Drop any job whose SHA **and** ref already have a *succeeded* run
-8. Execute the rest
+7. Drop any version tag a newer release on the same major line has overtaken
+   (see *Old tags are not rebuilt*)
+8. Drop any job whose SHA **and** ref already have a *succeeded* run
+9. Hold back any job that starts a container — an image to build, a service
+   beside the gate — while the docker daemon is not answering
+10. Execute the rest
 
-Only a success suppresses a rebuild, so a transient failure is retried on the
-next tick rather than wedging the ref forever. One failing job does not stop
-the others — otherwise anybody who can open a pull request could halt the
-pipeline.
+A pull request opened between step 1 and step 3 is picked up on the next tick.
+
+Only a success marks a commit as built. A failure is retried, but how soon
+depends on whose failure it was:
+
+- **The box's** — a missing toolchain, a held lock, a timeout, a registry or
+  network error, or anything kiln cannot place — backs off 15m, 30m, then
+  hourly, so a fixed box recovers without anybody pushing.
+- **The commit's** — the gate rejected it or a task exited non-zero — is
+  retried as soon as kiln, a tool version or the pipeline changes, and
+  otherwise once a day. Re-running it unchanged would only repeat the verdict.
+  Push a fix, or change what it depends on, to retry it sooner.
+
+A task that does not apply to the commit — an old pull request that predates
+the script the task runs, see [`tasks`](configuration.md#tasks) — is not a run
+failure: the ledger records the task as `not_applicable` and the run succeeds,
+so the commit is not retried for a file it can never grow. Its check still
+concludes `failure`, titled "not applicable", because a skipped check would
+satisfy branch protection for a commit nothing checked.
+
+One failing job does not stop the others — otherwise anybody who can open a
+pull request could halt the pipeline.
 
 ### What a new box does not do
 
@@ -89,6 +121,9 @@ A pull ref is therefore built only while the API says its pull request is
 open. Where there is no token to ask with, a head already contained in the
 watched branch has certainly been merged and is skipped on that evidence
 alone; anything still unaccounted for is built, and still treated as a fork.
+A box with a token fetches only the open heads, but its first tick still
+records every pull ref on the remote (via `git ls-remote`) in the baseline, so
+losing the token later does not bring the closed ones back.
 
 **Tags do not go stale.** `v2.1.0` is as valid a tag today as the day it was
 pushed, so there is no state to filter on — only the fact that it predates the
@@ -98,7 +133,8 @@ publishing event, so without it a new box would push images and write fresh
 provenance for versions signed long ago.
 
 A tag later moved to a different commit is built again, because the artefact
-it would publish is not the one that was recorded. A box that already has run
+it would publish is not the one that was recorded — unless a newer release has
+overtaken it (see below). A box that already has run
 history is not given a baseline — it has built its tags already, and one
 written underneath it could silence a tag that is mid-backoff after a real
 failure.
@@ -106,6 +142,46 @@ failure.
 The branch tip and any open pull requests are *not* baselined. They are
 current work, and building them is both the point of installing a box and the
 only sign you get that the pipeline runs at all.
+
+### Old tags are not rebuilt
+
+The baseline only helps a box that starts with an empty ledger. A box that is
+already running has no such watermark, and a failing tag is never silenced by
+a success — the backoff only spaces its retries out. One box here retried
+`v0.0.0`, `v0.1.0` and `v0.2.0` about seventy times each, long after newer
+releases had shipped.
+
+So a version tag is built only while it is current **within its own major
+line** (`v0.*`, `v1.*`, `v2.*`, …):
+
+- it is **newer than the newest release of that line that shipped** — a tag
+  with a succeeded run in the ledger, or one the baseline recorded; or
+- it is **the newest version tag of that line**.
+
+Everything else has been overtaken and is skipped, with a `skipped superseded
+tags` log line giving the count. Some consequences:
+
+- Each major line is judged on its own. `v1.9.5` cut after `v2.0.0` shipped is
+  usually a security backport, so it is built; `v1.9.4` behind a shipped
+  `v1.9.5` is not. The incident tags all share major 0, so a newer `v0.x`
+  overtakes them.
+- A box that has shipped nothing yet builds the head of each release line, not
+  its whole history.
+- A release cut since the last success is built even while its build keeps
+  failing, and that failure does not bring the older tags back.
+- Versions are ordered by semver precedence, so `v1.0.0-rc.1` is overtaken by
+  `v1.0.0`, and `v1.1.0-rc.1` is ahead of it.
+- A tag that is not a version (`v`-prefix optional, `MAJOR.MINOR.PATCH`,
+  optional pre-release and build metadata) — `nightly`, `release-2026-10` — has
+  no place in the order and is built exactly as before.
+
+A repository that does need an overtaken tag built — an older patch re-cut on
+the same line, say — opts out, and every tag is built as before:
+
+```yaml
+watch:
+  superseded_tags: true
+```
 
 ### Seeing what it would do
 
@@ -123,10 +199,14 @@ Runs nothing, prints the job list. Safe even on a box with no gate installed.
 | 2 | the gate rejected the change, or a job failed |
 | 3 | configuration or toolchain — a broken machine |
 | 64 | usage |
-| 75 | another kiln holds this repository |
+| 69 | the box cannot build right now — too little free disk |
+| 75 | another kiln holds this repository, or every build slot stayed taken (`kiln run`) |
 
 2 and 3 are separated on purpose: 2 needs a developer to fix their code, 3
-needs an operator to fix a machine. Alert on 3.
+needs an operator to fix a machine. Alert on 3 and 69.
+
+A task that is not applicable to the commit does not count towards 2: nobody
+can fix an old commit by adding a script to it.
 
 ## Concurrency
 
@@ -145,6 +225,33 @@ held on an open descriptor, and released by the kernel when the process exits
 does not shut out an operator's `kiln run` between ticks.
 
 If you need to know who holds it: `cat .kiln/lock`.
+
+### Build slots: one machine, many repositories
+
+The repository lock says nothing about the machine. A Mac running eight box
+agents on the same half-hour schedule started eight `go test -race` runs and
+docker builds in the same minute, went 11.8 GB into swap, and failed builds
+with "no space left on device" — failures recorded against innocent commits.
+
+So builds also take a **machine build slot**. `KILN_MAX_PARALLEL` (default
+`1`) is how many exist; `0` removes the limit. A slot is a `flock` on one of
+`<user cache dir>/kiln/slots/0..N-1` (`~/Library/Caches/kiln/slots` on macOS,
+`~/.cache/kiln/slots` on Linux; `KILN_SLOT_DIR` moves it), so like the
+repository lock it is released by the kernel when a build dies however it
+dies. A slot is held around the build only — fetching and discovery are free.
+
+| Caller | Every slot taken |
+|---|---|
+| `kiln watch` / `poll` | waits up to 15 minutes for one, then **defers** the job: exit 0, `defer` in the output, nothing written to the ledger, so the commit is neither blamed nor backed off and the next tick builds it. Remaining jobs in the tick are deferred without waiting again. |
+| `kiln run` | waits up to 15 minutes, then refuses, exit 75, naming the holders |
+| `kilnd`, MCP | not limited |
+
+Every process sharing the limit must agree on `KILN_MAX_PARALLEL` and the slot
+directory: a kiln with `KILN_MAX_PARALLEL=2` uses slots 0 and 1, one with `1`
+only slot 0. Slots are per user — a box agent run by another account does not
+count against yours unless both point `KILN_SLOT_DIR` at a shared directory.
+
+To see who is building: `cat ~/Library/Caches/kiln/slots/*` (macOS).
 
 ## Timeouts
 
@@ -348,6 +455,19 @@ treated as forks, as they are without a token.
 
 ## Disk
 
+A tick refuses to build on a box with less than `KILN_MIN_FREE_GB` free
+(default `5`, `0` disables), after the housekeeping below has had its chance to
+free some. It exits 69 with one line naming how much is left, and records
+nothing. Before this, a full disk failed every job of every tick in the linker,
+and each failure landed in the ledger against a commit that had done nothing
+wrong.
+
+Docker gets the same treatment per job. When the daemon does not answer —
+Docker Desktop failing to start, or hanging (the probe gives up after 15s) —
+jobs that build an image or start a service are deferred: printed as `defer`,
+not recorded, and built on the first tick after docker comes back. Jobs that
+need no container carry on.
+
 Each watch tick reaps worktrees left by killed runs — directories under the
 temp dir carrying kiln's prefix, older than 24 hours, that nobody is building
 in. Nothing else collects them, and a box building all day for months otherwise
@@ -409,6 +529,47 @@ built with `SOURCE_DATE_EPOCH` — reports 1970 as its creation time, so a whole
 repository can tie, and without a total order `--dry-run` would name one image
 while the real run removed another.
 
+### The Go build cache
+
+Every gate is `warden run pre-push`, which for a Go repository means
+`go test -race` in a fresh worktree. Box builds used to share the operator's
+own cache (`~/Library/Caches/go-build` on a Mac) and grew it by ~35 GB in
+twelve hours; Go only trims entries unused for five days, so nothing kept up.
+
+Kiln now gives its builds a cache of their own. The gate, every task and a
+goreleaser release run with `GOCACHE` pointed at `<user cache>/kiln/go-build`
+(`~/Library/Caches/kiln/go-build` on a Mac, `~/.cache/kiln/go-build` on
+Linux) — for a fork pull request too, since a path is not a secret and a fork
+build left on the operator's cache would grow it just the same. Each tick then
+trims it:
+
+1. remove entries unused for more than 24 hours
+2. if still over `KILN_GOCACHE_MAX_SIZE` (default `10GiB`), remove the least
+   recently used until under it — but never an entry touched in the last
+   hour, because Go only refreshes an entry's mtime once it is an hour old, so
+   a newer one may be in use by a build running right now
+
+The tick log says what it freed (`trimmed go build cache files=… freed=…`).
+Like the rest of this section, a failure is a warning, never a failed tick.
+
+| Setting | Effect |
+|---|---|
+| `KILN_GOCACHE` unset or empty | use `<user cache>/kiln/go-build` |
+| `KILN_GOCACHE=/abs/path` | use that directory instead (must be absolute) |
+| `KILN_GOCACHE=off` | manage nothing: builds inherit `GOCACHE` as before, nothing is trimmed |
+| `GOCACHE` set in kiln's environment | the operator decided; kiln injects nothing and trims nothing, whatever `KILN_GOCACHE` says |
+| `KILN_GOCACHE_MAX_SIZE` | cap after the idle sweep, e.g. `20GiB`, `512MiB`; `0` keeps only the idle sweep |
+
+The trimmer only ever deletes from a directory kiln claimed. Boot writes a
+`.kiln-go-cache` marker into the directory when it creates it (or finds it
+empty); a directory that already holds anything else is refused, the box logs
+a warning and runs without a kiln cache, and the trimmer is never pointed at
+it. `KILN_GOCACHE` naming Go's own default cache is refused at startup. Inside
+its directory the trimmer touches only Go's two-hex-digit shard directories,
+never the README, `trim.txt` or the marker. The operator's own cache is never
+written by a box build and never read by the trimmer — the external script that
+used to trim it can go.
+
 ## The ledger
 
 `.kiln/state.json`, or `KILN_DB`. It holds the last 500 runs.
@@ -439,6 +600,36 @@ session down.
 
 ```bash
 KILN_LOG_LEVEL=debug kiln watch --once 2>&1 | jq .
+```
+
+### The box log
+
+A box installed with `kiln box install` sends stdout and stderr to
+`.kiln/box.log` in the repository. Neither launchd nor systemd ever rotates
+that file, and one box reached 14 MB in a few months of half-hourly ticks, so
+kiln rotates it itself: first thing in every `watch` or `poll` tick, under the
+repository lock, a log of 5 MiB or more is copied to `box.log.1` (older
+generations shift to `.2` and `.3`, the fourth is dropped) and the live file is
+truncated. About 20 MiB per box at most. The tick logs `rotated the box log`
+as the first line of the fresh file, and a rotation that fails is a warning,
+never a failed tick.
+
+Copy-then-truncate rather than rename because the process rotating the file is
+the one writing it: launchd and systemd's `append:` open the log with
+`O_APPEND` and hand that descriptor to kiln. A rename would leave the tick
+writing into `box.log.1`; a truncate keeps it on `box.log`, and append mode
+puts the next write at the start rather than behind a hole.
+
+The path is derived from the repository, not read from the unit, so a box
+installed by any earlier kiln is rotated as soon as the binary it names is
+upgraded — no `kiln box install` needed. Only `.kiln/box.log` is rotated: a
+cron line that appends to `/var/log/kiln.log` should hand that file to
+`logrotate`, which needs no `copytruncate` there because cron reopens it every
+tick.
+
+```bash
+tail -f .kiln/box.log | jq .         # the live tick
+ls -la .kiln/box.log*                # the live file and its generations
 ```
 
 ## Dry runs
