@@ -47,6 +47,19 @@ All notable changes to kiln are documented here. The format follows
   fallback are unchanged. A new box's baseline still records every pull ref
   on the remote, so a token that later lapses does not replay closed ones.
 
+### Fixed
+
+- **Old tags are no longer rebuilt.** A failing tag was never silenced by a
+  success, so the backoff only spaced its retries out: one box retried
+  `v0.0.0`, `v0.1.0` and `v0.2.0` about seventy times each, long after newer
+  releases had shipped. `kiln watch` now judges each major line on its own,
+  and builds a version tag only while it is newer than the newest release of
+  its line that shipped (a succeeded run in the ledger, or the box's baseline)
+  or is the newest version tag of its line. A backport such as `v1.9.5` cut
+  after `v2.0.0` is still built. Versions are ordered by semver precedence,
+  pre-releases included; tags that are not versions are built as before.
+  `watch.superseded_tags: true` restores building every tag.
+
 ## [0.8.0] - 2026-10-17
 
 ### Added

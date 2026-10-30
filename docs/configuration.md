@@ -544,6 +544,11 @@ away.
 default to `true`; setting either `false` is honoured (they are tri-state
 internally, so "absent" and "explicitly false" are distinguishable).
 
+`superseded_tags` defaults to `false`: a version tag that a newer release on
+the same major line has overtaken is not built. A patch on an older major line
+(`v1.9.5` after `v2.0.0`) is not overtaken and is built either way. Set it
+`true` to build every tag. See [operating.md](operating.md#old-tags-are-not-rebuilt).
+
 ---
 
 ## What you cannot write

@@ -100,6 +100,22 @@ watch:
 	}
 }
 
+// Skipping a superseded tag is the default, because the case it exists for —
+// a box retrying a repository's first-week tags forever — is the common one.
+// A repository that needs an overtaken tag built anyway opts out.
+func TestSupersededTagsAreSkippedUnlessAsked(t *testing.T) {
+	if parse(t, minimal).BuildSupersededTags() {
+		t.Error("superseded tags must be skipped by default")
+	}
+	p := parse(t, minimal+`
+watch:
+  superseded_tags: true
+`)
+	if !p.BuildSupersededTags() {
+		t.Error("superseded_tags: true must build them")
+	}
+}
+
 func TestUnknownFieldRejected(t *testing.T) {
 	err := parseErr(t, minimal+"\nbogus: 1\n")
 	if !strings.Contains(err.Error(), "bogus") {
