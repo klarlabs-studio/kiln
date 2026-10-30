@@ -64,3 +64,14 @@ type PruneResult struct {
 type Pruner interface {
 	Prune(ctx context.Context, opts PruneOptions) (PruneResult, error)
 }
+
+// LogRotator keeps the box's own log bounded.
+//
+// The application never names the file: where launchd or systemd sends a
+// box's output is a decision the installer made, and only the adapter wired
+// beside it knows the answer.
+type LogRotator interface {
+	// Rotate moves an oversized log aside and reports how many bytes it
+	// moved, zero when there was nothing to do.
+	Rotate(ctx context.Context) (int64, error)
+}

@@ -107,6 +107,8 @@ type Watcher struct {
 	Pruner ports.Pruner
 	// BuildCacheMaxAge is passed through to the pruner.
 	BuildCacheMaxAge time.Duration
+	// Logs rotates the box log each tick. Nil disables it.
+	Logs ports.LogRotator
 }
 
 // Result summarises one tick.
@@ -146,6 +148,7 @@ func (w *Watcher) Once(ctx context.Context, dryRun bool) (Result, error) {
 	log := w.logger()
 
 	if !dryRun {
+		w.rotateLog(ctx)
 		w.reap(ctx)
 		w.prune(ctx)
 	}
@@ -254,6 +257,31 @@ func (w *Watcher) Every(ctx context.Context, interval time.Duration, dryRun bool
 			return nil
 		case <-ticker.C:
 		}
+	}
+}
+
+// rotateLog keeps the box log bounded.
+//
+// A box's stdout and stderr are appended to .kiln/box.log by launchd or
+// systemd, and neither ever rotates it: one box reached 14 MB of log over a
+// few months of half-hourly ticks. First in the tick, under the repository
+// lock and before anything else has written, so the rotated generation ends
+// on a whole tick and the live file starts with one — and so a box whose
+// fetch fails every tick, which is the log that grows fastest, still rotates.
+//
+// Never fatal, like reap and prune: a log that cannot be trimmed is an
+// inconvenience, a tick that cannot build is an outage.
+func (w *Watcher) rotateLog(ctx context.Context) {
+	if w.Logs == nil {
+		return
+	}
+	moved, err := w.Logs.Rotate(ctx)
+	if err != nil {
+		w.logger().Warn("could not rotate the box log", "err", err)
+		return
+	}
+	if moved > 0 {
+		w.logger().Info("rotated the box log", "bytes", moved)
 	}
 }
 

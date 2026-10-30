@@ -15,6 +15,7 @@ import (
 	"go.klarlabs.de/kiln/internal/domain/run"
 	"go.klarlabs.de/kiln/internal/infrastructure/gitcli"
 	"go.klarlabs.de/kiln/internal/infrastructure/lock"
+	"go.klarlabs.de/kiln/internal/infrastructure/logrotate"
 	"go.klarlabs.de/kiln/internal/infrastructure/prune"
 	"go.klarlabs.de/kiln/internal/infrastructure/schedule"
 	"go.klarlabs.de/kiln/internal/infrastructure/worktree"
@@ -267,6 +268,11 @@ func newWatcher(deps *boot.Deps, branchesOnly bool) *watch.Watcher {
 		Locks:            lock.NewLocks(),
 		Pruner:           prune.New(deps.Runner, deps.Log),
 		BuildCacheMaxAge: deps.Env.BuildCacheMaxAge,
+		// Derived from the repository, not passed in by the unit: every box
+		// ever installed already runs in the repository and writes to this
+		// path, so rotation reaches them all on upgrade, with no reinstall.
+		// Outside a box the file does not exist and rotation does nothing.
+		Logs: logrotate.New(boxLogPath(deps.Dir)),
 	}
 }
 

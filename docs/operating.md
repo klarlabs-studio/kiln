@@ -429,6 +429,36 @@ session down.
 KILN_LOG_LEVEL=debug kiln watch --once 2>&1 | jq .
 ```
 
+### The box log
+
+A box installed with `kiln box install` sends stdout and stderr to
+`.kiln/box.log` in the repository. Neither launchd nor systemd ever rotates
+that file, and one box reached 14 MB in a few months of half-hourly ticks, so
+kiln rotates it itself: first thing in every `watch` or `poll` tick, under the
+repository lock, a log of 5 MiB or more is copied to `box.log.1` (older
+generations shift to `.2` and `.3`, the fourth is dropped) and the live file is
+truncated. About 20 MiB per box at most. The tick logs `rotated the box log`
+as the first line of the fresh file, and a rotation that fails is a warning,
+never a failed tick.
+
+Copy-then-truncate rather than rename because the process rotating the file is
+the one writing it: launchd and systemd's `append:` open the log with
+`O_APPEND` and hand that descriptor to kiln. A rename would leave the tick
+writing into `box.log.1`; a truncate keeps it on `box.log`, and append mode
+puts the next write at the start rather than behind a hole.
+
+The path is derived from the repository, not read from the unit, so a box
+installed by any earlier kiln is rotated as soon as the binary it names is
+upgraded — no `kiln box install` needed. Only `.kiln/box.log` is rotated: a
+cron line that appends to `/var/log/kiln.log` should hand that file to
+`logrotate`, which needs no `copytruncate` there because cron reopens it every
+tick.
+
+```bash
+tail -f .kiln/box.log | jq .         # the live tick
+ls -la .kiln/box.log*                # the live file and its generations
+```
+
 ## Dry runs
 
 ```bash
