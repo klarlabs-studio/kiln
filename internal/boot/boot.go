@@ -258,6 +258,7 @@ func buildClient(env envconfig.Env, repo github.Repo, app *github.AppTokens, log
 	}
 	c := github.NewClient(env.Token, repo, log)
 	if app != nil {
+		app.Repo = repo
 		c.Tokens = app
 	}
 	return c

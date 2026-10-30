@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -97,7 +98,18 @@ type Client struct {
 	Log     ports.Logger
 	// Attempts bounds the retry of transient API failures.
 	Attempts int
+
+	mu     sync.Mutex
+	probed bool
+	// blind is why this credential cannot see Repo, once that is known.
+	blind error
 }
+
+// ErrRepoNotVisible reports a credential that cannot see the repository at
+// all: a GitHub App not installed on its organisation, an installation that
+// leaves it out, a token without access. GitHub answers every call with 404,
+// and will until somebody changes the grant.
+var ErrRepoNotVisible = errors.New("github: this credential cannot see the repository")
 
 // NewClient builds a client. A nil HTTP client gets a sane timeout: an
 // unbounded default would let a hung API call stall a watch tick forever.
@@ -117,8 +129,68 @@ func NewClient(token string, repo Repo, log ports.Logger) *Client {
 
 // Enabled reports whether the client can talk to GitHub at all. Without a
 // token, Kiln posts no Checks and treats every pull request as a fork.
+//
+// It turns false once the credential turns out not to see the repository, so
+// every caller that asks first — the reporter, discovery — goes quiet instead
+// of collecting one 404 per call. One box logged 913 of them in a week.
 func (c *Client) Enabled() bool {
-	return c != nil && (c.Token != "" || c.Tokens != nil) && c.Repo.Valid()
+	return c != nil && (c.Token != "" || c.Tokens != nil) && c.Repo.Valid() && c.Blind() == nil
+}
+
+// Blind reports why this client cannot see its repository, or nil.
+func (c *Client) Blind() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.blind
+}
+
+// noteInvisible works out whether a failed call failed because the
+// repository is invisible to this credential rather than because one
+// resource is missing. A 404 cannot tell those apart, so the first one is
+// followed by a single look at the repository itself.
+func (c *Client) noteInvisible(ctx context.Context, path string, err error) {
+	if errors.Is(err, ErrRepoNotVisible) {
+		c.goBlind(err)
+		return
+	}
+	repoPath := strings.TrimSuffix(c.path(""), "/")
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Status != http.StatusNotFound || !strings.HasPrefix(path, repoPath) {
+		return
+	}
+	c.mu.Lock()
+	probed := c.probed
+	c.probed = true
+	c.mu.Unlock()
+	if probed {
+		return
+	}
+	_, perr := c.once(ctx, http.MethodGet, repoPath, nil)
+	if errors.As(perr, &apiErr) && apiErr.Status == http.StatusNotFound {
+		c.goBlind(fmt.Errorf("%w: %s", ErrRepoNotVisible, c.visibilityHint()))
+	}
+}
+
+func (c *Client) visibilityHint() string {
+	if app, ok := c.Tokens.(*AppTokens); ok {
+		return fmt.Sprintf("github app %s (installation %s) cannot see %s — add the repository to the "+
+			"installation, or install the app on %s", app.AppID, app.InstallationID, c.Repo, c.Repo.Owner)
+	}
+	return fmt.Sprintf("the token cannot see %s — grant it access to the repository", c.Repo)
+}
+
+// goBlind records the first reason and says it once, as an error: this is a
+// box posting nothing until an operator changes a grant.
+func (c *Client) goBlind(err error) {
+	c.mu.Lock()
+	first := c.blind == nil
+	if first {
+		c.blind = err
+	}
+	c.mu.Unlock()
+	if first {
+		c.Log.Error("github disabled for this repository", "err", err)
+	}
 }
 
 // bearer is the token for one request.
@@ -400,6 +472,9 @@ func (c *Client) path(suffix string) string {
 
 // do performs a request with retries, decoding a JSON response into out.
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {
+	if blind := c.Blind(); blind != nil {
+		return blind
+	}
 	if !c.Enabled() {
 		return errors.New("github: no token or repository configured")
 	}
@@ -433,6 +508,10 @@ func (c *Client) do(ctx context.Context, method, path string, body, out any) err
 		return c.once(ctx, method, path, encoded)
 	})
 	if err != nil {
+		c.noteInvisible(ctx, path, err)
+		if blind := c.Blind(); blind != nil {
+			return blind
+		}
 		return err
 	}
 	if out == nil || len(data) == 0 {
@@ -489,7 +568,7 @@ func (c *Client) baseURL() string {
 }
 
 func retryableAPIError(err error) bool {
-	if err == nil {
+	if err == nil || errors.Is(err, ErrRepoNotVisible) {
 		return false
 	}
 	var apiErr *APIError

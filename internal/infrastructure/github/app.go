@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -42,9 +43,14 @@ func (f TokenFunc) Token(ctx context.Context) (string, error) { return f(ctx) }
 // person — and it is what the Checks API requires. What the box keeps is the
 // app's private key, which can mint nothing but those tokens.
 type AppTokens struct {
-	AppID          string
+	AppID string
+	// InstallationID names the installation to mint for. Empty asks GitHub
+	// which installation covers Repo — an app installed on two organisations
+	// has two, and one box may watch repositories in both.
 	InstallationID string
-	Key            *rsa.PrivateKey
+	// Repo is what an empty InstallationID is resolved against.
+	Repo Repo
+	Key  *rsa.PrivateKey
 	// BaseURL is the API root; GitHub Enterprise overrides it.
 	BaseURL string
 	HTTP    *http.Client
@@ -54,6 +60,10 @@ type AppTokens struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+	// missing is the answer when the app is not installed on Repo at all.
+	// Kept, because it will be the answer for the rest of the process, and
+	// asking again on every request is how one box logged 900 warnings.
+	missing error
 }
 
 // renewBefore is how long before expiry a token is replaced. Long enough
@@ -78,37 +88,17 @@ func (a *AppTokens) Token(ctx context.Context) (string, error) {
 }
 
 func (a *AppTokens) mint(ctx context.Context) (string, time.Time, error) {
-	jwt, err := a.jwt()
+	installation, err := a.installation(ctx)
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	base := strings.TrimSuffix(a.BaseURL, "/")
-	if base == "" {
-		base = DefaultBaseURL
-	}
-	url := base + "/app/installations/" + a.InstallationID + "/access_tokens"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, http.NoBody)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("github app: build token request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+jwt)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	req.Header.Set("User-Agent", "kiln")
-
-	client := a.HTTP
-	if client == nil {
-		client = &http.Client{Timeout: 30 * time.Second}
-	}
-	resp, err := client.Do(req)
+	status, body, err := a.call(ctx, http.MethodPost, "/app/installations/"+installation+"/access_tokens")
 	if err != nil {
 		return "", time.Time{}, fmt.Errorf("github app: mint installation token: %w", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK {
+	if status != http.StatusCreated && status != http.StatusOK {
 		return "", time.Time{}, fmt.Errorf("github app %s, installation %s: minting a token returned %d: %s",
-			a.AppID, a.InstallationID, resp.StatusCode, strings.TrimSpace(string(body)))
+			a.AppID, installation, status, strings.TrimSpace(string(body)))
 	}
 
 	var out struct {
@@ -121,12 +111,81 @@ func (a *AppTokens) mint(ctx context.Context) (string, time.Time, error) {
 	return out.Token, out.ExpiresAt, nil
 }
 
+// installation returns the configured installation, or asks GitHub which
+// one covers the repository. Called under a.mu.
+func (a *AppTokens) installation(ctx context.Context) (string, error) {
+	if a.InstallationID != "" {
+		return a.InstallationID, nil
+	}
+	if a.missing != nil {
+		return "", a.missing
+	}
+	if !a.Repo.Valid() {
+		return "", errors.New("github app: no installation id, and no repository to look one up for")
+	}
+	status, body, err := a.call(ctx, http.MethodGet, "/repos/"+a.Repo.String()+"/installation")
+	if err != nil {
+		return "", fmt.Errorf("github app: look up the installation for %s: %w", a.Repo, err)
+	}
+	if status == http.StatusNotFound {
+		a.missing = fmt.Errorf("%w: github app %s is not installed on %s — install it on %s",
+			ErrRepoNotVisible, a.AppID, a.Repo, a.Repo.Owner)
+		return "", a.missing
+	}
+	if status != http.StatusOK {
+		return "", fmt.Errorf("github app %s: looking up the installation for %s returned %d: %s",
+			a.AppID, a.Repo, status, strings.TrimSpace(string(body)))
+	}
+	var out struct {
+		ID int64 `json:"id"`
+	}
+	if err := json.Unmarshal(body, &out); err != nil || out.ID == 0 {
+		return "", fmt.Errorf("github app: unreadable installation for %s: %w", a.Repo, errors.Join(err, errors.New("no id")))
+	}
+	// Cached on the struct: the installation does not move while a process
+	// runs, and the next token for this repository needs the same answer.
+	a.InstallationID = strconv.FormatInt(out.ID, 10)
+	return a.InstallationID, nil
+}
+
+// call makes one request authenticated as the app itself.
+func (a *AppTokens) call(ctx context.Context, method, path string) (int, []byte, error) {
+	jwt, err := a.jwt()
+	if err != nil {
+		return 0, nil, err
+	}
+	base := strings.TrimSuffix(a.BaseURL, "/")
+	if base == "" {
+		base = DefaultBaseURL
+	}
+	req, err := http.NewRequestWithContext(ctx, method, base+path, http.NoBody)
+	if err != nil {
+		return 0, nil, fmt.Errorf("build request: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+jwt)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "kiln")
+
+	client := a.HTTP
+	if client == nil {
+		client = &http.Client{Timeout: 30 * time.Second}
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, body, nil
+}
+
 // jwt signs the app's identity for the token exchange. GitHub rejects one
 // that lives past ten minutes, and the issued-at is backdated a minute for
 // clock skew, as GitHub's own documentation recommends.
 func (a *AppTokens) jwt() (string, error) {
-	if a.Key == nil || a.AppID == "" || a.InstallationID == "" {
-		return "", errors.New("github app: needs an app id, an installation id and a private key")
+	if a.Key == nil || a.AppID == "" {
+		return "", errors.New("github app: needs an app id and a private key")
 	}
 	now := a.clock()
 	enc := base64.RawURLEncoding

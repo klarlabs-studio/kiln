@@ -60,6 +60,14 @@ All notable changes to kiln are documented here. The format follows
   fallback are unchanged. A new box's baseline still records every pull ref
   on the remote, so a token that later lapses does not replay closed ones.
 
+- `KILN_GITHUB_APP_INSTALLATION_ID` is optional. Without it, kiln asks GitHub
+  which installation of the app covers the repository, so one box can watch
+  repositories in several organisations.
+- A credential that cannot see the repository at all now produces one
+  `github disabled for this repository` error naming what to grant, and kiln
+  stops calling GitHub for the rest of that tick. Before, every pull request
+  listing and check run logged its own 404 warning: 913 on one box.
+
 ### Fixed
 
 - **Old tags are no longer rebuilt.** A failing tag was never silenced by a

@@ -211,7 +211,7 @@ See [`examples/pipeline.example.yaml`](examples/pipeline.example.yaml) for the G
 | `KILN_TRUSTED_KEYS` | Comma-separated signer keys that permit a provenance skip. **Operator environment, never the PR head.** |
 | `KILN_COSIGN_KEY` | Signing key for publish. Empty means keyless, which needs an ambient OIDC identity. Takes any form cosign's `--key` does: a path, `env://VAR`, `k8s://ns/name`, or a KMS URI. **Required on a self-hosted builder** — see [Signing](#signing). |
 | `GITHUB_TOKEN` / `GH_TOKEN` | Checks and pull request fork lookup |
-| `KILN_GITHUB_APP_ID`, `KILN_GITHUB_APP_INSTALLATION_ID`, `KILN_GITHUB_APP_KEY_FILE` | A GitHub App instead of a token: short-lived installation tokens, minted as needed. All three or none; wins over `GITHUB_TOKEN`. See [operating](docs/operating.md#a-github-app-instead-of-a-token). |
+| `KILN_GITHUB_APP_ID`, `KILN_GITHUB_APP_INSTALLATION_ID`, `KILN_GITHUB_APP_KEY_FILE` | A GitHub App instead of a token: short-lived installation tokens, minted as needed. The installation id is optional; without it kiln looks up the installation for each repository. Wins over `GITHUB_TOKEN`. See [operating](docs/operating.md#a-github-app-instead-of-a-token). |
 | `KILN_MCP_ALLOW_RUN=1` | Permit push/tag runs on the MCP surface |
 | `KILN_ADDR` | kilnd bind address (default `127.0.0.1:8088`) |
 | `KILN_TOKEN` | kilnd bearer token — **required to boot** |
