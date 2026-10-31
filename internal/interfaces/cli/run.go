@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strconv"
@@ -40,6 +41,10 @@ func runRun(ctx context.Context, args []string, io IO) error {
 	if !ok {
 		return failWith(ExitUsage, "--event must be pull_request, push or tag, got %q", *event)
 	}
+	prNum, err := prNumber(*ref, *pr)
+	if err != nil {
+		return wrapExit(ExitUsage, err)
+	}
 
 	deps, err := boot.Build(ctx, boot.Options{
 		Dir:          *dir,
@@ -67,8 +72,8 @@ func runRun(ctx context.Context, args []string, io IO) error {
 		func() error {
 			return withBuildSlot(ctx, deps, holder, func() error {
 				return executeRun(ctx, deps, io, parsedEvent, resolved,
-					resolveFork(ctx, deps, parsedEvent, *fork, *pr),
-					defaultRef(*ref, parsedEvent, *pr))
+					resolveFork(ctx, deps, parsedEvent, *fork, prNum),
+					defaultRef(*ref, parsedEvent, prNum))
 			})
 		})
 }
@@ -126,6 +131,29 @@ func resolveFork(ctx context.Context, deps *boot.Deps, event isolation.Event, fl
 	deps.Log.Warn("no --pr number: treating this pull request as a fork",
 		"hint", "pass --pr N to let kiln resolve fork status from the api")
 	return boot.ForkUnknown
+}
+
+// prNumber is the pull request a run is for: --pr, or the number in a
+// refs/pull/N/head ref. Without one, resolveFork cannot ask the API and must
+// treat a same-repo pull request as a fork — which is what happened to every
+// hand re-run of a box's PR that passed only --ref.
+func prNumber(ref string, flag int) (int, error) {
+	fromRef := 0
+	if rest, ok := strings.CutPrefix(ref, "refs/pull/"); ok {
+		if num, ok := strings.CutSuffix(rest, "/head"); ok {
+			if n, err := strconv.Atoi(num); err == nil && n > 0 {
+				fromRef = n
+			}
+		}
+	}
+	switch {
+	case fromRef == 0:
+		return flag, nil
+	case flag == 0 || flag == fromRef:
+		return fromRef, nil
+	default:
+		return 0, fmt.Errorf("--ref %s names pull request %d but --pr is %d", ref, fromRef, flag)
+	}
 }
 
 // defaultRef supplies a ref when the caller omitted one. The ref decides the
