@@ -187,10 +187,11 @@ type Prove struct {
 	// it. A repository whose dependencies live in a global cache, which is
 	// every Go one, needs nothing here.
 	//
-	// Honoured only for a trusted event. The pipeline is read from the commit
-	// being gated, so a fork's author writes this list, and copying what they
-	// name out of the operator's clone is exactly the thing isolation exists
-	// to prevent.
+	// Honoured in full only for a trusted event, and only for dependency
+	// directories on a same-repo pull request. The pipeline is read from the
+	// commit being gated, so a pull request's author writes this list, and
+	// copying what they name out of the operator's clone is exactly the thing
+	// isolation exists to prevent.
 	Materialize []string `yaml:"materialize"`
 }
 

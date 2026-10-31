@@ -46,6 +46,47 @@ func TestAForkMaterialisesNothing(t *testing.T) {
 	}
 }
 
+// A same-repo pull request gets no secrets, and materialising used to ride on
+// that bit — so every Node repository's PRs failed with "vitest: command not
+// found" on a box, while its pushes passed. What the PR needs is the installed
+// dependencies; what the bit protects is everything else beside the clone.
+func TestASameRepoPRMaterialisesDependenciesOnly(t *testing.T) {
+	clone, worktree := t.TempDir(), t.TempDir()
+	mustFile(t, filepath.Join(clone, "node_modules", ".bin", "vitest"), "#!/bin/sh\n")
+	mustFile(t, filepath.Join(clone, "web", "node_modules", ".bin", "astro"), "#!/bin/sh\n")
+	mustFile(t, filepath.Join(clone, ".env"), "AWS_SECRET_ACCESS_KEY=...")
+
+	paths := []string{"node_modules", "web/node_modules", ".env"}
+	if err := materialize(clone, worktree, paths, isolation.For(isolation.EventPullRequest, false)); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, dep := range []string{"node_modules/.bin/vitest", "web/node_modules/.bin/astro"} {
+		if _, err := os.Stat(filepath.Join(worktree, dep)); err != nil {
+			t.Errorf("a same-repo PR did not get %s: %v", dep, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(worktree, ".env")); err == nil {
+		t.Error("a same-repo PR materialised the operator's .env; only dependency directories may cross")
+	}
+}
+
+// A dependency directory is recognised by its own name, not by a prefix: the
+// PR's author writes the list, and "node_modules/../.env" or a file called
+// node_modules-secrets must not pass for one.
+func TestIsDependencyDir(t *testing.T) {
+	for _, ok := range []string{"node_modules", "web/node_modules", ".venv", "services/api/.venv"} {
+		if !isDependencyDir(ok) {
+			t.Errorf("isDependencyDir(%q) = false, want true", ok)
+		}
+	}
+	for _, bad := range []string{".env", "node_modules/.bin", "node_modules-secrets", "secrets", "vendor", "", "."} {
+		if isDependencyDir(bad) {
+			t.Errorf("isDependencyDir(%q) = true, want false", bad)
+		}
+	}
+}
+
 // Containment, checked again at the point of use and not only at load: the
 // runtime check is the real one.
 func TestMaterializeRefusesToEscapeTheClone(t *testing.T) {

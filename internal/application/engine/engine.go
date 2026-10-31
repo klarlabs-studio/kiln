@@ -493,7 +493,7 @@ func (e *Engine) RunScheduled(ctx context.Context, req Request, tasks []config.N
 	// A schedule fires on the tracked ref of the operator's own repository —
 	// never a fork head — so the tasks get the trusted policy. The publish
 	// bit is off regardless: RunScheduled never publishes.
-	policy := isolation.Policy{Secrets: true, Skip: true}
+	policy := isolation.Policy{Secrets: true, Skip: true, Dependencies: true}
 
 	if e.Worktrees == nil {
 		return r, fmt.Errorf("engine: no worktree provider configured")

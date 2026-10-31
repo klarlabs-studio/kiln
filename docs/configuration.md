@@ -639,15 +639,28 @@ clone. A named directory that does not exist is skipped rather than failing
 the run: a fresh clone where nobody has installed anything yet is not a
 pipeline error, and the gate will say so on its own terms.
 
-### It does nothing for a fork
+### Who gets what
 
 This list is read from the commit being gated, so on a pull request its author
 wrote it — and on a fork that author is a stranger. `materialize: [".env"]`
 would otherwise hand them whatever sits beside your clone, inside code kiln is
 about to execute.
 
-So materialising is governed by the same bit as registry and signing
-credentials: a fork gets nothing, and its gate fails with "could not run".
-That is the honest outcome, and it is the reason a Node repository cannot be
-gated on fork pull requests by a box today. Same-repo pull requests, pushes
-and tags are unaffected.
+| Run | What crosses |
+|---|---|
+| push, tag | every entry |
+| same-repo pull request | entries named `node_modules` or `.venv` (also nested, e.g. `web/node_modules`) |
+| fork pull request | nothing |
+
+A fork's gate fails with "could not run". That is the honest outcome, and it
+is the reason a Node repository cannot be gated on fork pull requests by a box
+today.
+
+A same-repo pull request is written by someone who can push to the
+repository, so the installed dependencies are not worth keeping from it — and
+without them every Node PR fails its gate. Anything else in the list is
+skipped for it, the same as for a fork.
+
+The dependencies are the clone's, installed from the tracked branch. A pull
+request that changes the lockfile is gated against the old packages until the
+clone is reinstalled; a test that needs the new ones fails rather than passes.

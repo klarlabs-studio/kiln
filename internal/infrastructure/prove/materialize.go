@@ -28,18 +28,21 @@ import (
 // whatever the operator keeps beside their clone, inside code kiln is about to
 // execute. A fork's gate failing for a missing toolchain is the safe outcome
 // and an honest one.
+//
+// A same-repo pull request sits between the two. Its author can push to the
+// repository, so the installed dependencies are not a secret worth keeping
+// from them, and withholding them failed every Node PR's gate. But the list
+// is still theirs, so only entries that are dependency directories by name
+// cross; anything else beside the clone stays the operator's.
 func materialize(cloneDir, worktreeDir string, paths []string, policy isolation.Policy) error {
-	if len(paths) == 0 {
-		return nil
-	}
-	if !policy.Secrets {
-		// Same bit that decides whether the run sees registry and signing
-		// credentials: what is in the operator's clone but not in the commit
-		// is theirs, not the proposer's.
+	if len(paths) == 0 || !policy.Dependencies {
 		return nil
 	}
 
 	for _, p := range paths {
+		if !policy.Secrets && !isDependencyDir(p) {
+			continue
+		}
 		src, err := contained(cloneDir, p)
 		if err != nil {
 			return err
@@ -65,6 +68,17 @@ func materialize(cloneDir, worktreeDir string, paths []string, policy isolation.
 		}
 	}
 	return nil
+}
+
+// dependencyDirs are the names a package manager installs into beside the
+// source. Matched against the entry's last element, so a monorepo's
+// web/node_modules counts and node_modules/.bin, or node_modules-secrets, does
+// not. vendor is left out on purpose: it is as often a directory of anything.
+var dependencyDirs = map[string]bool{"node_modules": true, ".venv": true}
+
+// isDependencyDir reports whether p names a dependency directory.
+func isDependencyDir(p string) bool {
+	return dependencyDirs[filepath.Base(filepath.Clean(p))]
 }
 
 // contained resolves p inside root and refuses anything that leaves it.
