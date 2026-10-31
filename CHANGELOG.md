@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-31
+
 ### Added
 
 - **`prove.setup` installs each commit's own dependencies.** A script run by
@@ -985,7 +987,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.9.2...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/klarlabs-studio/kiln/compare/v0.9.2...v0.10.0
 [0.9.2]: https://github.com/klarlabs-studio/kiln/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/klarlabs-studio/kiln/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/klarlabs-studio/kiln/compare/v0.8.0...v0.9.0
