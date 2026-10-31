@@ -33,6 +33,7 @@ prove:
   from: warden        # only accepted value
   nox: false          # run `nox scan .` after the gate
   materialize: []     # gitignored dirs the gate needs, e.g. [node_modules]
+  setup: ""           # script run in the worktree before the gate, e.g. npm ci
 
 publish:                          # a LIST of artifacts
   - kind: image                   # image | binaries (default: image)
@@ -652,15 +653,45 @@ about to execute.
 | same-repo pull request | entries named `node_modules` or `.venv` (also nested, e.g. `web/node_modules`) |
 | fork pull request | nothing |
 
-A fork's gate fails with "could not run". That is the honest outcome, and it
-is the reason a Node repository cannot be gated on fork pull requests by a box
-today.
+Without [`prove.setup`](#provesetup), a fork's gate fails with "could not
+run". That is the honest outcome; a fork that installs its own dependencies
+with `setup` needs nothing from the clone.
 
 A same-repo pull request is written by someone who can push to the
 repository, so the installed dependencies are not worth keeping from it — and
 without them every Node PR fails its gate. Anything else in the list is
 skipped for it, the same as for a fork.
 
-The dependencies are the clone's, installed from the tracked branch. A pull
-request that changes the lockfile is gated against the old packages until the
-clone is reinstalled; a test that needs the new ones fails rather than passes.
+The dependencies are the clone's — whatever was last installed there, which is
+not necessarily the tracked branch. A pull request that changes the lockfile is
+gated against those packages, not its own. When that matters, use
+[`prove.setup`](#provesetup) instead.
+
+## `prove.setup`
+
+A script run by `sh -c` in the worktree, after `materialize` and before the
+gate, under the gate's environment:
+
+```yaml
+prove:
+  from: warden
+  setup: npm ci --no-audit --no-fund
+```
+
+Every commit is then gated against its own lockfile. That costs an install
+per run, and it is the only way a pull request that changes its dependencies
+is gated honestly: `materialize` carries whatever the clone last installed,
+and a box's clone left on one PR's packages fails every other PR and passes
+that one.
+
+It is the commit's code, like the gate, so it gets what the gate gets: the
+operator's environment for pushes and tags, the scrubbed one for pull
+requests, with `KILN_ISOLATED=1`. It also makes a fork's gate possible, since a
+fork that installs its own dependencies needs nothing from the clone.
+
+A failing setup means the gate never ran — the registry was unreachable, the
+lockfile did not match — and is reported as "could not run", not as the
+commit failing its gate.
+
+With `setup` doing the install, drop `node_modules` from `materialize`:
+carrying it in only for `npm ci` to delete it is wasted time.

@@ -193,6 +193,11 @@ type Prove struct {
 	// copying what they name out of the operator's clone is exactly the thing
 	// isolation exists to prevent.
 	Materialize []string `yaml:"materialize"`
+	// Setup runs in the worktree before the gate, by `sh -c`, under the
+	// gate's environment: `npm ci`, so each commit is gated against its own
+	// lockfile rather than whatever the clone last installed. It is the
+	// commit's code like the gate is, so a fork's runs scrubbed too.
+	Setup string `yaml:"setup,omitempty"`
 }
 
 // ArtifactKind discriminates the entries in the publish list.

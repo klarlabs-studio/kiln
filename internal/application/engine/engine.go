@@ -270,6 +270,7 @@ func (e *Engine) doProve(
 				Policy:      policy,
 				Nox:         req.Pipeline.Prove.Nox,
 				Materialize: req.Pipeline.Prove.Materialize,
+				Setup:       req.Pipeline.Prove.Setup,
 				Output:      req.Output,
 				ServiceEnv:  req.ServiceEnv,
 			})

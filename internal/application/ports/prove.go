@@ -19,8 +19,12 @@ type ProveRequest struct {
 	// Nox runs the optional scanner after the gate passes.
 	Nox bool
 	// Materialize names gitignored directories the gate needs, carried from
-	// the clone into the worktree. Ignored unless Policy grants secrets.
+	// the clone into the worktree. Policy decides how much of it crosses.
 	Materialize []string
+	// Setup is a shell script run in the worktree before the gate, under the
+	// gate's environment — installing the commit's own dependencies, say.
+	// Empty runs nothing.
+	Setup string
 	// Output, when set, receives the gate's live stdout/stderr so an operator
 	// watching `kiln run` sees progress rather than a long silence.
 	Output io.Writer

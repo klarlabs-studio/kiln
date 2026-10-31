@@ -355,3 +355,68 @@ func TestAGateRejectionStillReadsAsOne(t *testing.T) {
 		t.Error("a genuine rejection was excused as an environment problem")
 	}
 }
+
+// prove.setup installs the commit's own dependencies in the worktree before
+// the gate. Materialising the clone's node_modules gates a pull request
+// against whatever the clone last installed: a box's clone holding a PR
+// branch's @forge/api 8 failed every other PR's type check, and passed the
+// PR that had put it there.
+func TestSetupRunsInTheWorktreeBeforeTheGate(t *testing.T) {
+	fake := fakeRepo()
+	if err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Setup: "npm ci",
+	}); err != nil {
+		t.Fatalf("Prove: %v", err)
+	}
+
+	setup, gate := fake.Find("sh -c npm ci"), fake.Find("warden run pre-push")
+	if setup == nil || gate == nil {
+		t.Fatalf("want setup and gate to run: %s", fake.Transcript())
+	}
+	if setup.Dir != gate.Dir || setup.Dir == "/repo" {
+		t.Errorf("setup ran in %q, gate in %q; both belong in the worktree", setup.Dir, gate.Dir)
+	}
+	lines := fake.Lines()
+	if slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "sh -c") }) >
+		slices.IndexFunc(lines, func(l string) bool { return strings.HasPrefix(l, "warden run") }) {
+		t.Errorf("setup must run before the gate: %s", fake.Transcript())
+	}
+}
+
+// A failed install never looked at the commit — the registry was down, or the
+// box has no network — so it must not read as the commit failing its gate.
+func TestASetupFailureIsNotAGateFailure(t *testing.T) {
+	fake := fakeRepo().On("sh -c", execx.Response{ExitCode: 1, Stderr: "npm ERR! network"})
+
+	err := NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: trusted, Setup: "npm ci",
+	})
+	if !errors.Is(err, ports.ErrToolMissing) || errors.Is(err, ports.ErrGateFailed) {
+		t.Fatalf("err = %v, want ports.ErrToolMissing and not a gate failure", err)
+	}
+	if !strings.Contains(err.Error(), "prove.setup") {
+		t.Errorf("the error should name prove.setup, got %v", err)
+	}
+	if fake.Ran("warden run pre-push") {
+		t.Error("the gate ran after its setup failed")
+	}
+}
+
+// Setup is code from the commit, exactly like the gate, so on a fork it runs
+// under the same scrubbed environment.
+func TestForkSetupRunsScrubbed(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "ghp_secret")
+
+	fake := fakeRepo()
+	_ = NewWarden(fake, "warden", "nox").Prove(t.Context(), ports.ProveRequest{
+		RepoDir: "/repo", SHA: "abc123", Policy: untrusted, Setup: "npm ci",
+	})
+
+	cmd := fake.Find("sh -c")
+	if cmd == nil {
+		t.Fatalf("setup not run: %s", fake.Transcript())
+	}
+	if cmd.Env == nil || slices.ContainsFunc(cmd.Env, func(kv string) bool { return strings.HasPrefix(kv, "GITHUB_TOKEN=") }) {
+		t.Error("a fork's setup ran with the operator's credentials")
+	}
+}
