@@ -6,6 +6,8 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-31
+
 ### Fixed
 
 - **Same-repo pull requests get their dependencies.** `prove.materialize` was
@@ -966,7 +968,8 @@ Where it loses to the alternatives, and to whom, is written down in
 [`docs/competitive.md`](docs/competitive.md) rather than left for an operator
 to discover.
 
-[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/klarlabs-studio/kiln/compare/v0.9.2...HEAD
+[0.9.2]: https://github.com/klarlabs-studio/kiln/compare/v0.9.1...v0.9.2
 [0.9.1]: https://github.com/klarlabs-studio/kiln/compare/v0.9.0...v0.9.1
 [0.9.0]: https://github.com/klarlabs-studio/kiln/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/klarlabs-studio/kiln/compare/v0.7.1...v0.8.0
