@@ -66,7 +66,7 @@ Every way that question can fail resolves to **fork**:
 - no `GITHUB_TOKEN` → fork
 - the API call failed → fork
 - `head.repo` is null (the fork was deleted) → fork
-- `kiln run --event pull_request` with no `--pr` number → fork
+- `kiln run --event pull_request` with no `--pr` number, and no `--ref refs/pull/N/head` to read one from → fork
 
 The conservative guess costs a re-prove. The permissive guess hands a stranger
 the operator's registry credentials.

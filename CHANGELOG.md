@@ -6,6 +6,14 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **`kiln run --ref refs/pull/N/head` resolves the pull request.** Without
+  `--pr` kiln could not look the PR up, so a same-repo pull request re-run by
+  hand was gated as a fork — no dependencies, no provenance skip. The number is
+  now read from the ref; a ref and a `--pr` that disagree are refused. `--pr`
+  is listed in `kiln --help`.
+
 ## [0.9.2] - 2026-10-31
 
 ### Fixed

@@ -89,8 +89,9 @@ Usage:
 Run flags:
   --sha S        commit to build; "HEAD" and other commit-ish values are resolved
   --event E      pull_request, push or tag
-  --fork         treat the head as untrusted (implied when no GITHUB_TOKEN is set)
+  --fork         treat the head as untrusted (implied when no --pr or no github credentials)
   --ref R        ref the commit was found on, e.g. refs/heads/main
+  --pr N         pull request number, for fork status; read from --ref refs/pull/N/head
   --dir D        repository directory (default: the working directory)
   --pipeline P   pipeline file (default: <dir>/.kiln.yaml)
 
