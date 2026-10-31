@@ -30,3 +30,13 @@ func TestMaterializeMustStayInsideTheRepository(t *testing.T) {
 		}
 	}
 }
+
+func TestSetupParses(t *testing.T) {
+	p := parse(t, strings.Replace(minimal,
+		"prove:\n  from: warden",
+		"prove:\n  from: warden\n  setup: npm ci --no-audit", 1))
+
+	if p.Prove.Setup != "npm ci --no-audit" {
+		t.Errorf("Setup = %q", p.Prove.Setup)
+	}
+}

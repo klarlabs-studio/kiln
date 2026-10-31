@@ -6,6 +6,15 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **`prove.setup` installs each commit's own dependencies.** A script run by
+  `sh -c` in the worktree before the gate, under the gate's environment —
+  `npm ci`, so a pull request that changes its lockfile is gated against its
+  packages rather than whatever the box's clone last installed. A failing setup
+  reports the gate as not run. Forks run it scrubbed, which makes a Node fork's
+  gate possible at all.
+
 ## [0.9.2] - 2026-10-31
 
 ### Fixed

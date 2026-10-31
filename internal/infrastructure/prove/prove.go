@@ -74,6 +74,9 @@ func (w *Warden) Prove(ctx context.Context, req ports.ProveRequest) error {
 		if err := materialize(req.RepoDir, dir, req.Materialize, req.Policy); err != nil {
 			return err
 		}
+		if err := w.runSetup(ctx, req, dir); err != nil {
+			return err
+		}
 		return w.runGate(ctx, req, dir)
 	})
 }
@@ -129,6 +132,29 @@ func (w *Warden) runGate(ctx context.Context, req ports.ProveRequest, dir string
 			return fmt.Errorf("%w: nox scan reported findings: %w", ports.ErrGateFailed, err)
 		}
 		return fmt.Errorf("prove: nox scan: %w", err)
+	}
+	return nil
+}
+
+// runSetup runs prove.setup in the worktree.
+//
+// A failure is reported as the gate not having run, not as the commit failing
+// it: an install that could not reach the registry has said nothing about the
+// change, and telling its author otherwise is the misreport the exit-code
+// split below exists to prevent.
+func (w *Warden) runSetup(ctx context.Context, req ports.ProveRequest, dir string) error {
+	if strings.TrimSpace(req.Setup) == "" {
+		return nil
+	}
+	if _, err := w.Runner.Run(ctx, execx.Cmd{
+		Name:   "sh",
+		Args:   []string{"-c", req.Setup},
+		Dir:    dir,
+		Env:    w.env(req),
+		Stdout: req.Output,
+		Stderr: req.Output,
+	}); err != nil {
+		return fmt.Errorf("%w: prove.setup failed: %w", ports.ErrToolMissing, err)
 	}
 	return nil
 }
