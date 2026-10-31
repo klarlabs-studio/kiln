@@ -12,10 +12,10 @@ func TestForMatchesTheMatrix(t *testing.T) {
 		want  Policy
 	}{
 		{"fork PR gets nothing", EventPullRequest, true, Policy{}},
-		{"same-repo PR may skip only", EventPullRequest, false, Policy{Skip: true}},
-		{"push gets everything", EventPush, false, Policy{Secrets: true, Publish: true, Skip: true}},
-		{"tag gets everything", EventTag, false, Policy{Secrets: true, Publish: true, Skip: true}},
-		{"push fork flag is irrelevant", EventPush, true, Policy{Secrets: true, Publish: true, Skip: true}},
+		{"same-repo PR may skip and use installed dependencies", EventPullRequest, false, Policy{Skip: true, Dependencies: true}},
+		{"push gets everything", EventPush, false, Policy{Secrets: true, Publish: true, Skip: true, Dependencies: true}},
+		{"tag gets everything", EventTag, false, Policy{Secrets: true, Publish: true, Skip: true, Dependencies: true}},
+		{"push fork flag is irrelevant", EventPush, true, Policy{Secrets: true, Publish: true, Skip: true, Dependencies: true}},
 	}
 
 	for _, tt := range tests {
@@ -37,7 +37,7 @@ func TestUnknownEventDeniesEverything(t *testing.T) {
 
 func TestZeroPolicyIsDenyAll(t *testing.T) {
 	var p Policy
-	if p.Secrets || p.Publish || p.Skip {
+	if p.Secrets || p.Publish || p.Skip || p.Dependencies {
 		t.Error("the zero Policy must permit nothing")
 	}
 }

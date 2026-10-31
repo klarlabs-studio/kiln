@@ -18,7 +18,7 @@ import (
 )
 
 // trusted is the policy a push gets: the command may see the environment.
-var trusted = isolation.Policy{Secrets: true, Publish: true, Skip: true}
+var trusted = isolation.Policy{Secrets: true, Publish: true, Skip: true, Dependencies: true}
 
 func run(t *testing.T, dir string, def config.Task, policy isolation.Policy) (ports.TaskResult, string) {
 	t.Helper()

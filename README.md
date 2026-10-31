@@ -266,15 +266,15 @@ prompts, which is the same hang in a different place. An unencrypted key needs
 
 Policy is a function of event and fork, enforced in the engine — **not** in the pipeline file. A `.kiln.yaml` edited on a fork pull request to demand a publish gets overruled, not obeyed.
 
-| Event | Fork | Secrets | Publish | Provenance skip |
-|---|---|---|---|---|
-| `pull_request` | yes | no | no | no |
-| `pull_request` | no | no | no | yes |
-| `push` / `tag` | — | yes | yes | yes |
+| Event | Fork | Secrets | Publish | Provenance skip | Installed dependencies |
+|---|---|---|---|---|---|
+| `pull_request` | yes | no | no | no | no |
+| `pull_request` | no | no | no | yes | dependency directories only |
+| `push` / `tag` | — | yes | yes | yes | everything in `prove.materialize` |
 
 Without `GITHUB_TOKEN`, every pull request is treated as a fork. Fork pull requests run the gate with a scrubbed environment: no registry credentials, no token, no agent socket.
 
-A same-repo pull request may skip the re-prove but still may not publish. An image built from an unmerged head is one nobody should be able to ship.
+A same-repo pull request may skip the re-prove but still may not publish. An image built from an unmerged head is one nobody should be able to ship. Its gate gets the clone's `node_modules` or `.venv` when [`prove.materialize`](docs/configuration.md#provematerialize) names them, and nothing else from that list.
 
 ---
 

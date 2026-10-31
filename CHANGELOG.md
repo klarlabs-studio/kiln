@@ -6,6 +6,15 @@ All notable changes to kiln are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Same-repo pull requests get their dependencies.** `prove.materialize` was
+  honoured only for runs trusted with secrets, so a same-repo PR's gate never
+  saw `node_modules` and every Node repository's PRs failed with "vitest:
+  command not found" — contrary to the docs, which said same-repo PRs were
+  unaffected. They now get the entries named `node_modules` or `.venv`, and
+  nothing else from the list; forks still get nothing.
+
 ## [0.9.1] - 2026-10-30
 
 ### Changed

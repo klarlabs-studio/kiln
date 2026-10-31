@@ -1,8 +1,9 @@
 // Package isolation decides what a run is allowed to touch.
 //
 // This is the smallest package in Kiln and the one that matters most. Every
-// other component asks it the same three questions — may this run see secrets,
-// may it publish, may it skip the re-prove — and the answers depend on exactly
+// other component asks it the same four questions — may this run see secrets,
+// may it publish, may it skip the re-prove, may it use the installed
+// dependencies — and the answers depend on exactly
 // two inputs: the event, and whether the head came from a fork.
 //
 // The rules are a pure function with no I/O, so they can be exhaustively
@@ -44,7 +45,7 @@ func (e Event) Valid() bool {
 // String renders the event for logs and stored runs.
 func (e Event) String() string { return string(e) }
 
-// Policy is the decision. All three fields default to the safe answer, so a
+// Policy is the decision. All four fields default to the safe answer, so a
 // zero Policy — the value a caller gets if it forgets to call For — denies
 // everything rather than permitting it.
 type Policy struct {
@@ -55,20 +56,29 @@ type Policy struct {
 	Publish bool
 	// Skip permits a trusted warden note to stand in for a re-prove.
 	Skip bool
+	// Dependencies permits the operator's installed dependency directories
+	// (node_modules, .venv) into the worktree the gate runs in. Narrower than
+	// Secrets: it carries what a package manager put beside the clone, and
+	// nothing else that happens to live there.
+	Dependencies bool
 }
 
 // For resolves the policy for an event and fork status.
 //
-//	event         fork  secrets  publish  skip
-//	pull_request  yes   no       no       no
-//	pull_request  no    no       no       yes
-//	push / tag    —     yes      yes      yes
+//	event         fork  secrets  publish  skip  dependencies
+//	pull_request  yes   no       no       no    no
+//	pull_request  no    no       no       yes   yes
+//	push / tag    —     yes      yes      yes   yes
 //
 // Two rows deserve their reasoning written down.
 //
-// A same-repo pull request may skip but still may not publish or see secrets.
+// A same-repo pull request may skip and may use the installed dependencies,
+// but still may not publish or see secrets.
 // Skipping is safe because the note being verified was signed by a key the
 // operator pinned in their own environment — the PR head cannot forge it.
+// Dependencies are safe for the same reason pushes from the same authors are:
+// whoever opened it can push to the repository, and without them every PR of a
+// Node repository fails its gate for a reason that has nothing to do with it.
 // Publishing is not safe, and more importantly is not *useful*: a pull request
 // is a proposal, and RollOps deploys from branches and tags, so an image built
 // from an unmerged head is an artifact nobody should ever be able to ship.
@@ -80,12 +90,12 @@ type Policy struct {
 func For(event Event, fork bool) Policy {
 	switch event {
 	case EventPush, EventTag:
-		return Policy{Secrets: true, Publish: true, Skip: true}
+		return Policy{Secrets: true, Publish: true, Skip: true, Dependencies: true}
 	case EventPullRequest:
 		if fork {
 			return Policy{}
 		}
-		return Policy{Skip: true}
+		return Policy{Skip: true, Dependencies: true}
 	default:
 		// An unknown event is treated as maximally untrusted. Reaching here
 		// means validation was bypassed upstream; denying is the only answer
